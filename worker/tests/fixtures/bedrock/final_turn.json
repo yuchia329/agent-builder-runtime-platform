@@ -1,0 +1,21 @@
+{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "<thinking> The tool 'github_add_label' has been used successfully and the label 'bug' has been added to the issue. The User's request has been completed. </thinking>\n<response> Done. </response>"
+        }
+      ]
+    }
+  },
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 518,
+    "outputTokens": 50,
+    "totalTokens": 568
+  },
+  "metrics": {
+    "latencyMs": 530
+  }
+}

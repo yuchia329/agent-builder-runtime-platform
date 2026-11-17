@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 QUEUE_BACKENDS = ("sqs", "memory")
-MODEL_PROTOCOLS = ("openai",)  # bedrock: optional M1 task
+MODEL_PROTOCOLS = ("openai", "bedrock")
 TOOLS_PROVIDERS = ("fake", "local")  # mcp in M4
 PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
 BUILT_IN_PROVIDERS = ("stub",)
@@ -27,10 +27,13 @@ class ModelProviderConfig:
 
     name: str
     protocol: str
-    base_url: str
+    base_url: str = ""  # openai only
     api_key: str | None = field(default=None, repr=False)  # secret: never logged
     max_tokens: int = 4096
     extra_body: dict[str, Any] = field(default_factory=dict)
+    temperature: float | None = None  # bedrock only (Nova tool use wants 0)
+    region: str | None = None  # bedrock only; defaults to AWS_REGION
+    aws_profile: str | None = None  # bedrock only; named profile instead of AWS_* env keys
 
 
 class ConfigError(Exception):
@@ -120,12 +123,18 @@ def _model_providers(env: Mapping[str, str], errors: list[str]) -> tuple[ModelPr
                 f"{prefix}PROTOCOL={protocol!r}: expected one of {', '.join(MODEL_PROTOCOLS)}"
             )
         base_url = env.get(prefix + "BASE_URL", "")
-        if not base_url:
+        if protocol == "openai" and not base_url:
             errors.append(f"{prefix}BASE_URL is required")
         max_tokens_raw = env.get(prefix + "MAX_TOKENS", "4096")
         if not max_tokens_raw.isdigit() or int(max_tokens_raw) < 1:
             errors.append(f"{prefix}MAX_TOKENS={max_tokens_raw!r}: expected a positive integer")
             max_tokens_raw = "4096"
+        temperature: float | None = None
+        if raw_temp := env.get(prefix + "TEMPERATURE"):
+            try:
+                temperature = float(raw_temp)
+            except ValueError:
+                errors.append(f"{prefix}TEMPERATURE={raw_temp!r}: expected a number")
         extra_body: Any = {}
         if raw := env.get(prefix + "EXTRA_BODY"):
             try:
@@ -143,6 +152,9 @@ def _model_providers(env: Mapping[str, str], errors: list[str]) -> tuple[ModelPr
                 api_key=env.get(prefix + "API_KEY") or None,
                 max_tokens=int(max_tokens_raw),
                 extra_body=extra_body,
+                temperature=temperature,
+                region=env.get(prefix + "REGION") or env.get("AWS_REGION") or None,
+                aws_profile=env.get(prefix + "AWS_PROFILE") or None,
             )
         )
     return tuple(providers)

@@ -104,6 +104,45 @@ def test_wiring_routes_stub_and_configured_providers():
     assert sorted(app.deps.model._providers) == ["minimax", "stub"]
 
 
+BEDROCK = {
+    "MODEL_PROVIDERS": "bedrock",
+    "MODEL_BEDROCK_PROTOCOL": "bedrock",
+    "MODEL_BEDROCK_AWS_PROFILE": "default",
+    "MODEL_BEDROCK_TEMPERATURE": "0",
+    "MODEL_BEDROCK_EXTRA_BODY": '{"inferenceConfig": {"topK": 1}}',
+}
+
+
+def test_bedrock_provider_needs_no_base_url_and_defaults_to_aws_region():
+    [provider] = Config.from_env({**LOCAL, **BEDROCK, "AWS_REGION": "us-west-2"}).model_providers
+
+    assert provider.protocol == "bedrock"
+    assert provider.base_url == ""
+    assert provider.region == "us-west-2"
+    assert provider.aws_profile == "default"
+    assert provider.temperature == 0.0
+    assert provider.extra_body == {"inferenceConfig": {"topK": 1}}
+
+
+def test_bedrock_region_override_and_bad_temperature():
+    config = Config.from_env({**LOCAL, **BEDROCK, "MODEL_BEDROCK_REGION": "eu-central-1"})
+    assert config.model_providers[0].region == "eu-central-1"
+
+    with pytest.raises(ConfigError, match="MODEL_BEDROCK_TEMPERATURE"):
+        Config.from_env({**LOCAL, **BEDROCK, "MODEL_BEDROCK_TEMPERATURE": "cold"})
+
+
+def test_wiring_builds_bedrock_without_touching_aws():
+    """The client is created on first call, so a missing profile cannot stop the worker."""
+    from worker.adapters.model_bedrock import BedrockConverseModel
+    from worker.wiring import build
+
+    env = {**BEDROCK, "MODEL_BEDROCK_AWS_PROFILE": "no-such-profile", "QUEUE_BACKEND": "memory"}
+    app = build(Config.from_env(env))
+
+    assert isinstance(app.deps.model._providers["bedrock"], BedrockConverseModel)
+
+
 GITHUB = {
     "TOOLS_PROVIDER": "local",
     "GITHUB_TOKEN": "github_pat_secret",

@@ -239,6 +239,14 @@ adapter for its protocol:
 | OpenAI Chat Completions | `model_openai_compat.py` | MiniMax, OpenAI, OpenRouter, Together AI, Gemini (OpenAI-compatible endpoint), vLLM, Ollama, llama.cpp |
 | Bedrock Converse | `model_bedrock.py` | Amazon Bedrock (worker's AWS credentials) |
 
+Bedrock adapter rules (boto3 `converse`, no Strands): tool names turn `.` into `_` (Amazon Nova
+fails on `-`) and map back through the request's tool list; consecutive tool results merge into one
+user message; failed tool results are text starting `Error:`; Nova's `<thinking>` text is dropped
+and its `<response>` wrapper removed; `malformed_tool_use` and unknown stop reasons raise
+`ModelError`. For Nova, AWS recommends greedy decoding for tool use (temperature 0, extra body
+`{"inferenceConfig":{"topK":1}}`). The boto3 client is created on first call, so a worker without
+the profile still starts.
+
 Price and context window live in `core/models.py` per `provider/model` (or `provider/*`); a run
 whose model is not listed fails before its first step, because every spec has a dollar budget.
 Adapters retry throttling, server errors and timeouts with backoff (honoring `Retry-After`)
@@ -300,7 +308,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `RunStore`          | control plane | Runs, steps, approvals; status changes only from the expected current status                       | DynamoDB, in-memory                        |
 | `RunQueue`          | worker        | At-least-once delivery, redelivery after timeout, extendable timeout, delivery count, DLQ after N   | SQS, in-memory                             |
 | `RunStateStore`     | worker        | Atomic conditional writes for lease, checkpoint (step n only after n-1), idempotency claim         | DynamoDB, in-memory                        |
-| `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock (optional) |
+| `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock Converse (M1) |
 | `ToolClient`        | worker        | `describe(names)` returns tool schemas; `call(name, args)` returns a result or raises `ToolError`    | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
 | `ApprovalChannel`   | control plane | Send an approval request; verify a callback into an `ApprovalDecision`                               | Slack                                      |
@@ -323,7 +331,7 @@ definition environment, with secrets from Secrets Manager.
 | Run-state table     | worker                                 | `STATE_BACKEND=dynamodb\|memory`, `STATE_TABLE`         |
 | Control plane URL   | worker, gateway                        | `CONTROL_PLANE_URL` (custom domain; SigV4-signed)       |
 | Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (custom domain; SigV4-signed)        |
-| Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`, `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret), optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_EXTRA_BODY` (JSON merged into each request, for example `{"reasoning_split":true}` for MiniMax); Bedrock uses `AWS_REGION` |
+| Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys) |
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL` |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=secrets_manager\|memory`, `KMS_KEY_ID`     |

@@ -1,0 +1,30 @@
+{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "<thinking> The User has asked to add a label to an issue. The tool 'github_add_label' can be used to add a label to an issue. The label to be added is 'bug'. </thinking>\n"
+        },
+        {
+          "toolUse": {
+            "toolUseId": "tooluse_2s5P59UhUb7Gxpf3y1ATgj",
+            "name": "github_add_label",
+            "input": {
+              "label": "bug"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "stopReason": "tool_use",
+  "usage": {
+    "inputTokens": 421,
+    "outputTokens": 66,
+    "totalTokens": 487
+  },
+  "metrics": {
+    "latencyMs": 599
+  }
+}

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from worker.adapters.clock_system import SystemClock
 from worker.adapters.control_plane_http import HttpControlPlane, default_signer
+from worker.adapters.model_bedrock import BedrockConverseModel
 from worker.adapters.model_openai_compat import OpenAICompatModel
 from worker.adapters.model_router import ModelRouter
 from worker.adapters.model_stub import StubModel, demo_turns
@@ -37,10 +38,19 @@ def build(config: Config) -> App:
 
     control_plane = HttpControlPlane(config.control_plane_url, default_signer(config.aws_region))
     providers: dict[str, Model] = {"stub": StubModel(demo_turns())}
-    for p in config.model_providers:  # protocol "openai" is the only one Config accepts so far
-        providers[p.name] = OpenAICompatModel(
-            p.base_url, p.api_key, max_tokens=p.max_tokens, extra_body=p.extra_body
-        )
+    for p in config.model_providers:
+        if p.protocol == "bedrock":
+            providers[p.name] = BedrockConverseModel(
+                region=p.region or config.aws_region,
+                profile=p.aws_profile,
+                max_tokens=p.max_tokens,
+                temperature=p.temperature,
+                extra_body=p.extra_body,
+            )
+        else:
+            providers[p.name] = OpenAICompatModel(
+                p.base_url, p.api_key, max_tokens=p.max_tokens, extra_body=p.extra_body
+            )
     model = ModelRouter(providers)
     tools: ToolClient
     if config.tools_provider == "local":

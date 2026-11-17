@@ -2,6 +2,7 @@
 result. Real-provider adapters run against a local fake server replaying recorded replies."""
 
 import pytest
+from fake_bedrock import stubbed_bedrock
 from fake_openai_server import FakeOpenAIServer, fixture
 
 from worker.adapters.model_openai_compat import OpenAICompatModel
@@ -26,11 +27,16 @@ def _minimax():
         yield "MiniMax-M3", OpenAICompatModel(server.base_url, "test-key")
 
 
+def _bedrock():
+    yield "amazon.nova-lite-v1:0", stubbed_bedrock("tool_turn", "final_turn")
+
+
 ADAPTERS = {
     "scripted": lambda: iter([("any", ScriptedModel(SCRIPT))]),
     "stub": lambda: iter([("any", StubModel(SCRIPT))]),
     "router": lambda: iter([("scripted/any", ModelRouter({"scripted": ScriptedModel(SCRIPT)}))]),
     "openai_compat_minimax": _minimax,
+    "bedrock_nova_lite": _bedrock,
 }
 
 

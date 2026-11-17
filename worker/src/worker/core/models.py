@@ -38,6 +38,9 @@ MODELS: dict[str, ModelInfo] = {
     # checked 2026-11-16 (prices for prompts up to 512k tokens)
     "minimax/MiniMax-M3": ModelInfo(Price(0.30, 1.20), context_tokens=1_000_000),
     "minimax/MiniMax-M3.1-Flash": ModelInfo(Price(0.15, 0.60), context_tokens=1_000_000),
+    # Bedrock on-demand, us-east-1, from the AWS price list API (AmazonBedrock offer, published
+    # 2026-11-11); context from the model card (docs.aws.amazon.com/nova)
+    "bedrock/amazon.nova-lite-v1:0": ModelInfo(Price(0.06, 0.24), context_tokens=300_000),
 }
 
 

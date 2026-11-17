@@ -7,8 +7,9 @@ the target design and should change only when the design does.
 with real GitHub tools (`TOOLS_PROVIDER=local`) through the local stack, labels a new issue and
 flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo` still runs the
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
-webhook delivered locally through smee.io). Optional M1 task left: Bedrock adapter; next required
-work is M2 (crash safety).
+webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
+through the Converse adapter), though Nova Lite triages worse than MiniMax. Next: M2 (crash
+safety).
 
 ## Approach
 
@@ -133,7 +134,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   ```
   issue and finds a planted duplicate. **M1 done: MVP.**
   ```
-- [ ] `[worker]` (optional) `adapters/model_bedrock.py` (Converse API or Strands Bedrock provider,
+- [x] `[worker]` (optional) `adapters/model_bedrock.py` (Converse API or Strands Bedrock provider,
   ```
   ADR 0009, ADR 0010). Needs AWS credentials and Bedrock model access; keep them out of
   `.env`'s fake local keys. Check: same `Model` contract suite, one real run on Bedrock.
@@ -191,6 +192,25 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-16 · worker** — `adapters/model_bedrock.py`: Bedrock Converse via plain boto3
+  (`bedrock-runtime` `converse`), lazy client, botocore standard retries (4 attempts), errors to
+  `ModelError`. Config: `MODEL_<NAME>_PROTOCOL=bedrock`, `_AWS_PROFILE`, `_REGION`,
+  `_TEMPERATURE` (new for both protocols); `BASE_URL` now required only for `openai`. Price row
+  `bedrock/amazon.nova-lite-v1:0` ($0.06 / $0.24 per 1M tokens, 300k context, AWS price list).
+  Tests: 190 passed (20 new): adapter unit tests on botocore `Stubber`
+  (`tests/fake_bedrock.py`), `Model` contract suite on real Nova Lite recordings
+  (`tests/fixtures/bedrock/`), config/wiring. Live: agent `issue-triage-nova` (local stack only,
+  trigger `manual.bedrock.test`) on sandbox #6 (planted duplicate of #3): `SUCCEEDED`, 9 steps,
+  8 s, $0.000485, labeled `bug` + `duplicate`, but it searched with the full title + body, never
+  found #3, named itself as the duplicate with low confidence and still added `duplicate`. Adapter
+  fine, Nova Lite judgment weak: keep `minimax/MiniMax-M3` for `specs/issue-triage.yaml`; try Nova
+  2 Lite ($0.33 / $2.75, needs a price row) if Bedrock matters. Next: M2. Gotchas: Nova fails with
+  `ModelErrorException: Model produced invalid sequence as part of ToolUse` on hyphenated tool
+  names (hence `_`); Nova wraps text in `<thinking>`/`<response>` (stripped); a named profile is
+  what keeps `.env`'s fake `AWS_ACCESS_KEY_ID=local` out of Bedrock calls, never put real AWS keys
+  in `.env`; the Docker worker has no `~/.aws`, so Bedrock runs only work from a host worker;
+  rebuild the worker image after config changes (`docker compose up -d --build worker`) or it
+  rejects `PROTOCOL=bedrock`.
 - **2026-11-17 · control-plane** — `POST /triggers/github` (package `trigger`):
   `GitHubWebhooks` (HMAC check, trigger name, run input) + `GitHubWebhookController`;
   `RunService.startForTrigger` (configured tenant only, sorted by agent name);

@@ -2,8 +2,10 @@ package dev.agentplatform.controlplane.store;
 
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunUpdate;
+import dev.agentplatform.controlplane.run.RunStatus;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -11,11 +13,15 @@ import java.util.Optional;
 public class InMemoryRunStore implements RunStore {
 
     private final Map<String, Run> runs = new HashMap<>();
+    private final Map<String, Instant> queuedAt = new HashMap<>(); // QUEUED runs only
 
     @Override
     public synchronized void create(Run run) {
         if (runs.putIfAbsent(run.runId(), run) != null) {
             throw new IllegalStateException("Run '%s' already exists".formatted(run.runId()));
+        }
+        if (run.status() == RunStatus.QUEUED) {
+            queuedAt.put(run.runId(), run.createdAt());
         }
     }
 
@@ -35,6 +41,30 @@ public class InMemoryRunStore implements RunStore {
         }
         var updated = current.with(update, now);
         runs.put(runId, updated);
+        if (updated.status() == RunStatus.QUEUED) {
+            queuedAt.put(runId, now);
+        } else {
+            queuedAt.remove(runId);
+        }
         return updated;
+    }
+
+    @Override
+    public synchronized List<Run> findQueuedBefore(Instant cutoff, int limit) {
+        return queuedAt.entrySet().stream()
+                .filter(e -> e.getValue().isBefore(cutoff))
+                .sorted(Map.Entry.<String, Instant>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
+                .limit(limit)
+                .map(e -> runs.get(e.getKey()))
+                .toList();
+    }
+
+    @Override
+    public synchronized boolean touchQueued(String runId, Instant now) {
+        if (!queuedAt.containsKey(runId)) {
+            return false;
+        }
+        queuedAt.put(runId, now);
+        return true;
     }
 }

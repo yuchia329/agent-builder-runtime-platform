@@ -47,6 +47,8 @@ tasks.processResources {
 
 tasks.test {
     useJUnitPlatform()
+    // No background sweep during tests; RunSweepScheduleIntegrationTest turns it on itself.
+    environment("SWEEP_INTERVAL_SECONDS", "0")
 }
 
 // `./gradlew bootRun` uses the local profile unless SPRING_PROFILES_ACTIVE says otherwise.

@@ -9,8 +9,8 @@ flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
 through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
-progress: worker side done (lease, checkpoints, idempotent tool calls; ADR 0011-0013); left:
-control-plane sweep and webhook dedupe, then `make chaos`.
+progress: worker side and re-enqueue sweep done (ADR 0011-0013); left: webhook dedupe, then
+`make chaos`.
 
 ## Approach
 
@@ -177,7 +177,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   run, or per-tool. Check: crash between the tool call and the checkpoint, resume, the fake
   GitHub server sees one `add_label`.
   ```
-- [ ] `[control-plane]` re-enqueue sweep: a scheduled job finds runs left `QUEUED` longer than a
+- [x] `[control-plane]` re-enqueue sweep: a scheduled job finds runs left `QUEUED` longer than a
   ```
   few minutes (saved, but the enqueue failed or was lost) and sends their message again.
   `POST /runs` already returns 503 and leaves the run `QUEUED` when enqueueing fails. Needs a
@@ -232,6 +232,19 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-17 · control-plane** — Re-enqueue sweep. Sparse index on GSI1 (`RUNS#QUEUED`,
+  13-digit epoch-millis queued-at) set while `QUEUED`, removed on any other status;
+  `RunStore.findQueuedBefore` / `touchQueued` (both adapters, contract tests). `RunSweeper`
+  touches then publishes each run `QUEUED` > `SWEEP_QUEUED_AFTER_SECONDS` (300), up to 1,000 per
+  sweep; `RunSweepSchedule` every `SWEEP_INTERVAL_SECONDS` (60, 0 = off; tests run with 0).
+  Tests: 105 passed (16 new). Live: ElasticMQ stopped, `POST /runs` 503, queue restarted, the
+  run reached SUCCEEDED ~15 s later via the sweep (5 s / 10 s settings, stub agent `sweep-demo`
+  left in the local stack). Next: `[control-plane]` webhook dedupe. M6: add an EventBridge
+  Scheduler rule that calls `sweepOnce` and set `SWEEP_INTERVAL_SECONDS=0` on Lambda. Gotchas:
+  `GSI2SK` uses `Instant.toString()`, which misorders runs within one second (fix when an
+  agent's run list is built); `GitHubWebhookApiIntegrationTest` got 404 on every request in 1 of
+  6 full runs, passed in the other 5 and alone, cause unknown; returning to `QUEUED` (approvals,
+  M3) re-adds the index key in `update`, untested until that transition exists.
 - **2026-11-17 · worker** — Idempotent tool calls (ADR 0013). `ToolSpec.read_only` /
   `idempotent` (MCP annotation names; fake and GitHub tools flagged, `slack.post_message` not).
   `_execute`: claim key `tool_call_key(run_id, step, call)` (SHA-256), call, store

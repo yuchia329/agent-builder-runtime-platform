@@ -15,7 +15,8 @@ public record PlatformProperties(
         @NotNull QueueBackend queueBackend,
         String runQueueUrl,
         @Valid @NotNull TenantProperties tenant,
-        GitHubProperties github) {
+        GitHubProperties github,
+        SweepProperties sweep) {
 
     public enum StoreBackend { MEMORY, DYNAMODB }
 
@@ -26,6 +27,16 @@ public record PlatformProperties(
 
     /** {@code webhookSecret} signs GitHub webhooks; blank means the webhook route is off. */
     public record GitHubProperties(String webhookSecret) {}
+
+    /**
+     * Re-enqueue sweep: every {@code intervalSeconds} (0 = off), re-send runs QUEUED for longer
+     * than {@code queuedAfterSeconds}.
+     */
+    public record SweepProperties(Integer intervalSeconds, Integer queuedAfterSeconds) {}
+
+    public int sweepQueuedAfterSeconds() {
+        return sweep == null || sweep.queuedAfterSeconds() == null ? 300 : sweep.queuedAfterSeconds();
+    }
 
     public String githubWebhookSecret() {
         return github == null || github.webhookSecret() == null || github.webhookSecret().isBlank()

@@ -196,7 +196,13 @@ the table from that file.
   it is still n), sets the active version and trigger index, and writes version n+1 (only if it
   does not exist). A lost race retries, so numbers have no gaps or repeats.
 - Every run status change is a conditional update on the expected current status.
-- A scheduled sweep re-enqueues runs left `QUEUED` too long (status written, enqueue failed).
+- A scheduled sweep re-enqueues runs left `QUEUED` too long (status written, enqueue failed):
+  while `QUEUED`, a run item carries `GSI1PK = RUNS#QUEUED`, `GSI1SK = <queued-at, 13-digit epoch
+  millis>#<runId>` (a sparse index: removed on any other status), so the sweep reads only queued
+  runs, oldest first. Each stuck run is touched (queued-at = now, only if still `QUEUED`), then
+  published, so it is re-sent at most once per threshold; a second message for a slow run is
+  harmless (worker lease and status check). Locally a Spring schedule runs it; on Lambda,
+  EventBridge Scheduler invokes it (M6), since a function is frozen between requests.
 
 The same Spring Boot app runs as a normal server locally and behind a Lambda handler in AWS. Keep
 startup light for SnapStart: no eager network calls or connections at startup.
@@ -378,6 +384,7 @@ definition environment, with secrets from Secrets Manager.
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`         |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`               |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
+| Re-enqueue sweep    | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300) |
 | Local AWS endpoints | all                                    | `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS` (unset in AWS; read by both AWS SDKs) |
 | Tenant (M0 only)    | control plane                          | `TENANT_ID`, `TENANT_API_KEY`                           |
 

@@ -74,5 +74,13 @@ build again.
 - Jackson 3 (`tools.jackson.*`), not Jackson 2 (`com.fasterxml.jackson.*`).
 - Config comes from env vars via `application.yml` (`STORE_BACKEND`, `CONTROL_PLANE_TABLE`,
   `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`,
+  `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`,
   `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
 - Errors: throw domain exceptions; `web/ApiExceptionHandler` maps them to problem+json.
+- Scheduled work is a plain class with a `...Once()` method (`RunSweeper.sweepOnce`) plus a thin
+  `@Scheduled` trigger that is off when its interval is 0. Tests run with
+  `SWEEP_INTERVAL_SECONDS=0` (set in `build.gradle.kts`); a test that needs the schedule sets it.
+- Time in DynamoDB sort keys: zero-padded epoch millis, never `Instant.toString()` (it drops
+  trailing zeros, so text order breaks within a second). `GSI2SK` still uses `toString()`.
+- A class with two constructors needs `@Autowired` on the one Spring should use.
+- `InMemoryRunQueuePublisher.bodies()` returns a snapshot; read it again when polling.

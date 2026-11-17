@@ -38,9 +38,17 @@ abstract class RunStoreContractTest {
     }
 
     private Run queuedRun() {
-        var run = Run.queued("run_" + UUID.randomUUID().toString().replace("-", ""), "t1", "triage", 3, INPUT, T0);
+        return queuedRun(T0);
+    }
+
+    private Run queuedRun(Instant at) {
+        var run = Run.queued("run_" + UUID.randomUUID().toString().replace("-", ""), "t1", "triage", 3, INPUT, at);
         store.create(run);
         return run;
+    }
+
+    private List<String> queuedBefore(Instant cutoff) {
+        return store.findQueuedBefore(cutoff, 100).stream().map(Run::runId).toList();
     }
 
     private static RunUpdate to(RunStatus status) {
@@ -187,5 +195,53 @@ abstract class RunStoreContractTest {
 
         assertThat(wins).isEqualTo(1);
         assertThat(store.find(run.runId()).orElseThrow().status()).isIn(RunStatus.SUCCEEDED, RunStatus.FAILED);
+    }
+
+    // Queued runs (re-enqueue sweep)
+
+    @Test
+    void queuedRunIsListedOnceItsQueuedAtIsBeforeTheCutoff() {
+        var run = queuedRun();
+
+        assertThat(queuedBefore(T0)).isEmpty(); // strictly before
+        assertThat(queuedBefore(T0.plusMillis(1))).containsExactly(run.runId());
+        assertThat(store.findQueuedBefore(T1, 10).getFirst()).isEqualTo(run);
+    }
+
+    @Test
+    void runThatLeftQueuedIsNotListedAndCannotBeTouched() {
+        var run = queuedRun();
+        store.update(run.runId(), to(RunStatus.RUNNING), T1);
+
+        assertThat(queuedBefore(T1.plusSeconds(60))).isEmpty();
+        assertThat(store.touchQueued(run.runId(), T1)).isFalse();
+    }
+
+    @Test
+    void touchMovesQueuedAtForward() {
+        var run = queuedRun();
+
+        assertThat(store.touchQueued(run.runId(), T1)).isTrue();
+
+        assertThat(queuedBefore(T1)).isEmpty();
+        assertThat(queuedBefore(T1.plusMillis(1))).containsExactly(run.runId());
+        assertThat(store.find(run.runId()).orElseThrow().status()).isEqualTo(RunStatus.QUEUED);
+    }
+
+    @Test
+    void touchOfAMissingRunIsFalse() {
+        assertThat(store.touchQueued("run_missing", T1)).isFalse();
+    }
+
+    @Test
+    void queuedRunsComeOldestFirstUpToTheLimit() {
+        var later = queuedRun(T0.plusSeconds(1));
+        var first = queuedRun(T0);
+        var subSecond = queuedRun(T0.plusMillis(500)); // fractional seconds must sort by time
+        queuedRun(T0.plusSeconds(2));
+
+        var listed = store.findQueuedBefore(T1, 3).stream().map(Run::runId).toList();
+
+        assertThat(listed).containsExactly(first.runId(), subSecond.runId(), later.runId());
     }
 }

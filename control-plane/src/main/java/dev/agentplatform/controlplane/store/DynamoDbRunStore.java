@@ -6,6 +6,7 @@ import dev.agentplatform.controlplane.run.RunUpdate;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +26,12 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionChe
  *      pendingApproval (JSON), failureReason, failureMessage, output, input (JSON),
  *      createdAt, updatedAt
  *      GSI2PK = TENANT#&lt;t&gt;#AGENT#&lt;name&gt;  GSI2SK = &lt;createdAt&gt;#&lt;runId&gt;  (runs of an agent by time)
+ *      GSI1PK = RUNS#QUEUED  GSI1SK = &lt;queued-at epoch millis, 13 digits&gt;#&lt;runId&gt;
+ *        (only while QUEUED: a sparse index of queued runs for the re-enqueue sweep)
  * </pre>
+ *
+ * GSI1 is shared with agents ({@code TRIGGER#...} keys); the {@code RUNS#QUEUED} partition never
+ * collides with them. Queued-at is zero-padded epoch millis so text order is time order.
  *
  * A status change is one conditional update: it applies only if the item exists and its status is
  * one of {@link RunStatus#allowedFrom()}.
@@ -57,6 +63,10 @@ public class DynamoDbRunStore implements RunStore {
         item.put("updatedAt", s(run.updatedAt().toString()));
         item.put("GSI2PK", s(DynamoDbAgentStore.agentPk(run.tenantId(), run.agentName())));
         item.put("GSI2SK", s(run.createdAt() + "#" + run.runId()));
+        if (run.status() == RunStatus.QUEUED) {
+            item.put("GSI1PK", s(QUEUED_PK));
+            item.put("GSI1SK", s(queuedSk(run.createdAt(), run.runId())));
+        }
         try {
             dynamo.putItem(r -> r.tableName(table).item(item).conditionExpression("attribute_not_exists(PK)"));
         } catch (ConditionalCheckFailedException e) {
@@ -103,6 +113,15 @@ public class DynamoDbRunStore implements RunStore {
             values.put(":output", s(update.output()));
         }
 
+        var queued = update.status() == RunStatus.QUEUED;
+        if (queued) {
+            sets.add("GSI1PK = :queuedPk");
+            sets.add("GSI1SK = :queuedSk");
+            values.put(":queuedPk", s(QUEUED_PK));
+            values.put(":queuedSk", s(queuedSk(now, runId)));
+        }
+        var expression = "SET " + String.join(", ", sets) + (queued ? "" : " REMOVE GSI1PK, GSI1SK");
+
         var allowed = new ArrayList<String>();
         for (var from : update.status().allowedFrom()) {
             var placeholder = ":from" + allowed.size();
@@ -119,7 +138,7 @@ public class DynamoDbRunStore implements RunStore {
 
         try {
             var result = dynamo.updateItem(r -> r.tableName(table).key(key(runId))
-                    .updateExpression("SET " + String.join(", ", sets))
+                    .updateExpression(expression)
                     .conditionExpression(condition)
                     .expressionAttributeNames(names)
                     .expressionAttributeValues(values)
@@ -132,6 +151,45 @@ public class DynamoDbRunStore implements RunStore {
             }
             throw new IllegalTransitionException(runId, RunStatus.valueOf(e.item().get("status").s()), update.status());
         }
+    }
+
+    @Override
+    public List<Run> findQueuedBefore(Instant cutoff, int limit) {
+        var response = dynamo.query(r -> r.tableName(table)
+                .indexName(DynamoDbAgentStore.GSI_TRIGGER)
+                .keyConditionExpression("GSI1PK = :pk AND GSI1SK < :cutoff")
+                .expressionAttributeValues(Map.of(
+                        ":pk", s(QUEUED_PK),
+                        ":cutoff", s(epochMillis(cutoff))))
+                .scanIndexForward(true)
+                .limit(limit));
+        return response.items().stream().map(DynamoDbRunStore::toRun).toList();
+    }
+
+    @Override
+    public boolean touchQueued(String runId, Instant now) {
+        try {
+            dynamo.updateItem(r -> r.tableName(table).key(key(runId))
+                    .updateExpression("SET GSI1SK = :sk")
+                    .conditionExpression("#status = :queued")
+                    .expressionAttributeNames(Map.of("#status", "status"))
+                    .expressionAttributeValues(Map.of(
+                            ":sk", s(queuedSk(now, runId)),
+                            ":queued", s(RunStatus.QUEUED.name()))));
+            return true;
+        } catch (ConditionalCheckFailedException e) {
+            return false; // missing, or no longer QUEUED
+        }
+    }
+
+    private static final String QUEUED_PK = "RUNS#QUEUED";
+
+    static String queuedSk(Instant queuedAt, String runId) {
+        return epochMillis(queuedAt) + "#" + runId;
+    }
+
+    private static String epochMillis(Instant instant) {
+        return String.format(Locale.ROOT, "%013d", instant.toEpochMilli());
     }
 
     private static Run toRun(Map<String, AttributeValue> item) {

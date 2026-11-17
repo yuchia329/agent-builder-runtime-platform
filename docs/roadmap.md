@@ -9,7 +9,7 @@ flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
 through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
-progress: run-state store done (ADR 0011); next the local-stack table, then lease in the loop.
+progress: run-state store and its local table done (ADR 0011); next the lease in the poll loop.
 
 ## Approach
 
@@ -154,7 +154,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   Check: one contract suite passes on both adapters (DynamoDB Local), including two concurrent
   takers where exactly one wins.
   ```
-- [ ] `[local-stack]` create the run-state table from that file in `make stack` / `make up`;
+- [x] `[local-stack]` create the run-state table from that file in `make stack` / `make up`;
   ```
   worker gets `STATE_BACKEND=dynamodb`, `STATE_TABLE`. Check: `make up && make demo` passes.
   ```
@@ -231,6 +231,17 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-16 · local-stack** — `local-stack/create-tables.sh` (renamed from
+  `create-table.sh`) creates `control-plane` and `run-state` from each service's files
+  (`worker/dynamodb` mounted at `/defs/worker`) and enables TTL on `ttl`; each step checks first,
+  so a second run is a no-op. Worker container gets `AWS_ENDPOINT_URL_DYNAMODB`;
+  `.env.example` (and the local `.env`) `STATE_BACKEND=dynamodb`, `STATE_TABLE=run-state`, not
+  read until the lease task. Checked: `make status` lists both tables, `describe-time-to-live`
+  ENABLED, `make demo` SUCCEEDED (5 steps). Next: `[worker]` lease in the poll loop (adds
+  `STATE_*` config and wiring). Gotchas: `make demo` fails with `TOOLS_PROVIDER=local`
+  (`Unknown tools: github.close_issue, slack.post_message`); run it with a compose override
+  setting `TOOLS_PROVIDER: fake` for the worker; `make down` wiped the hand-published agents,
+  real `specs/issue-triage.yaml` republished as version 3 (`issue-triage-nova` is gone).
 - **2026-11-16 · worker** — M2 task list written and ordered (roadmap). `RunStateStore` port
   (`ports/run_state.py`) with `run_state_memory.py` and `run_state_dynamodb.py` (ADR 0011: one
   item per step, fenced writes, 15-day TTL); table files `worker/dynamodb/run-state-table.json`

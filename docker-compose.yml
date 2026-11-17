@@ -18,13 +18,13 @@ services:
     volumes:
       - ./local-stack/elasticmq.conf:/opt/elasticmq.conf:ro
 
-  # One-off: creates the control-plane table, then exits. Also used by `make status`.
+  # One-off: creates the control-plane and run-state tables, then exits. Also used by `make status`.
   aws-init:
     image: amazon/aws-cli:2.40.4
     depends_on:
       - dynamodb
       - elasticmq
-    entrypoint: ["sh", "/local-stack/create-table.sh"]
+    entrypoint: ["sh", "/local-stack/create-tables.sh"]
     environment:
       AWS_ACCESS_KEY_ID: local
       AWS_SECRET_ACCESS_KEY: local
@@ -33,8 +33,10 @@ services:
       AWS_ENDPOINT_URL_DYNAMODB: http://dynamodb:8000
       AWS_ENDPOINT_URL_SQS: http://elasticmq:9324
       CONTROL_PLANE_TABLE: ${CONTROL_PLANE_TABLE:-control-plane}
+      STATE_TABLE: ${STATE_TABLE:-run-state}
     volumes:
-      - ./control-plane/dynamodb:/defs:ro
+      - ./control-plane/dynamodb:/defs/control-plane:ro
+      - ./worker/dynamodb:/defs/worker:ro
       - ./local-stack:/local-stack:ro
     restart: "no"
 
@@ -67,6 +69,7 @@ services:
       dockerfile: worker/Dockerfile
     env_file: .env
     environment:
+      AWS_ENDPOINT_URL_DYNAMODB: http://dynamodb:8000
       AWS_ENDPOINT_URL_SQS: http://elasticmq:9324
       RUN_QUEUE_URL: http://elasticmq:9324/000000000000/runs
       CONTROL_PLANE_URL: http://control-plane:8080

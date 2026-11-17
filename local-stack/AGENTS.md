@@ -27,8 +27,13 @@ cd control-plane && set -a && . ../.env && set +a && ./gradlew bootRun
 
 ## Conventions
 
-- The control-plane table is created by `create-table.sh` from
-  `control-plane/dynamodb/control-plane-table.json`. Never define its keys here; change that file.
+- Tables are created by `create-tables.sh` from each service's own files:
+  `control-plane/dynamodb/control-plane-table.json` and `worker/dynamodb/run-state-table.json`
+  (+ `run-state-ttl.json` for TTL). Never define keys here; change those files. Every step checks
+  first, so the script is safe to run again (DynamoDB refuses enabling TTL twice).
+- `make down` deletes all local data, including agents you published by hand
+  (`specs/issue-triage.yaml`): republish after it. `make demo` republishes `issue-triage` with the
+  stub spec and needs `TOOLS_PROVIDER=fake` (its spec lists M3 tools).
 - Queues are declared in `elasticmq.conf`; ElasticMQ creates them on start.
 - DynamoDB Local runs in memory: every restart starts empty.
 - Pin every image version. Keep DynamoDB Local on the same version as the control-plane tests.

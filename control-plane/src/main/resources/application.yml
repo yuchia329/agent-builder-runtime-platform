@@ -3,10 +3,16 @@ spring:
     name: control-plane
   main:
     banner-mode: off
+  jackson:
+    # One JSON style across the platform (contracts use snake_case); absent beats null.
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
 
 platform:
   store-backend: ${STORE_BACKEND:memory}
   table: ${CONTROL_PLANE_TABLE:control-plane}
+  queue-backend: ${QUEUE_BACKEND:memory}
+  run-queue-url: ${RUN_QUEUE_URL:}
   tenant:
     id: ${TENANT_ID:tenant-demo}
     api-key: ${TENANT_API_KEY:}

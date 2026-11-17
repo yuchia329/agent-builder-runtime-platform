@@ -29,6 +29,7 @@ dependencies {
     implementation("tools.jackson.dataformat:jackson-dataformat-yaml")
     implementation("com.networknt:json-schema-validator:3.0.9")
     implementation("software.amazon.awssdk:dynamodb")
+    implementation("software.amazon.awssdk:sqs")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.testcontainers:testcontainers")
@@ -36,10 +37,10 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// The agent spec schema lives in contracts/; bundle it so the jar validates against the same file.
+// Contracts live in contracts/; bundle them so the jar validates against the same files.
 tasks.processResources {
     from("../contracts") {
-        include("agent-spec.schema.json")
+        include("agent-spec.schema.json", "run-message.schema.json", "internal-api.openapi.yaml")
         into("contracts")
     }
 }

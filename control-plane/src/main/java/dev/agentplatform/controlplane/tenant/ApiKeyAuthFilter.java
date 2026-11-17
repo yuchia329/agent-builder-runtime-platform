@@ -33,7 +33,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/agents");
+        var path = request.getRequestURI();
+        return !(path.startsWith("/agents") || path.startsWith("/runs"));
     }
 
     @Override

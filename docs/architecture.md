@@ -123,7 +123,7 @@ Boundaries the design depends on:
 | Control-plane DB | DynamoDB on-demand, own table (DynamoDB Local for dev)                |
 | API entry        | API Gateway HTTP API, custom domain (DNS on Cloudflare, ACM cert)     |
 | Queue            | Amazon SQS with a dead-letter queue (ElasticMQ locally)               |
-| Workers          | Python 3.12, Strands Agents SDK, Amazon Bedrock, ECS Fargate          |
+| Workers          | Python 3.12, uv, own agent loop; Bedrock via a model adapter (Strands provider or Converse API), ECS Fargate |
 | Run state        | DynamoDB (DynamoDB Local for dev)                                     |
 | Tool gateway     | Python, FastAPI, MCP Python SDK (stateless Streamable HTTP), Lambda   |
 | Secrets          | AWS Secrets Manager, KMS                                              |
@@ -142,8 +142,12 @@ Public endpoints, all tenant-scoped, authenticated by per-tenant API key:
   matches the agent, and (from M4) that tool names exist in the gateway. The new version becomes
   active. Errors return `application/problem+json` with an `errors` list.
 - `PUT /agents/{id}/active-version`: set or roll back the active version.
-- `POST /runs`: start a run manually (development and testing).
-- `GET /runs/{id}`: status, steps, cost, trace id.
+- `POST /runs`: start a run manually (development and testing). Body `{agent, input}`; the run is
+  pinned to the agent's active version, saved `QUEUED`, then enqueued. If enqueueing fails the
+  response is 503 and the run stays `QUEUED` for the re-enqueue sweep.
+- `GET /runs/{id}`: status, steps, cost, trace id, pending approval, failure, output.
+
+Public and internal JSON use snake_case field names and leave out empty fields.
 - `POST /triggers/github`: GitHub webhook. Verify `X-Hub-Signature-256`, match agents by trigger,
   create runs, enqueue.
 - `POST /approvals/slack`: Slack interactivity callback. Verify the signing secret, record the
@@ -175,8 +179,8 @@ the table from that file.
 | Agent, its versions            | `PK=TENANT#<t>#AGENT#<a>`, `SK=META` or `VERSION#<10-digit n>`               | Built    |
 | Agents by trigger (webhooks)   | `GSI1PK=TRIGGER#<event>`, `GSI1SK=TENANT#<t>#AGENT#<a>` on the agent item    | Built    |
 | Tenant by API key              | `PK=APIKEY#<hash>`                                                           | Planned  |
-| Run, its steps and approvals   | `PK=RUN#<id>`, `SK=META`, `STEP#<n>`, `APPROVAL#<n>`                         | Planned  |
-| Runs of an agent, newest first | `GSI2PK=TENANT#<t>#AGENT#<a>`, `GSI2SK=<created time>` on the run item       | Planned  |
+| Run, its steps and approvals   | `PK=RUN#<id>`, `SK=META`; later `STEP#<n>`, `APPROVAL#<n>`                   | Run built |
+| Runs of an agent, newest first | `GSI2PK=TENANT#<t>#AGENT#<a>`, `GSI2SK=<created time>#<run id>` on the run item | Keys written, no query yet |
 
 - Publishing reads the agent's `latestVersion` n, then in one transaction sets it to n+1 (only if
   it is still n), sets the active version and trigger index, and writes version n+1 (only if it
@@ -190,20 +194,27 @@ startup light for SnapStart: no eager network calls or connections at startup.
 ## Worker
 
 The worker core is one function, `handle_run(run_id)`, called from an entrypoint
-([ADR 0005](adr/0005-compute-agnostic-worker-core.md)). On Fargate the entrypoint is a poll loop:
+([ADR 0005](adr/0005-compute-agnostic-worker-core.md)). On Fargate the entrypoint is a poll loop
+(`entrypoints/poll_loop.py`):
 
-1. Long-poll SQS. Take a **lease** on the run in DynamoDB (conditional write with expiry) so two
-   workers never run the same run.
-2. Load the run and spec from the control plane, and the latest checkpoint from DynamoDB.
-3. Run the agent loop with Strands on Bedrock. After every model turn and every tool result, write
-   a checkpoint. Use Strands hooks if they allow per-step checkpoints; otherwise wrap the loop.
-4. Extend the SQS message visibility while working (heartbeat). If the worker dies, the message
-   reappears and another worker resumes from the last checkpoint. After N failed receives it goes
-   to the DLQ.
+1. Long-poll SQS for as many messages as there are free run slots. From M2, take a **lease** on
+   the run in DynamoDB (conditional write with expiry) so two workers never run the same run.
+2. Load the run and spec from the control plane, and (from M2) the latest checkpoint from DynamoDB.
+3. Run the agent loop in `core/handle_run.py` ([ADR 0009](adr/0009-worker-owns-agent-loop.md)).
+   Every model reply is checked before anything acts on it: tools not in the spec are refused,
+   arguments are validated against the tool schema, refused or cut-off replies fail the run. From
+   M2, write a checkpoint after every model turn and every tool result.
+4. Extend the SQS message visibility while working (heartbeat, every third of the timeout). If the
+   worker dies, the message reappears and another worker resumes from the last checkpoint.
 5. Enforce the budget every step: steps, dollars from token usage, wall time. Over budget means
    `FAILED` with a reason.
 6. A tool in `require_approval`: save the pending call, report `WAITING_APPROVAL`, delete the SQS
    message, exit. The approval re-enqueues the run.
+
+The message is deleted once `handle_run` returns, whatever status the run ended in. It is kept,
+so SQS delivers it again and after 5 receives moves it to the DLQ, when the body does not match
+`run-message.schema.json`, the run is not found, or the control plane cannot be reached. On
+SIGTERM the worker stops polling and finishes the runs it holds.
 
 Each worker task runs several runs concurrently, because most of a run is spent waiting on the
 model or an API.
@@ -257,8 +268,9 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `RunStore`          | control plane | Runs, steps, approvals; status changes only from the expected current status                       | DynamoDB, in-memory                        |
 | `RunQueue`          | worker        | At-least-once delivery, redelivery after timeout, extendable timeout, delivery count, DLQ after N   | SQS, in-memory                             |
 | `RunStateStore`     | worker        | Atomic conditional writes for lease, checkpoint (step n only after n-1), idempotency claim         | DynamoDB, in-memory                        |
-| Model provider      | worker        | Messages + tools in; text or tool calls + token usage out                                            | Strands providers: Bedrock, Anthropic, stub |
-| `ToolClient`        | worker        | `call_tool(name, args)` returns a result                                                             | Direct calls (M1), MCP gateway (M4)        |
+| `Model`             | worker        | Messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors     | Stub (scripted), Bedrock (M1)              |
+| `ToolClient`        | worker        | `describe(names)` returns tool schemas; `call(name, args)` returns a result or raises `ToolError`    | Fake (tests), direct calls (M1), MCP gateway (M4) |
+| `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
 | `ApprovalChannel`   | control plane | Send an approval request; verify a callback into an `ApprovalDecision`                               | Slack                                      |
 | `TokenStore`        | gateway       | Store and load encrypted tokens per identity and provider                                            | Secrets Manager, in-memory                 |
 
@@ -280,6 +292,8 @@ definition environment, with secrets from Secrets Manager.
 | Control plane URL   | worker, gateway                        | `CONTROL_PLANE_URL` (custom domain; SigV4-signed)       |
 | Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (custom domain; SigV4-signed)        |
 | Bedrock             | worker                                 | `MODEL_PROVIDER=bedrock\|anthropic\|stub`, `AWS_REGION` |
+| Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`                       |
+| Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=secrets_manager\|memory`, `KMS_KEY_ID`     |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`         |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`               |
@@ -299,6 +313,8 @@ the spec, not from config.
 
 - **Unit and contract tests** in each service. Contract tests run every port's suite against every
   adapter.
+- **Smoke test:** `make up && make demo` runs the whole platform in Docker and one run of the
+  example spec to `SUCCEEDED` with the stub model.
 - **Evals** (`evals/`): each task is a trigger event, recorded tool responses, and success checks.
   Deterministic checks first (right labels, duplicate found, nothing closed without approval); an
   LLM judge only for free-text quality, checked against about 50 hand labels. GitHub Actions runs
@@ -363,15 +379,10 @@ control-plane/                  Java 21, Spring Boot 4, Gradle (see control-plan
                                 one package per area: agent, store, tenant, config, web;
                                 later run, trigger, approval, internal, queue, lambda
 
-worker/                         Python 3.12, Strands Agents
-  src/worker/
-    config.py  wiring.py  telemetry.py
-    core/         handle_run, runner, budget, policy, idempotency, pricing   (no AWS imports)
-    ports/        queue, state_store, tools, control_plane                   (interfaces only)
-    adapters/     queue_sqs, queue_memory, state_dynamodb, state_memory,
-                  tools_local, tools_mcp, control_plane_http, model
-    entrypoints/  poll_loop (Fargate), lambda_handler (later)
-  tests/          contract/, unit/, integration/
+worker/                         Python 3.12, uv, own agent loop (see worker/AGENTS.md)
+  src/worker/                   core/ (no vendor imports), ports/, adapters/, entrypoints/,
+                                config.py, wiring.py
+  tests/                        contract/, unit/, integration/
 
 tool-gateway/                   Python, FastAPI + MCP
   src/gateway/
@@ -391,5 +402,7 @@ infra/          modules/ (network, ecs-cluster, ecs-service, lambda, http-api, s
                 envs/dev/
 ```
 
-Root files: `docker-compose.yml` (ElasticMQ, DynamoDB Local, stub model, three services),
-`.env.example`, `Makefile`, `.github/workflows/` (one workflow per service plus evals).
+Root files: `docker-compose.yml` (DynamoDB Local, ElasticMQ, and every service built from its own
+`Dockerfile`), `.dockerignore`, `.env.example`, `Makefile` (`up`, `stack`, `demo`, `down`),
+`.github/workflows/` (one workflow per service plus evals). Each service folder owns its
+`Dockerfile`; images build with the repo root as context because services bundle `contracts/`.

@@ -4,8 +4,9 @@ A multi-tenant platform where a team creates an AI agent by writing a declarativ
 the platform runs that agent reliably whenever its trigger fires.
 
 - **Control plane** (Java, Spring Boot) versions agent specs and turns events into runs.
-- **Workers** (Python, Strands Agents) execute runs on Amazon Bedrock, checkpointing every step so
-  a crashed worker resumes without repeating side effects.
+- **Workers** (Python) run each agent's loop on Amazon Bedrock, checking every model reply against
+  the spec and budget, and checkpointing every step so a crashed worker resumes without repeating
+  side effects.
 - **Tool gateway** (Python, MCP) exposes real APIs as tools and is the only component that holds
   credentials.
 - Risky actions wait for human approval in Slack. Every spec change is gated by an eval suite in CI.
@@ -15,7 +16,8 @@ to Slack, and asks a human before closing anything.
 
 ## Status
 
-Pre-M0. Design is in place; no code yet. See the [roadmap](docs/roadmap.md).
+M0 (local skeleton) done: publish a spec and run it end to end on your machine with a stub model.
+Next: M1, a real agent on Bedrock. See the [roadmap](docs/roadmap.md).
 
 ## Documentation
 
@@ -31,16 +33,27 @@ Pre-M0. Design is in place; no code yet. See the [roadmap](docs/roadmap.md).
 ```
 contracts/       shared schemas between services
 control-plane/   Java 21, Spring Boot
-worker/          Python, Strands Agents
+worker/          Python 3.12, own agent loop
 tool-gateway/    Python, FastAPI + MCP
 specs/           example agent specs
 evals/           regression suite and CI gate
 loadtest/        stub model, load driver, chaos script
 infra/           Terraform
+local-stack/     local AWS stand-ins and the demo script
 docs/            product, architecture, roadmap, ADRs
 ```
 
 ## Quickstart
 
-Not available yet. Arrives with milestone M0 (`docker compose up`, publish a spec, run one agent
-end to end against a stub model).
+Needs Docker (with Compose) and `make`; nothing else is installed on your machine.
+
+```sh
+make up     # build and start everything; the first build takes a few minutes
+make demo   # publish the example spec, start a run, wait until it SUCCEEDED
+make down   # stop everything and delete local data
+```
+
+`make up` starts DynamoDB Local and ElasticMQ (local stand-ins for DynamoDB and SQS), the control
+plane on `localhost:8080`, and one worker. The worker uses a stub model and fake tools, so no AWS
+account or API key is needed. `make demo` prints each step and the finished run; `make logs`
+follows all containers. Commands for each service: [AGENTS.md](AGENTS.md) → Commands.

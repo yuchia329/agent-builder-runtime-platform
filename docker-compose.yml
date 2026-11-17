@@ -1,4 +1,5 @@
-# Local stand-ins for the AWS services the platform uses. Start with `make up`.
+# The whole platform locally: AWS stand-ins (DynamoDB Local, ElasticMQ) plus the control plane and
+# worker built from this repo. Start with `make up`; `make stack` starts only the AWS stand-ins.
 # Data is in memory: `make down` (or a restart) wipes it.
 name: agent-platform
 
@@ -36,3 +37,39 @@ services:
       - ./control-plane/dynamodb:/defs:ro
       - ./local-stack:/local-stack:ro
     restart: "no"
+
+  # Built from control-plane/Dockerfile. Same settings as .env, with container addresses.
+  control-plane:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    env_file: .env
+    environment:
+      AWS_ENDPOINT_URL_DYNAMODB: http://dynamodb:8000
+      AWS_ENDPOINT_URL_SQS: http://elasticmq:9324
+      RUN_QUEUE_URL: http://elasticmq:9324/000000000000/runs
+    ports:
+      - "8080:8080"
+    depends_on:
+      aws-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # Up when the internal API answers (404 for an unknown run is fine).
+      test: ["CMD-SHELL", "curl -s -o /dev/null localhost:8080/internal/runs/healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  # Built from worker/Dockerfile: polls the run queue, stub model and fake tools (M0).
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    env_file: .env
+    environment:
+      AWS_ENDPOINT_URL_SQS: http://elasticmq:9324
+      RUN_QUEUE_URL: http://elasticmq:9324/000000000000/runs
+      CONTROL_PLANE_URL: http://control-plane:8080
+    depends_on:
+      control-plane:
+        condition: service_healthy

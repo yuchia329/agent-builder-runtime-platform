@@ -1,0 +1,14 @@
+# Build context is the repo root (the control-plane jar bundles contracts/). Send only what images
+# need; never private notes or local credentials.
+notes/
+.env
+.git/
+**/.venv/
+**/build/
+**/.gradle/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+.idea/
+.vscode/
+**/.DS_Store

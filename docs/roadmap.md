@@ -3,8 +3,9 @@
 Current status, milestones and next tasks. Update this file as work moves; the other docs describe
 the target design and should change only when the design does.
 
-**Status:** M0 in progress. Schemas done; control plane publishes agents and versions; local
-stack (DynamoDB Local + ElasticMQ) runs with `make up`; internal run API contract written.
+**Status:** M0 done: `make up && make demo` builds and starts the whole platform in Docker
+(DynamoDB Local, ElasticMQ, control plane, worker) and runs the example spec to `SUCCEEDED` with
+the stub model. Next: M1, starting with the Bedrock model adapter.
 
 ## Approach
 
@@ -38,7 +39,7 @@ can run alongside 2 to 5. Start a session with
 
 | #   | Milestone      | Done when                                                                                  | Status      |
 | --- | -------------- | ------------------------------------------------------------------------------------------ | ----------- |
-| M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model      | In progress |
+| M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model      | Done        |
 | M1  | Real agent     | Issue-triage agent runs on Bedrock and calls GitHub directly from the worker (personal token) | Not started |
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call     | Not started |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                 | Not started |
@@ -73,27 +74,38 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
       queue are listed.
 - [x] `[contracts]` `internal-api.openapi.yaml`: `GET/PATCH /internal/runs/{id}` request and
       response shapes, SigV4 security scheme, run statuses. Check: file passes an OpenAPI linter.
-- [ ] `[control-plane]` `RunStore` port (in-memory + DynamoDB, contract suite), `POST /runs`,
+- [x] `[control-plane]` `RunStore` port (in-memory + DynamoDB, contract suite), `POST /runs`,
       `GET /runs/{id}`, `RunQueuePublisher` (SQS + in-memory), internal
       `GET/PATCH /internal/runs/{id}`. Check: run item is `QUEUED` and a message is on the queue.
-- [ ] `[worker]` `core/handle_run.py`, ports, in-memory adapters, stub model, one fake tool,
+- [x] `[worker]` `core/handle_run.py`, ports, in-memory adapters, stub model, one fake tool,
       budget (steps and seconds). Check: integration test runs a spec to `SUCCEEDED` with no
       network.
-- [ ] `[worker]` `queue_sqs.py`, `control_plane_http.py`, `poll_loop.py`, `config.py`, `wiring.py`.
+- [x] `[worker]` `queue_sqs.py`, `control_plane_http.py`, `poll_loop.py`, `config.py`, `wiring.py`.
       Check: with the stack up, a run started by curl reaches `SUCCEEDED`.
-- [ ] `[local-stack]` add both services to compose, `make demo` script, README quickstart.
+- [x] `[local-stack]` add both services to compose, `make demo` script, README quickstart.
       Check: fresh clone → `make up && make demo` passes. **M0 done.**
 
 ## M1 tasks: real agent
 
-- [ ] `[worker]` `adapters/model.py` with the Strands Bedrock provider, `core/pricing.py`, dollar
-      budget. Check: stub tools, real model, run succeeds and reports cost.
+- [ ] `[worker]` `adapters/model_bedrock.py` (Strands Bedrock provider or Converse API, ADR 0009),
+      `core/pricing.py`, dollar budget, cost reporting. Check: stub tools, real model, run
+      succeeds and reports cost; the adapter passes the `Model` contract suite.
+- [ ] `[worker]` model retries (throttling, 5xx: backoff, then `ModelError`) in the Bedrock adapter,
+      and conversation trimming in core when the context nears the model's limit. Check: unit
+      tests with a stub that throttles and a long scripted run.
 - [ ] `[worker]` `tools_local.py`: `github.search_issues`, `github.add_label` with a personal
       token. Check: unit tests with recorded responses.
 - [ ] `[specs]` final `issue-triage.yaml`. Check: a manual run against a test repo labels a real
       issue and finds a planted duplicate. **M1 done: MVP.**
 - [ ] `[control-plane]` (optional) `POST /triggers/github` with HMAC check; deliver webhooks
       locally with smee.io. Check: opening an issue starts a run.
+
+## M2 tasks: crash safety (not yet ordered)
+
+- [ ] `[control-plane]` re-enqueue sweep: a scheduled job finds runs left `QUEUED` longer than a
+      few minutes (saved, but the enqueue failed or was lost) and sends their message again.
+      `POST /runs` already returns 503 and leaves the run `QUEUED` when enqueueing fails. Needs a
+      query by status (new index or a scan). Check: a run whose enqueue failed reaches the queue.
 
 ## Cost guardrails
 
@@ -114,7 +126,6 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   worker entrypoint (ADR 0005) early?
 - Is Spring Boot's cold start on Lambda with SnapStart fast enough for Slack's 3-second callback
   limit, or does the control plane need a lighter framework?
-- Can Strands hooks checkpoint every step, or does the worker need its own loop wrapper?
 - k6 or Locust for the load driver.
 - Gateway `TokenStore`: Secrets Manager costs $0.40 per secret per month, which grows with every
   stored OAuth token. SSM Parameter Store SecureString (standard tier, free) may be the better
@@ -126,25 +137,65 @@ Changes to `contracts/` that another service still has to adopt. Remove an entry
 service has followed.
 
 - **Internal API and gateway auth is IAM (SigV4) through API Gateway** (ADR 0007). Declared in
-  `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`control_plane_http.py`, later
-  `tools_mcp.py` sign requests), `tool-gateway` (signs calls to the control plane).
-- **Internal run API added** (`contracts/internal-api.openapi.yaml`): `GET /internal/runs/{run_id}`
-  (run + pinned spec + `input`, `run_token` from M4) and `PATCH /internal/runs/{run_id}` (status,
-  `steps`, `cost_usd`, `trace_id`, `pending_approval`, `failure`, `output`; allowed status changes
-  in the file's description, others 409). snake_case JSON. Must follow: `control-plane` (implement
-  both endpoints and the transition rules), `worker` (`control_plane_http.py`).
-- **Agent spec schema added** (`contracts/agent-spec.schema.json`). No `version` field: the control
-  plane assigns version numbers. `require_approval ⊆ tools` is not in the schema and must be checked
-  in code. Must follow: `worker` (reads the spec fields it needs). `control-plane` done.
-- **Run message schema added** (`contracts/run-message.schema.json`): `{schema_version: 1, run_id,
-  tenant_id}`. Must follow: `control-plane` (`RunQueuePublisher` sends it), `worker` (`queue_sqs.py`
-  parses it).
+  `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`tools_mcp.py` in M4 signs
+  gateway calls; `control_plane_http.py` done), `tool-gateway` (signs calls to the control plane).
 
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-16 · local-stack** — M0 done. Compose now builds and runs `control-plane` (healthcheck)
+  and `worker` next to DynamoDB Local and ElasticMQ; per-service env overrides swap `localhost`
+  for service names. `control-plane/Dockerfile` and `worker/Dockerfile` (multi-stage, build inside
+  Docker, non-root; context is the repo root) live in the service folders by decision: packaging
+  belongs to the service, and the worker image is the M6 Fargate image. Root `.dockerignore`
+  keeps `notes/`, `.env`, build output out. `Makefile`: `up` (build, start, wait), `stack` (AWS
+  stand-ins only, for host runs), `demo` (`local-stack/demo.sh`, sh + curl, exits non-zero unless
+  `SUCCEEDED`). README quickstart. Checked: `make down`, `.env` deleted, `--no-cache` build, then
+  `make up && make demo` passed. Also fixed in `worker/`: boto3 ignores `AWS_REGION` (reads only
+  `AWS_DEFAULT_REGION`), so `SqsRunQueue` takes the region from config (regression test); it had
+  only worked on the host because of `~/.aws/config`. Next: M1 `[worker]` Bedrock model adapter.
+  Gotchas: `make up --wait` can report the worker healthy just before it exits (no healthcheck);
+  `make demo` prints worker logs on failure. First build takes minutes (Gradle and uv caches are
+  BuildKit cache mounts afterwards). Host `bootRun` / `uv run worker` need `make stack`, not
+  `make up` (port 8080 and the queue are taken).
+- **2026-11-16 · worker** — Worker runs end to end against the local stack: `RunQueue` port
+  (SQS + in-memory, one contract suite; SQS runs on ElasticMQ via Testcontainers),
+  `control_plane_http.py` (SigV4 `execute-api`, retries connection errors / 429 / 5xx, joins the
+  `ControlPlane` suite against a fake server that checks requests against the contract),
+  `entrypoints/poll_loop.py` (concurrency slots, heartbeat, graceful SIGTERM), `config.py`,
+  `wiring.py`, `StubModel` (stateless, `demo_turns()` script), `core/run_message.py`. `uv run
+  worker` starts it. 78 tests pass (72 with `-m "not docker"`). Checked by hand: stack + control
+  plane `bootRun` + worker, a curl-started run reached `SUCCEEDED` (5 steps), queue and DLQ empty.
+  Worker vars added to `.env.example`. Next: `[local-stack]` both services in compose, `make demo`.
+  Gotchas: message deleted once `handle_run` returns; kept (retry, then DLQ) on invalid body,
+  unknown run, or control plane outage. Two workers can still both run one run (`RUNNING →
+  RUNNING` allowed) until the M2 lease. Run message is parsed by hand-written checks (the image
+  will not ship `contracts/`); a test keeps them in line with the schema. In compose, set
+  `CONTROL_PLANE_URL=http://control-plane:8080` and the ElasticMQ host change from the local-stack
+  note below.
+- **2026-11-16 · worker** — Decided the worker owns the agent loop (ADR 0009; Strands only behind
+  the `Model` port). New `worker/` (Python 3.12, uv, pytest, ruff): `core/handle_run.py`,
+  `core/budget.py` (steps, seconds), `core/types.py`; ports `ControlPlane`, `Model`, `ToolClient`,
+  `Clock`; adapters in-memory control plane (same status rules), scripted model, fake tools
+  (record calls). Loop refuses tools not in the spec, validates arguments against tool schemas,
+  pauses on `require_approval`, treats refusal / max-tokens as failure, ends crashes as `FAILED`.
+  29 tests pass, no network; the test run is `contracts/examples/internal-run.valid.json` and every
+  update is checked against the contract's `RunUpdate`. A test enforces "core imports no vendor
+  SDK". Next: `[worker]` SQS queue, control-plane HTTP adapter (joins the `ControlPlane` contract
+  suite), poll loop. Gotchas: a redelivered `RUNNING` run restarts from step 1 (checkpoints M2);
+  no cost reported yet (M1); resume after approval is M3.
+- **2026-11-16 · control-plane** — `RunStore` port (in-memory + DynamoDB, 11-test contract suite
+  incl. concurrent finishes), `RunQueuePublisher` (in-memory + SQS, contract suite checks bodies
+  against `run-message.schema.json`), `POST /runs`, `GET /runs/{id}`, `GET/PATCH
+  /internal/runs/{id}`. `ContractValidator` validates against the bundled `contracts/` files
+  (PATCH bodies vs `RunUpdate`; tests check responses vs `InternalRun` / `RunSummary`). Status
+  rules in `RunStatus.allowedFrom()`. Public API switched to snake_case, nulls omitted. 75 tests
+  pass; checked against the local stack (run `QUEUED` in DynamoDB, message on `runs`, internal
+  GET/PATCH work). Next: `[worker]` `handle_run` with in-memory adapters. Gotchas: enqueue failure
+  returns 503 and leaves the run `QUEUED` (sweep task added under M2); `/internal/*` has no auth
+  locally (SigV4 at API Gateway in AWS); `steps` is a count.
 - **2026-11-16 · contracts** — Added `internal-api.openapi.yaml` (OpenAPI 3.1): GET/PATCH
   `/internal/runs/{run_id}`, SigV4 scheme (`x-amazon-apigateway-authtype: awsSigv4`), status change
   table, problem+json errors. Spec in the GET response `$ref`s `agent-spec.schema.json`. Examples

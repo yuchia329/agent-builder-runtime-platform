@@ -1,0 +1,4 @@
+{
+  "TableName": "run-state",
+  "TimeToLiveSpecification": { "Enabled": true, "AttributeName": "ttl" }
+}

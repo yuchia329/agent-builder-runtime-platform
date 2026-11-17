@@ -2,13 +2,18 @@ import pytest
 
 
 class FakeClock:
-    """Monotonic clock the test moves by hand."""
+    """Clock the test moves by hand; `time()` is a fixed epoch plus the same offset."""
+
+    EPOCH = 1_800_000_000.0
 
     def __init__(self) -> None:
         self.now = 1000.0
 
     def monotonic(self) -> float:
         return self.now
+
+    def time(self) -> float:
+        return self.EPOCH + self.now
 
     def advance(self, seconds: float) -> None:
         self.now += seconds

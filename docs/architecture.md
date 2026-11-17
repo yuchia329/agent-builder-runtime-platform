@@ -257,6 +257,23 @@ each step, so one model turn can overshoot `max_usd` before the run stops. What 
 to see again in later turns (MiniMax's reasoning) travels in `provider_data` on each model turn;
 core stores it in the history without reading it.
 
+## Run state
+
+The worker's run-state table ([ADR 0011](adr/0011-run-state-per-step-fenced.md)) has one
+partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-state-ttl.json`:
+
+| SK | Holds |
+| --- | --- |
+| `LEASE` | `owner`, `expires_at` (epoch seconds), `last_step` |
+| `STEP#000001`, ... | `data`: JSON of what that step added; written once |
+| `TOOL#<key>` | idempotency claim; `result` once stored |
+
+- Every write except taking the lease checks the writer's live lease in the same transaction
+  (fencing); a worker that lost it gets `LeaseLost` and writes nothing. A checkpoint moves
+  `last_step` from n-1 to n in that check.
+- Payloads are at most 350 KB of JSON. Every item has `ttl` = last write + 15 days; DynamoDB
+  deletes expired items, so a run must finish within 15 days of its last step.
+
 ## Idempotency
 
 - Every tool call gets a key: `hash(run_id, step_number, tool_name, arguments)`.

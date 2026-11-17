@@ -11,7 +11,7 @@ Run from `worker/`.
 | What | Command |
 | --- | --- |
 | Install | `uv sync` |
-| Test | `uv run pytest` (Docker must run: SQS tests start ElasticMQ with Testcontainers) |
+| Test | `uv run pytest` (Docker must run: SQS and DynamoDB tests start ElasticMQ and DynamoDB Local with Testcontainers) |
 | Test, no Docker | `uv run pytest -m "not docker"` |
 | Run against the local stack | `set -a && . ../.env && set +a && uv run worker` (needs `make stack` and the control plane on the host) |
 | Real GitHub tools locally | In `../.env`: `TOOLS_PROVIDER=local`, `GITHUB_TOKEN` (fine-grained, sandbox repo only, Issues read/write), `GITHUB_REPOS=owner/repo` |
@@ -27,12 +27,17 @@ Run from `worker/`.
   (`trim.py`), types, errors. Imports only the standard
   library, `worker.core` / `worker.ports`, and `jsonschema`. `tests/unit/test_core_boundary.py`
   fails on any other import.
-- `src/worker/ports/`: `Protocol` interfaces only (`ControlPlane`, `Model`, `ToolClient`, `Clock`).
+- `src/worker/ports/`: `Protocol` interfaces only (`ControlPlane`, `Model`, `ToolClient`, `Clock`,
+  `RunQueue`, `RunStateStore`).
 - `src/worker/adapters/`: implementations. Vendor SDKs (boto3, httpx, Strands) live only here.
   Models: `model_router.py` (picks the provider from `<provider>/<model id>`),
   `model_openai_compat.py` (OpenAI Chat Completions format: MiniMax, OpenAI, OpenRouter, vLLM,
   ...), `model_bedrock.py` (Bedrock Converse via boto3), `model_stub.py` (built-in provider
   `stub`).
+- Run state: `run_state_memory.py`, `run_state_dynamodb.py` (item layout in its docstring),
+  `run_state_payload.py` (shared JSON and size check). Table keys only in
+  `worker/dynamodb/run-state-table.json` (TTL in `run-state-ttl.json`); tests and the local
+  stack create the table from these files, never from code.
 - `src/worker/entrypoints/poll_loop.py`: the Fargate entrypoint (queue → `handle_run`, heartbeat,
   delete-or-keep). `config.py` reads env vars; `wiring.py` is the only module that picks adapters.
 - `tests/contract/`: one suite per port, parametrized over adapters. A new adapter is added to the
@@ -78,6 +83,11 @@ Run from `worker/`.
   through the request's tool list, not by string replace.
 - JSON values in `.env` (`MODEL_<NAME>_EXTRA_BODY`) need single quotes, or `sh` strips the
   inner quotes.
+- Run-state writes other than `take_lease` must check the caller's live lease in the same
+  DynamoDB transaction (fencing, ADR 0011); a new write method follows the same rule and gets a
+  contract test with a stale worker. Lease expiry uses `Clock.time()`, never `monotonic()`.
+- DynamoDB expressions: put attribute names through `#` placeholders (`owner`, `ttl` are reserved)
+  and pass only the names the expression uses, or DynamoDB rejects the call.
 - Tests that need Docker get `@pytest.mark.docker` (or `marks=` on a `pytest.param`).
 - `ScriptedModel` (tests: one script, records calls) vs `StubModel` (running worker: stateless,
   picks the turn by how many assistant replies the conversation has, safe across concurrent runs).

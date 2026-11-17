@@ -30,3 +30,16 @@ class ControlPlaneError(Exception):
 
 class QueueError(Exception):
     """A run queue call failed (receive, delete, or extend a message)."""
+
+
+class LeaseLost(Exception):
+    """This worker no longer holds the run's lease (expired, released, or taken by another
+    worker). The run state was not changed; the worker must stop working on the run."""
+
+
+class CheckpointConflict(Exception):
+    """A checkpoint was not the next step (step n is saved only right after step n-1)."""
+
+
+class StateError(Exception):
+    """The run-state store failed (unreachable, throttled after retries, item too large)."""

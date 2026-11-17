@@ -8,8 +8,8 @@ with real GitHub tools (`TOOLS_PROVIDER=local`) through the local stack, labels 
 flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo` still runs the
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
-through the Converse adapter), though Nova Lite triages worse than MiniMax. Next: M2 (crash
-safety).
+through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
+progress: run-state store done (ADR 0011); next the local-stack table, then lease in the loop.
 
 ## Approach
 
@@ -45,7 +45,7 @@ can run alongside 2 to 5. Start a session with
 | --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model                                                                         | Done        |
 | M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Done        |
-| M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Not started |
+| M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | In progress |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Not started |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Not started |
 | M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
@@ -144,13 +144,52 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   locally with smee.io. Check: opening an issue starts a run.
   ```
 
-## M2 tasks: crash safety (not yet ordered)
+## M2 tasks: crash safety
 
+- [x] `[worker]` `RunStateStore` port (architecture → Ports and adapters) with in-memory and
+  ```
+  DynamoDB adapters: lease (take with expiry, renew, release; refused while another worker's
+  lease is live), checkpoint (step n only after n-1, read latest), idempotency (claim a key,
+  store its result, read it). Table keys in one file, `worker/dynamodb/run-state-table.json`.
+  Check: one contract suite passes on both adapters (DynamoDB Local), including two concurrent
+  takers where exactly one wins.
+  ```
+- [ ] `[local-stack]` create the run-state table from that file in `make stack` / `make up`;
+  ```
+  worker gets `STATE_BACKEND=dynamodb`, `STATE_TABLE`. Check: `make up && make demo` passes.
+  ```
+- [ ] `[worker]` lease in the poll loop: take on receive, renew with the heartbeat, release when
+  ```
+  `handle_run` returns; a run leased by another live worker is left alone (message not deleted).
+  Check: two workers given the same run, only one executes it.
+  ```
+- [ ] `[worker]` checkpoints: write after every model turn and every tool result (messages,
+  ```
+  usage, cost, `provider_data`); a picked-up run resumes from the latest. Check: integration
+  test stops a run after step k, a second `handle_run` finishes it with no repeated model calls
+  for steps 1..k and the same budget totals.
+  ```
+- [ ] `[worker]` idempotent tool calls: key `hash(run_id, step, tool, arguments)`, claim before
+  ```
+  calling, store the result after; a resumed run gets the stored result. Decide in session (ADR
+  if it is a rule) what a claimed key without a result means after a crash: retry, fail the
+  run, or per-tool. Check: crash between the tool call and the checkpoint, resume, the fake
+  GitHub server sees one `add_label`.
+  ```
 - [ ] `[control-plane]` re-enqueue sweep: a scheduled job finds runs left `QUEUED` longer than a
   ```
   few minutes (saved, but the enqueue failed or was lost) and sends their message again.
   `POST /runs` already returns 503 and leaves the run `QUEUED` when enqueueing fails. Needs a
   query by status (new index or a scan). Check: a run whose enqueue failed reaches the queue.
+  ```
+- [ ] `[control-plane]` webhook redelivery dedupe on `X-GitHub-Delivery` (conditional put, short
+  ```
+  TTL). Check: the same delivery twice starts one run.
+  ```
+- [ ] `[local-stack]` chaos demo: `make chaos` kills the worker container mid-run (stub model,
+  ```
+  fake tools that count calls), restarts it, and checks the run succeeds with no duplicate tool
+  call. **M2 done.**
   ```
 
 ## Cost guardrails
@@ -192,6 +231,20 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-16 · worker** — M2 task list written and ordered (roadmap). `RunStateStore` port
+  (`ports/run_state.py`) with `run_state_memory.py` and `run_state_dynamodb.py` (ADR 0011: one
+  item per step, fenced writes, 15-day TTL); table files `worker/dynamodb/run-state-table.json`
+  and `run-state-ttl.json`; errors `LeaseLost`, `CheckpointConflict`, `StateError`;
+  `Clock.time()` (wall clock) added. Tests: 235 passed (45 new): contract suite on both adapters
+  (DynamoDB Local via Testcontainers, a table per test from the files), including 8 racing
+  takers and a stale worker fenced out; Stubber tests for DynamoDB errors. Not wired yet: no
+  `STATE_*` config until the lease task. Next: `[local-stack]` create the table (and enable TTL
+  from `run-state-ttl.json`: `aws dynamodb update-time-to-live --cli-input-json`). Gotchas:
+  `owner` and `ttl` are DynamoDB reserved words (use `#` placeholders); DynamoDB rejects
+  `ExpressionAttributeNames` entries an expression does not use; a racing transaction surfaces
+  as `StateError` (`TransactionConflict`), not `CheckpointConflict`, so the lease task decides on
+  retry; a claim with no result means the claimer may or may not have called the tool (task 5
+  decides); approval waits (M3) must stay under 15 days or the run's state expires.
 - **2026-11-16 · worker** — `adapters/model_bedrock.py`: Bedrock Converse via plain boto3
   (`bedrock-runtime` `converse`), lazy client, botocore standard retries (4 attempts), errors to
   `ModelError`. Config: `MODEL_<NAME>_PROTOCOL=bedrock`, `_AWS_PROFILE`, `_REGION`,

@@ -38,8 +38,8 @@ Run from `worker/`.
   `run_state_payload.py` (shared JSON and size check). Table keys only in
   `worker/dynamodb/run-state-table.json` (TTL in `run-state-ttl.json`); tests and the local
   stack create the table from these files, never from code.
-- `src/worker/entrypoints/poll_loop.py`: the Fargate entrypoint (queue → `handle_run`, heartbeat,
-  delete-or-keep). `config.py` reads env vars; `wiring.py` is the only module that picks adapters.
+- `src/worker/entrypoints/poll_loop.py`: the Fargate entrypoint (queue → lease → `handle_run`,
+  heartbeat renewing message and lease, release, delete-or-keep). `config.py` reads env vars; `wiring.py` is the only module that picks adapters.
 - `tests/contract/`: one suite per port, parametrized over adapters. A new adapter is added to the
   suite's `ADAPTERS` and must pass it.
 - `tests/integration/`: `handle_run` end to end with in-memory adapters.
@@ -86,6 +86,10 @@ Run from `worker/`.
 - Run-state writes other than `take_lease` must check the caller's live lease in the same
   DynamoDB transaction (fencing, ADR 0011); a new write method follows the same rule and gets a
   contract test with a stale worker. Lease expiry uses `Clock.time()`, never `monotonic()`.
+- `STATE_BACKEND=memory` keeps leases in one process: fine for tests and a single host worker,
+  no protection between workers. The local stack uses `dynamodb`.
+- Handlers given to `PollLoop` take `(run_id, deps, cancelled)` like `handle_run`; core checks
+  `cancelled()` before every step, next to the budget.
 - DynamoDB expressions: put attribute names through `#` placeholders (`owner`, `ttl` are reserved)
   and pass only the names the expression uses, or DynamoDB rejects the call.
 - Tests that need Docker get `@pytest.mark.docker` (or `marks=` on a `pytest.param`).

@@ -11,6 +11,8 @@ Every model reply passes through this loop before anything acts on it:
 - a tool in ``require_approval`` stops the run in WAITING_APPROVAL without being called;
 - a cut-off or refused reply ends the run as FAILED, never as a final answer;
 - the budget (steps, dollars, seconds) is checked before every step;
+- a worker that lost the run's lease (``cancelled()`` turns true) stops before its next step
+  with ``LeaseLost`` and reports nothing: another worker owns the run now;
 - a model with no known price or context size fails the run before its first step;
 - the conversation is trimmed before a call once it nears the model's context window;
 - any unexpected error ends the run as FAILED with reason ``error``.
@@ -20,14 +22,14 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from worker.core.budget import BudgetExceeded, BudgetTracker
-from worker.core.errors import RunConflict, ToolError
+from worker.core.errors import LeaseLost, RunConflict, ToolError
 from worker.core.models import MODELS, ModelInfo, UnknownModel, model_info
 from worker.core.trim import ContextTooLarge, fit_context, message_chars
 from worker.core.types import (
@@ -64,8 +66,11 @@ class Deps:
     models: Mapping[str, ModelInfo] = field(default_factory=lambda: MODELS)
 
 
-def handle_run(run_id: str, deps: Deps) -> RunStatus:
-    """Executes one run and returns the status it ended in (or was already in)."""
+def handle_run(run_id: str, deps: Deps, cancelled: Callable[[], bool] | None = None) -> RunStatus:
+    """Executes one run and returns the status it ended in (or was already in).
+
+    ``cancelled`` is checked before every step; once it returns True the run stops with
+    LeaseLost, leaving its status to the worker that holds the lease now."""
     run = deps.control_plane.get_run(run_id)
     if run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
         # Duplicate delivery of a run that is finished or paused: nothing to do.
@@ -83,7 +88,10 @@ def handle_run(run_id: str, deps: Deps) -> RunStatus:
     budget = BudgetTracker(run.spec.budget, deps.clock)
     try:
         info = model_info(run.spec.model, dict(deps.models))
-        final = _AgentLoop(run, deps, budget, info).run()
+        final = _AgentLoop(run, deps, budget, info, cancelled or _never).run()
+    except LeaseLost:
+        log.warning("run %s: lease lost; stopping, another worker owns the run", run_id)
+        raise
     except (UnknownModel, ContextTooLarge) as e:
         final = _failed(budget, FailureReason.ERROR, str(e))
     except BudgetExceeded as e:
@@ -94,6 +102,10 @@ def handle_run(run_id: str, deps: Deps) -> RunStatus:
 
     deps.control_plane.update_run(run_id, final)
     return final.status
+
+
+def _never() -> bool:
+    return False
 
 
 def _failed(budget: BudgetTracker, reason: FailureReason, message: str) -> RunUpdate:
@@ -110,8 +122,16 @@ def _cost(budget: BudgetTracker) -> float:
 
 
 class _AgentLoop:
-    def __init__(self, run: RunRecord, deps: Deps, budget: BudgetTracker, info: ModelInfo) -> None:
+    def __init__(
+        self,
+        run: RunRecord,
+        deps: Deps,
+        budget: BudgetTracker,
+        info: ModelInfo,
+        cancelled: Callable[[], bool],
+    ) -> None:
         self._run = run
+        self._cancelled = cancelled
         self._spec = run.spec
         self._deps = deps
         self._budget = budget
@@ -128,7 +148,7 @@ class _AgentLoop:
 
     def run(self) -> RunUpdate:
         while True:
-            self._budget.check()
+            self._before_step()
             self._fit_context()
             turn = self._deps.model.complete(
                 self._spec.model, self._spec.instructions, self._messages, self._tools
@@ -181,9 +201,14 @@ class _AgentLoop:
         if input_tokens > 0 and chars > 0:
             self._tokens_per_char = input_tokens / chars
 
+    def _before_step(self) -> None:
+        if self._cancelled():
+            raise LeaseLost(f"Run {self._run.run_id}: lease lost")
+        self._budget.check()
+
     def _execute(self, call: ToolCall) -> ToolResult:
         """Runs an allowed, well-formed call. A tool failure becomes an error result."""
-        self._budget.check()
+        self._before_step()
         try:
             content = self._deps.tools.call(call.name, call.arguments)
             result = ToolResult(call.id, content)

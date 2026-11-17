@@ -9,7 +9,7 @@ flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
 through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
-progress: run-state store and its local table done (ADR 0011); next the lease in the poll loop.
+progress: run-state store, local table and lease done (ADR 0011); next checkpoints.
 
 ## Approach
 
@@ -158,7 +158,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   ```
   worker gets `STATE_BACKEND=dynamodb`, `STATE_TABLE`. Check: `make up && make demo` passes.
   ```
-- [ ] `[worker]` lease in the poll loop: take on receive, renew with the heartbeat, release when
+- [x] `[worker]` lease in the poll loop: take on receive, renew with the heartbeat, release when
   ```
   `handle_run` returns; a run leased by another live worker is left alone (message not deleted).
   Check: two workers given the same run, only one executes it.
@@ -231,6 +231,19 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-16 · worker** — Lease in the poll loop: take before the run (owner per attempt
+  `<host>-<pid>/<random>`), renew in the heartbeat, release in `finally`; held by another
+  worker: message kept and hidden one lease length; `StateError` on take: message kept.
+  `handle_run(run_id, deps, cancelled=None)`: checked before every step with the budget; true
+  raises `LeaseLost` (no status reported, message kept). Config `STATE_BACKEND=dynamodb|memory`
+  (default dynamodb), `STATE_TABLE` (default `run-state`); `App.state`, `PollLoop(queue, deps,
+  state, ...)`. Tests: 244 passed (9 new: duplicate across two loops and within one, lease lost
+  mid-run stops before `add_label`, renewal past expiry, release after error, store outage,
+  config). Live: `make demo` SUCCEEDED on the DynamoDB store, `LEASE` item released
+  (`expires_at` 0). Next: `[worker]` checkpoints. Gotchas: handlers passed to `PollLoop` take
+  `(run_id, deps, cancelled)`; a duplicate message for a long run can reach the DLQ (harmless,
+  the holder has its own); the memory store protects one process only; `make demo` republishes
+  `issue-triage` with the stub spec, republish `specs/issue-triage.yaml` after (now version 5).
 - **2026-11-16 · local-stack** — `local-stack/create-tables.sh` (renamed from
   `create-table.sh`) creates `control-plane` and `run-state` from each service's files
   (`worker/dynamodb` mounted at `/defs/worker`) and enables TTL on `ttl`; each step checks first,

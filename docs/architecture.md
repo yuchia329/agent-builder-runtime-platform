@@ -207,15 +207,22 @@ The worker core is one function, `handle_run(run_id)`, called from an entrypoint
 ([ADR 0005](adr/0005-compute-agnostic-worker-core.md)). On Fargate the entrypoint is a poll loop
 (`entrypoints/poll_loop.py`):
 
-1. Long-poll SQS for as many messages as there are free run slots. From M2, take a **lease** on
-   the run in DynamoDB (conditional write with expiry) so two workers never run the same run.
+1. Long-poll SQS for as many messages as there are free run slots. Take the run's **lease** in
+   the run-state table (conditional write with expiry, one lease length = the visibility
+   timeout) so two workers never run the same run. The owner is new per attempt
+   (`<host>-<pid>/<random>`), so one process receiving a run twice runs it once. If another
+   worker holds a live lease, keep the message and hide it for one more lease length (deleting it
+   could lose the run if the holder then crashes).
 2. Load the run and spec from the control plane, and (from M2) the latest checkpoint from DynamoDB.
 3. Run the agent loop in `core/handle_run.py` ([ADR 0009](adr/0009-worker-owns-agent-loop.md)).
    Every model reply is checked before anything acts on it: tools not in the spec are refused,
    arguments are validated against the tool schema, refused or cut-off replies fail the run. From
    M2, write a checkpoint after every model turn and every tool result.
-4. Extend the SQS message visibility while working (heartbeat, every third of the timeout). If the
-   worker dies, the message reappears and another worker resumes from the last checkpoint.
+4. Extend the SQS message visibility and renew the lease while working (heartbeat, every third
+   of the timeout). If the lease is lost (the worker stalled past its expiry and another took
+   over), the run stops before its next step and reports nothing. The lease is released when
+   the run ends, so a retry can take it at once. If the worker dies, the message reappears and
+   another worker resumes from the last checkpoint.
 5. Enforce the budget every step: steps, dollars from token usage, wall time. Over budget means
    `FAILED` with a reason.
 6. A tool in `require_approval`: save the pending call, report `WAITING_APPROVAL`, delete the SQS

@@ -12,7 +12,7 @@ from contracts import contract_errors, example_run
 from worker.adapters.control_plane_memory import InMemoryControlPlane
 from worker.adapters.model_stub import ScriptedModel, final_turn, tool_turn
 from worker.adapters.tools_fake import issue_triage_tools
-from worker.core.errors import ToolError
+from worker.core.errors import LeaseLost, ToolError
 from worker.core.handle_run import Deps, handle_run
 from worker.core.models import ModelInfo, Price
 from worker.core.trim import TRIM_NOTE, message_chars
@@ -40,8 +40,8 @@ class World:
         if models is not None:
             self.deps = replace(self.deps, models=models)
 
-    def run(self) -> RunStatus:
-        return handle_run(RUN_ID, self.deps)
+    def run(self, cancelled=None) -> RunStatus:
+        return handle_run(RUN_ID, self.deps, cancelled)
 
     @property
     def stored(self):
@@ -273,6 +273,22 @@ def test_redelivered_running_run_starts_again(clock):
     assert world.run() is RunStatus.SUCCEEDED
 
     assert world.control_plane.updates[0][1] == {"status": "RUNNING", "steps": 0}
+
+
+def test_lost_lease_stops_before_the_next_step_and_reports_nothing(clock):
+    world = World(clock, [tool_turn(SEARCH), tool_turn(LABEL), final_turn("Done.")])
+    steps = []
+
+    def cancelled():  # the lease is lost after two steps (one model turn, one tool call)
+        steps.append(1)
+        return len(steps) > 2
+
+    with pytest.raises(LeaseLost):
+        world.run(cancelled)
+
+    assert len(world.model.calls) == 1
+    assert [name for name, _ in world.tools.calls] == ["github.search_issues"]
+    assert world.control_plane.updates == [(RUN_ID, {"status": "RUNNING", "steps": 0})]
 
 
 # --- context window -------------------------------------------------------------------------

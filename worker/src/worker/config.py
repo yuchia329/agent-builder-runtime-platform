@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 QUEUE_BACKENDS = ("sqs", "memory")
+STATE_BACKENDS = ("dynamodb", "memory")
 MODEL_PROTOCOLS = ("openai", "bedrock")
 TOOLS_PROVIDERS = ("fake", "local")  # mcp in M4
 PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
@@ -44,6 +45,8 @@ class ConfigError(Exception):
 class Config:
     queue_backend: str
     run_queue_url: str | None
+    state_backend: str
+    state_table: str
     control_plane_url: str
     model_providers: tuple[ModelProviderConfig, ...]
     tools_provider: str
@@ -75,6 +78,8 @@ class Config:
         config = cls(
             queue_backend=choice("QUEUE_BACKEND", QUEUE_BACKENDS, "sqs"),
             run_queue_url=env.get("RUN_QUEUE_URL") or None,
+            state_backend=choice("STATE_BACKEND", STATE_BACKENDS, "dynamodb"),
+            state_table=env.get("STATE_TABLE") or "run-state",
             control_plane_url=env.get("CONTROL_PLANE_URL", "http://localhost:8080"),
             model_providers=_model_providers(env, errors),
             tools_provider=choice("TOOLS_PROVIDER", TOOLS_PROVIDERS, "fake"),

@@ -1,7 +1,12 @@
 """Fargate entrypoint: long-poll the run queue and call handle_run for each message (ADR 0005).
 
 - Up to `concurrency` runs at a time, each on its own thread; only free slots are asked for.
-- While a run is in progress, a heartbeat keeps its message hidden from other workers.
+- Before a run starts, the worker takes the run's lease in the run-state store (ADR 0011), as
+  a new owner per attempt (`<worker id>/<random>`), so even one process never runs a run twice.
+  If another worker holds a live lease, the message is kept and hidden for one more lease length.
+- While a run is in progress, a heartbeat keeps its message hidden from other workers and renews
+  the lease. If the lease is lost, the run stops before its next step (handle_run raises
+  LeaseLost) and the message is kept. The lease is released when handle_run returns or raises.
 - The message is deleted once handle_run returns, whatever status the run ended in. It is kept
   (so SQS delivers it again, and after N tries moves it to the DLQ) when the body is invalid, the
   run is not found, or handle_run raised (control plane unreachable, a bug).
@@ -11,19 +16,23 @@
 from __future__ import annotations
 
 import logging
+import os
+import socket
 import threading
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
-from worker.core.errors import QueueError, RunNotFound
+from worker.core.errors import LeaseLost, QueueError, RunNotFound, StateError
 from worker.core.handle_run import Deps, handle_run
 from worker.core.run_message import InvalidRunMessage, parse_run_message
 from worker.core.types import RunStatus
 from worker.ports.queue import QueueMessage, RunQueue
+from worker.ports.run_state import RunStateStore
 
 log = logging.getLogger(__name__)
 
-Handler = Callable[[str, Deps], RunStatus]
+Handler = Callable[..., RunStatus]  # (run_id, deps, cancelled=...) like handle_run
 
 
 class PollLoop:
@@ -31,7 +40,9 @@ class PollLoop:
         self,
         queue: RunQueue,
         deps: Deps,
+        state: RunStateStore,
         *,
+        worker_id: str | None = None,
         concurrency: int = 4,
         visibility_seconds: float = 60,
         wait_seconds: int = 20,
@@ -40,6 +51,8 @@ class PollLoop:
     ) -> None:
         self._queue = queue
         self._deps = deps
+        self._state = state
+        self._worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}"
         self._concurrency = concurrency
         self._visibility = visibility_seconds
         self._wait = wait_seconds
@@ -105,15 +118,36 @@ class PollLoop:
             log.error("invalid run message (receive %d): %s", message.receive_count, e)
             return
 
-        with _Heartbeat(self._queue, message, self._visibility):
+        owner = f"{self._worker_id}/{uuid.uuid4().hex[:8]}"
+        try:
+            lease = self._state.take_lease(run.run_id, owner, self._visibility)
+        except StateError:
+            log.exception("run %s: could not take the lease; message kept for retry", run.run_id)
+            return
+        if lease is None:
+            log.info("run %s is leased by another worker; message hidden for now", run.run_id)
+            self._hide(message)
+            return
+
+        beat = _Heartbeat(self._queue, message, self._visibility, self._state, run.run_id, owner)
+        try:
+            with beat:
+                try:
+                    status = self._handler(run.run_id, self._deps, cancelled=beat.lost.is_set)
+                except RunNotFound:
+                    log.warning("run %s not found (receive %d)", run.run_id, message.receive_count)
+                    return
+                except LeaseLost:
+                    log.warning("run %s: lease lost; message kept", run.run_id)
+                    return
+                except Exception:  # noqa: BLE001 - keep the message; it is retried
+                    log.exception("run %s failed to process; message kept for retry", run.run_id)
+                    return
+        finally:
             try:
-                status = self._handler(run.run_id, self._deps)
-            except RunNotFound:
-                log.warning("run %s not found (receive %d)", run.run_id, message.receive_count)
-                return
-            except Exception:  # noqa: BLE001 - keep the message; it is retried
-                log.exception("run %s failed to process; message kept for retry", run.run_id)
-                return
+                self._state.release_lease(run.run_id, owner)
+            except StateError:
+                log.exception("run %s: could not release the lease; it expires", run.run_id)
 
         log.info("run %s ended %s", run.run_id, status)
         try:
@@ -122,14 +156,35 @@ class PollLoop:
             # The run is already final; a redelivery is skipped by handle_run's status check.
             log.exception("could not delete message for run %s", run.run_id)
 
+    def _hide(self, message: QueueMessage) -> None:
+        """Keeps a message for a leased run out of sight for one lease length; by then the
+        holder has renewed (hide again) or finished (the next delivery is skipped and deleted)."""
+        try:
+            self._queue.extend(message, self._visibility)
+        except QueueError:
+            log.exception("could not hide the message; it may come back early")
+
 
 class _Heartbeat:
-    """Extends the message's visibility every third of the timeout while the block runs."""
+    """Every third of the visibility timeout while the block runs: extends the message's
+    visibility and renews the run's lease. `lost` is set once the lease is gone."""
 
-    def __init__(self, queue: RunQueue, message: QueueMessage, visibility_seconds: float) -> None:
+    def __init__(
+        self,
+        queue: RunQueue,
+        message: QueueMessage,
+        visibility_seconds: float,
+        state: RunStateStore,
+        run_id: str,
+        owner: str,
+    ) -> None:
         self._queue = queue
         self._message = message
         self._visibility = visibility_seconds
+        self._state = state
+        self._run_id = run_id
+        self._owner = owner
+        self.lost = threading.Event()
         self._done = threading.Event()
         self._thread = threading.Thread(target=self._beat, name="heartbeat", daemon=True)
 
@@ -147,3 +202,12 @@ class _Heartbeat:
                 self._queue.extend(self._message, self._visibility)
             except QueueError:
                 log.exception("heartbeat failed; the message may be delivered again")
+            if self.lost.is_set():
+                continue
+            try:
+                self._state.renew_lease(self._run_id, self._owner, self._visibility)
+            except LeaseLost:
+                log.warning("run %s: lease lost; the run stops before its next step", self._run_id)
+                self.lost.set()
+            except StateError:
+                log.exception("run %s: lease renewal failed; retrying next beat", self._run_id)

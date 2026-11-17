@@ -14,6 +14,8 @@ def test_defaults_for_local_development():
     assert config.tools_provider == "fake"
     assert config.concurrency == 4
     assert config.visibility_seconds == 60
+    assert config.state_backend == "dynamodb"
+    assert config.state_table == "run-state"
 
 
 def test_sqs_needs_queue_url():
@@ -31,12 +33,13 @@ def test_reports_every_bad_value_at_once():
         "MODEL_PROVIDERS": "Mini-Max",
         "WORKER_CONCURRENCY": "0",
         "QUEUE_BACKEND": "kafka",
+        "STATE_BACKEND": "redis",
     }
 
     with pytest.raises(ConfigError) as e:
         Config.from_env(env)
 
-    for name in ("MODEL_PROVIDERS", "WORKER_CONCURRENCY", "QUEUE_BACKEND"):
+    for name in ("MODEL_PROVIDERS", "WORKER_CONCURRENCY", "QUEUE_BACKEND", "STATE_BACKEND"):
         assert name in str(e.value)
 
 
@@ -52,6 +55,17 @@ def test_wiring_builds_sqs_queue_in_configured_region(monkeypatch):
     app = build(Config.from_env({**LOCAL, "AWS_REGION": "eu-west-1"}))
 
     assert app.queue._sqs.meta.region_name == "eu-west-1"
+    assert app.state._db.meta.region_name == "eu-west-1"
+    assert app.state._table == "run-state"
+
+
+def test_wiring_builds_memory_state_store():
+    from worker.adapters.run_state_memory import InMemoryRunStateStore
+    from worker.wiring import build
+
+    app = build(Config.from_env({"QUEUE_BACKEND": "memory", "STATE_BACKEND": "memory"}))
+
+    assert isinstance(app.state, InMemoryRunStateStore)
 
 
 MINIMAX = {

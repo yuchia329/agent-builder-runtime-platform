@@ -27,6 +27,7 @@ def main() -> int:
     loop = PollLoop(
         app.queue,
         app.deps,
+        app.state,
         concurrency=config.concurrency,
         visibility_seconds=config.visibility_seconds,
     )

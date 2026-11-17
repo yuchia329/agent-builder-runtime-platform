@@ -12,12 +12,15 @@ from worker.adapters.model_router import ModelRouter
 from worker.adapters.model_stub import StubModel, demo_turns
 from worker.adapters.queue_memory import InMemoryRunQueue
 from worker.adapters.queue_sqs import SqsRunQueue
+from worker.adapters.run_state_dynamodb import DynamoDbRunStateStore
+from worker.adapters.run_state_memory import InMemoryRunStateStore
 from worker.adapters.tools_fake import issue_triage_tools
 from worker.adapters.tools_local import GitHubTools
 from worker.config import Config
 from worker.core.handle_run import Deps
 from worker.ports.model import Model
 from worker.ports.queue import RunQueue
+from worker.ports.run_state import RunStateStore
 from worker.ports.tools import ToolClient
 
 
@@ -25,6 +28,7 @@ from worker.ports.tools import ToolClient
 class App:
     queue: RunQueue
     deps: Deps
+    state: RunStateStore
 
 
 def build(config: Config) -> App:
@@ -35,6 +39,13 @@ def build(config: Config) -> App:
         )
     else:
         queue = InMemoryRunQueue(config.visibility_seconds)
+
+    clock = SystemClock()
+    state: RunStateStore
+    if config.state_backend == "dynamodb":
+        state = DynamoDbRunStateStore(config.state_table, clock, region=config.aws_region)
+    else:  # one process only: leases in memory do not stop another worker
+        state = InMemoryRunStateStore(clock)
 
     control_plane = HttpControlPlane(config.control_plane_url, default_signer(config.aws_region))
     providers: dict[str, Model] = {"stub": StubModel(demo_turns())}
@@ -58,4 +69,4 @@ def build(config: Config) -> App:
         tools = GitHubTools(config.github_token, config.github_repos, api_url=config.github_api_url)
     else:
         tools = issue_triage_tools()
-    return App(queue, Deps(control_plane, model, tools, SystemClock()))
+    return App(queue, Deps(control_plane, model, tools, clock), state)

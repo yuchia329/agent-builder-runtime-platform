@@ -1,0 +1,38 @@
+{
+  "id": "074b0f235bbbb176523b94c14a5fa9c8",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "I've labeled Issue 42 as **bug**.\n\nThe issue title \"crash\" describes a defect \u2014 the program terminates unexpectedly or throws an unhandled error \u2014 which is a classic fit for the `bug` label. If the repository uses a more specific taxonomy (e.g., `crash`, `regression`, `needs-triage`), let me know and I can swap or add those instead.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1794890787,
+  "model": "MiniMax-M3",
+  "object": "chat.completion",
+  "usage": {
+    "total_tokens": 672,
+    "total_characters": 0,
+    "prompt_tokens": 590,
+    "completion_tokens": 82,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "cached_tokens": 425
+    }
+  },
+  "input_sensitive": false,
+  "output_sensitive": false,
+  "input_sensitive_type": 0,
+  "output_sensitive_type": 0,
+  "output_sensitive_int": 0,
+  "service_tier": "standard",
+  "base_resp": {
+    "status_code": 0,
+    "status_msg": ""
+  }
+}

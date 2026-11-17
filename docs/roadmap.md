@@ -5,7 +5,10 @@ the target design and should change only when the design does.
 
 **Status:** M0 done: `make up && make demo` builds and starts the whole platform in Docker
 (DynamoDB Local, ElasticMQ, control plane, worker) and runs the example spec to `SUCCEEDED` with
-the stub model. Next: M1, starting with the Bedrock model adapter.
+the stub model. M1 in progress: runs execute on real MiniMax (`minimax/MiniMax-M3`) through the
+model router and OpenAI-compatible adapter, with cost reporting, a dollar budget, retries and
+conversation trimming (ADR 0010); real GitHub tools (`TOOLS_PROVIDER=local`) work against the
+sandbox repo. Next: `[specs]` final `issue-triage.yaml` and a real end-to-end run (M1 done).
 
 ## Approach
 
@@ -37,22 +40,23 @@ can run alongside 2 to 5. Start a session with
 
 ## Milestones
 
-| #   | Milestone      | Done when                                                                                  | Status      |
-| --- | -------------- | ------------------------------------------------------------------------------------------ | ----------- |
-| M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model      | Done        |
-| M1  | Real agent     | Issue-triage agent runs on Bedrock and calls GitHub directly from the worker (personal token) | Not started |
-| M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call     | Not started |
-| M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                 | Not started |
-| M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots             | Not started |
-| M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                           | Not started |
+| #   | Milestone      | Done when                                                                                                                                                     | Status      |
+| --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model                                                                         | Done        |
+| M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Not started |
+| M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Not started |
+| M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Not started |
+| M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Not started |
+| M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
-| M7  | Scale proof    | 1,000 concurrent runs on the stub model; chaos test report in `loadtest/report.md`         | Not started |
-| M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                           | Not started |
+| M7  | Scale proof    | 1,000 concurrent runs on the stub model; chaos test report in `loadtest/report.md`                                                                            | Not started |
+| M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
 ## MVP scope (M0 + M1)
 
 The MVP is one real agent run end to end on a laptop: publish the issue-triage spec, start a run by
-hand, and watch a Bedrock model label a real GitHub issue.
+hand, and watch a real model (MiniMax through the OpenAI-compatible adapter) label a real GitHub
+issue. No AWS account is needed until M6.
 
 Left out of the MVP on purpose, each added by a later milestone: the worker's run-state table,
 leases, checkpoints and idempotency (M2); approvals and Slack (M3); the tool gateway, OAuth and run tokens (M4); evals
@@ -63,58 +67,100 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
 ## M0 tasks: walking skeleton (stub model, no AWS)
 
 - [x] `[contracts]` `agent-spec.schema.json`, `run-message.schema.json`, a valid and an invalid
-      example, one test that validates both. Check: test passes.
+  ```
+  example, one test that validates both. Check: test passes.
+  ```
 - [x] `[control-plane]` Spring Boot skeleton, `AgentStore` port with in-memory and DynamoDB
-      adapters and one contract suite, `POST /agents`, `POST /agents/{id}/versions` (schema
-      validation), one hard-coded tenant. Check: contract suite passes on both adapters; publish
-      `contracts/examples/agent-spec.valid.yaml` with curl; invalid spec is rejected.
+  ```
+  adapters and one contract suite, `POST /agents`, `POST /agents/{id}/versions` (schema
+  validation), one hard-coded tenant. Check: contract suite passes on both adapters; publish
+  `contracts/examples/agent-spec.valid.yaml` with curl; invalid spec is rejected.
+  ```
 - [x] `[local-stack]` `docker-compose.yml` with DynamoDB Local (control-plane table created on
-      start from `control-plane/dynamodb/control-plane-table.json`) and ElasticMQ (run queue + DLQ
-      created on start), `.env.example`, `Makefile` with `up` / `down`. Check: `make up`, table and
-      queue are listed.
+  ```
+  start from `control-plane/dynamodb/control-plane-table.json`) and ElasticMQ (run queue + DLQ
+  created on start), `.env.example`, `Makefile` with `up` / `down`. Check: `make up`, table and
+  queue are listed.
+  ```
 - [x] `[contracts]` `internal-api.openapi.yaml`: `GET/PATCH /internal/runs/{id}` request and
-      response shapes, SigV4 security scheme, run statuses. Check: file passes an OpenAPI linter.
+  ```
+  response shapes, SigV4 security scheme, run statuses. Check: file passes an OpenAPI linter.
+  ```
 - [x] `[control-plane]` `RunStore` port (in-memory + DynamoDB, contract suite), `POST /runs`,
-      `GET /runs/{id}`, `RunQueuePublisher` (SQS + in-memory), internal
-      `GET/PATCH /internal/runs/{id}`. Check: run item is `QUEUED` and a message is on the queue.
+  ```
+  `GET /runs/{id}`, `RunQueuePublisher` (SQS + in-memory), internal
+  `GET/PATCH /internal/runs/{id}`. Check: run item is `QUEUED` and a message is on the queue.
+  ```
 - [x] `[worker]` `core/handle_run.py`, ports, in-memory adapters, stub model, one fake tool,
-      budget (steps and seconds). Check: integration test runs a spec to `SUCCEEDED` with no
-      network.
+  ```
+  budget (steps and seconds). Check: integration test runs a spec to `SUCCEEDED` with no
+  network.
+  ```
 - [x] `[worker]` `queue_sqs.py`, `control_plane_http.py`, `poll_loop.py`, `config.py`, `wiring.py`.
-      Check: with the stack up, a run started by curl reaches `SUCCEEDED`.
+  ```
+  Check: with the stack up, a run started by curl reaches `SUCCEEDED`.
+  ```
 - [x] `[local-stack]` add both services to compose, `make demo` script, README quickstart.
-      Check: fresh clone → `make up && make demo` passes. **M0 done.**
+  ```
+  Check: fresh clone → `make up && make demo` passes. **M0 done.**
+  ```
 
 ## M1 tasks: real agent
 
-- [ ] `[worker]` `adapters/model_bedrock.py` (Strands Bedrock provider or Converse API, ADR 0009),
-      `core/pricing.py`, dollar budget, cost reporting. Check: stub tools, real model, run
-      succeeds and reports cost; the adapter passes the `Model` contract suite.
-- [ ] `[worker]` model retries (throttling, 5xx: backoff, then `ModelError`) in the Bedrock adapter,
-      and conversation trimming in core when the context nears the model's limit. Check: unit
-      tests with a stub that throttles and a long scripted run.
-- [ ] `[worker]` `tools_local.py`: `github.search_issues`, `github.add_label` with a personal
-      token. Check: unit tests with recorded responses.
+- [x] `[contracts]` spec `model` becomes `<provider>/<model id>` (ADR 0010): schema description and
+  ```
+  a pattern requiring the `/`; examples use `stub/demo` (or `minimax/MiniMax-M3` where a real
+  model is meant). Check: contracts tests pass; record under "Cross-service changes".
+  ```
+- [x] `[worker]` model router (ADR 0010): `Model.complete` takes the model string,
+  ```
+  `adapters/model_router.py`, `MODEL_PROVIDERS` / `MODEL_<NAME>_*` config replacing
+  `MODEL_PROVIDER`, stub as provider `stub`; `adapters/model_openai_compat.py` (httpx or the
+  `openai` SDK; decide in session) with MiniMax as first provider; `core/pricing.py`, dollar
+  budget, cost reporting. Check: stub tools, MiniMax model, run succeeds and reports cost;
+  router and adapter pass the `Model` contract suite; recorded-response tests for MiniMax.
+  ```
+- [x] `[worker]` model retries (throttling, 5xx: backoff, then `ModelError`) in the model adapters,
+  ```
+  and conversation trimming in core when the context nears the model's limit. Check: unit
+  tests with a stub that throttles and a long scripted run.
+  ```
+- [x] `[worker]` `tools_local.py`: `github.search_issues`, `github.add_label` with a personal
+  ```
+  token. Check: unit tests with recorded responses.
+  ```
 - [ ] `[specs]` final `issue-triage.yaml`. Check: a manual run against a test repo labels a real
-      issue and finds a planted duplicate. **M1 done: MVP.**
+  ```
+  issue and finds a planted duplicate. **M1 done: MVP.**
+  ```
+- [ ] `[worker]` (optional) `adapters/model_bedrock.py` (Converse API or Strands Bedrock provider,
+  ```
+  ADR 0009, ADR 0010). Needs AWS credentials and Bedrock model access; keep them out of
+  `.env`'s fake local keys. Check: same `Model` contract suite, one real run on Bedrock.
+  ```
 - [ ] `[control-plane]` (optional) `POST /triggers/github` with HMAC check; deliver webhooks
-      locally with smee.io. Check: opening an issue starts a run.
+  ```
+  locally with smee.io. Check: opening an issue starts a run.
+  ```
 
 ## M2 tasks: crash safety (not yet ordered)
 
 - [ ] `[control-plane]` re-enqueue sweep: a scheduled job finds runs left `QUEUED` longer than a
-      few minutes (saved, but the enqueue failed or was lost) and sends their message again.
-      `POST /runs` already returns 503 and leaves the run `QUEUED` when enqueueing fails. Needs a
-      query by status (new index or a scan). Check: a run whose enqueue failed reaches the queue.
+  ```
+  few minutes (saved, but the enqueue failed or was lost) and sends their message again.
+  `POST /runs` already returns 503 and leaves the run `QUEUED` when enqueueing fails. Needs a
+  query by status (new index or a scan). Check: a run whose enqueue failed reaches the queue.
+  ```
 
 ## Cost guardrails
 
-- Set an AWS Budgets alert before deploying anything.
+- Set an AWS Budgets alert before deploying anything, and a spend limit or alert on every model
+  provider account (MiniMax, OpenRouter, ...).
 - Nothing billed per hour (ADR 0007): no NAT gateway, load balancer, RDS, interface VPC endpoints
   or always-on instance. Public subnets for Fargate tasks; Lambdas outside the VPC.
 - Before sharing the URL with others: API Gateway route throttling, per-run budgets enforced, and a
-  daily Bedrock spend alarm.
-- Use the cheapest capable Bedrock model for evals; use recorded fixtures so evals never call real
+  daily model spend alarm.
+- Use the cheapest capable model for evals; use recorded fixtures so evals never call real
   APIs.
 - Workers scale to 0 when idle; run load tests only against the stub model.
 
@@ -145,6 +191,71 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-16 · worker** — Real GitHub tools. `adapters/tools_local.py` `GitHubTools`
+  (httpx): `github.search_issues`, `github.add_label` only. Guardrails while the worker holds the
+  token (until the M4 gateway): repo allowlist `GITHUB_REPOS`; search refuses `repo:`/`org:`/
+  `user:`/`owner:` qualifiers and drops other repos' results; search returns summaries (no
+  bodies, max 10); `add_label` only adds existing labels, error lists them. 5xx/network retried
+  3x; rate limits reported, not waited. Config `TOOLS_PROVIDER=local` + `GITHUB_TOKEN`
+  (fine-grained, sandbox repo only, Issues read/write) + `GITHUB_REPOS`. Sandbox
+  `yuchia329/agent-triage-sandbox` seeded: #1 "Refunds fail for EUR cards", #2 "Add dark mode
+  to the dashboard" (`enhancement`), #3 "Crash when exporting CSV with an empty date range"
+  (`bug`). Recorded, cleaned fixtures (`octocat/Hello-World`) + `tests/fake_github_server.py`;
+  adapter in the `ToolClient` contract suite. Tests: 170 passed. Live: adapter searched and
+  labeled the sandbox; unknown label and foreign repo refused. Next: `[specs]` final
+  `issue-triage.yaml` (model `minimax/MiniMax-M3`, only the two GitHub tools), plant a duplicate
+  of #1, run end to end. Gotchas: a spec listing `close_issue`/`slack.post_message` fails at run
+  start with `TOOLS_PROVIDER=local` (intended; M3); new issues take seconds to reach GitHub's
+  search index; the token expires (30 days), then make a new one.
+- **2026-11-16 · worker** — Model retries and conversation trimming. `model_openai_compat.py`
+  retries 429/5xx, transport errors and MiniMax rate-limit/timeout/server codes in `base_resp`
+  (list from the official error-code page, in `RETRY_PROVIDER_CODES`): 4 attempts, backoff
+  ~1/2/4 s with jitter, `Retry-After` honored up to 30 s; 4xx, auth, balance, bad replies fail
+  at once. `core/pricing.py` became `core/models.py` (`ModelInfo(price, context_tokens)`;
+  `Deps.models` lets tests swap the table). New `core/trim.py`: before each call, past 70% of
+  the context window, shorten old tool results and reasoning, then drop oldest exchanges (note
+  added to the run input), else `FAILED` "does not fit"; last 2 exchanges and call/result pairs
+  always kept; size estimate is chars x tokens-per-char learned from each reply's
+  `input_tokens`. Tests: 143 passed (22 new); `make demo` passes; no real model calls. Next:
+  `[worker]` `tools_local.py`. Gotchas: a retried timeout may be billed twice; MiniMax's 1M
+  context means trimming practically never fires there, it matters for small self-hosted
+  models; `make demo` republishes `issue-triage` with `stub/demo`, so republish the MiniMax
+  spec before a real run.
+- **2026-11-16 · worker** — Real model runs (ADR 0010). `Model.complete(model, ...)`;
+  `adapters/model_router.py` splits `<provider>/<model id>`; `adapters/model_openai_compat.py`
+  (plain httpx, no SDK, no retries yet) maps tool names `.` <-> `-`, keeps MiniMax's
+  `reasoning_content` in the new opaque `provider_data` on `ModelTurn`/`Message` and sends it
+  back, treats a reply without `usage` or with a MiniMax `base_resp` error as `ModelError`.
+  `core/pricing.py` (MiniMax M3 $0.30/$1.20, M3.1 Flash $0.15/$0.60 per million, official page
+  checked); unpriced model fails before step 1; budget checks dollars; every final/paused update
+  carries `cost_usd`. Config `MODEL_PROVIDERS` + `MODEL_<NAME>_PROTOCOL|BASE_URL|API_KEY| MAX_TOKENS|EXTRA_BODY`; old `MODEL_PROVIDER` is a config error. Recorded MiniMax fixtures +
+  `tests/fake_openai_server.py`. `.env.example` (local-stack) updated by necessity. Tests: 121
+  passed. Live: `make demo` (stub) passes; a `minimax/MiniMax-M3` run with fake tools reached
+  `SUCCEEDED` in 16 steps, $0.0045, 44 s. Cross-service entry for the model format removed (all
+  services follow). Next: `[worker]` model retries + conversation trimming. Gotchas: JSON env
+  values need single quotes in `.env` (`'{"reasoning_split":true}'`), or `sh` strips the inner
+  quotes; MiniMax thinking tokens count toward `MAX_TOKENS`; zsh `echo` turns `\n` in JSON into
+  real newlines when scripting curl checks.
+- **2026-11-16 · contracts** — Spec `model` is now `<provider>/<model id>` (ADR 0010): schema
+  pattern `^[a-z][a-z0-9_]{0,31}/\S+$` (provider is lowercase letters, digits, `_`, since it
+  becomes part of `MODEL_<NAME>_*` env names; the model id may contain `/`), description updated,
+  examples use `stub/demo`, tests for 5 rejected and 3 accepted formats. Also changed by decision:
+  `control-plane` `SpecValidatorTest` fixture `"m"` → `"stub/m"` (one line, keeps its suite green).
+  Tests: contracts 49 passed, control-plane 75 passed, worker 73 passed (offline). Next: `[worker]`
+  model router + OpenAI-compatible adapter; it must route `stub/...` to the stub so `make demo`
+  keeps working. Gotchas: specs stored with the old format would now fail to publish again (local
+  data only, none kept); a crashed Gradle daemon can leave
+  `control-plane/.gradle/<version>/executionHistory/` corrupt (see `control-plane/AGENTS.md`).
+- **2026-11-16 · docs** — Model layer made provider-neutral (ADR 0010): spec `model` becomes
+  `<provider>/<model id>`; the worker config defines providers (`MODEL_PROVIDERS`,
+  `MODEL_<NAME>_PROTOCOL|BASE_URL|API_KEY`); one adapter per protocol (OpenAI-compatible covers
+  MiniMax, OpenAI, OpenRouter, Together, Gemini, vLLM, Ollama; Bedrock Converse) behind a router.
+  MiniMax is the first real provider, chosen for cost (about $0.30 / $1.20 per million tokens,
+  no deposit fee; OpenRouter adds 5.5%, min $0.80, per top-up). Bedrock adapter moved to an
+  optional M1 task, so M1 needs no AWS account. Docs only; no code changed. Next: `[contracts]`
+  `provider/model` format, then `[worker]` router + OpenAI-compatible adapter. Gotchas: provider
+  API keys go in `.env` (git-ignored) as `MODEL_<NAME>_API_KEY`, never in tracked files; check
+  MiniMax's current model id, base URL and price on its own docs before coding.
 - **2026-11-16 · local-stack** — M0 done. Compose now builds and runs `control-plane` (healthcheck)
   and `worker` next to DynamoDB Local and ElasticMQ; per-service env overrides swap `localhost`
   for service names. `control-plane/Dockerfile` and `worker/Dockerfile` (multi-stage, build inside
@@ -165,13 +276,11 @@ than the current milestone.
   `control_plane_http.py` (SigV4 `execute-api`, retries connection errors / 429 / 5xx, joins the
   `ControlPlane` suite against a fake server that checks requests against the contract),
   `entrypoints/poll_loop.py` (concurrency slots, heartbeat, graceful SIGTERM), `config.py`,
-  `wiring.py`, `StubModel` (stateless, `demo_turns()` script), `core/run_message.py`. `uv run
-  worker` starts it. 78 tests pass (72 with `-m "not docker"`). Checked by hand: stack + control
+  `wiring.py`, `StubModel` (stateless, `demo_turns()` script), `core/run_message.py`. `uv run worker` starts it. 78 tests pass (72 with `-m "not docker"`). Checked by hand: stack + control
   plane `bootRun` + worker, a curl-started run reached `SUCCEEDED` (5 steps), queue and DLQ empty.
   Worker vars added to `.env.example`. Next: `[local-stack]` both services in compose, `make demo`.
   Gotchas: message deleted once `handle_run` returns; kept (retry, then DLQ) on invalid body,
-  unknown run, or control plane outage. Two workers can still both run one run (`RUNNING →
-  RUNNING` allowed) until the M2 lease. Run message is parsed by hand-written checks (the image
+  unknown run, or control plane outage. Two workers can still both run one run (`RUNNING → RUNNING` allowed) until the M2 lease. Run message is parsed by hand-written checks (the image
   will not ship `contracts/`); a test keeps them in line with the schema. In compose, set
   `CONTROL_PLANE_URL=http://control-plane:8080` and the ElasticMQ host change from the local-stack
   note below.
@@ -188,8 +297,7 @@ than the current milestone.
   no cost reported yet (M1); resume after approval is M3.
 - **2026-11-16 · control-plane** — `RunStore` port (in-memory + DynamoDB, 11-test contract suite
   incl. concurrent finishes), `RunQueuePublisher` (in-memory + SQS, contract suite checks bodies
-  against `run-message.schema.json`), `POST /runs`, `GET /runs/{id}`, `GET/PATCH
-  /internal/runs/{id}`. `ContractValidator` validates against the bundled `contracts/` files
+  against `run-message.schema.json`), `POST /runs`, `GET /runs/{id}`, `GET/PATCH /internal/runs/{id}`. `ContractValidator` validates against the bundled `contracts/` files
   (PATCH bodies vs `RunUpdate`; tests check responses vs `InternalRun` / `RunSummary`). Status
   rules in `RunStatus.allowedFrom()`. Public API switched to snake_case, nulls omitted. 75 tests
   pass; checked against the local stack (run `QUEUED` in DynamoDB, message on `runs`, internal
@@ -233,7 +341,6 @@ than the current milestone.
   and a new `[contracts]` task for `internal-api.openapi.yaml`. Next: `[local-stack]` or
   `[control-plane]` publish task (needs local-stack for the DynamoDB adapter, or use Testcontainers).
   Gotcha: JSON Schema cannot express `require_approval ⊆ tools`; the control plane must check it.
-
 - **2026-11-16 · docs** — Redesigned the deploy for zero idle cost: control plane and tool gateway
   on Lambda behind one API Gateway HTTP API with a Cloudflare-managed custom domain; control-plane
   data moved from PostgreSQL to DynamoDB with `AgentStore` / `RunStore` ports (ADR 0007, ADR 0008;

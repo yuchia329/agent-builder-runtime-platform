@@ -26,3 +26,16 @@ def test_stops_when_time_is_up(clock):
     with pytest.raises(BudgetExceeded) as e:
         tracker.check()
     assert e.value.reason is FailureReason.BUDGET_SECONDS
+
+
+def test_stops_once_cost_reaches_max_usd(clock):
+    tracker = BudgetTracker(Budget(max_steps=100, max_usd=0.10, max_seconds=60), clock)
+    tracker.check()
+    tracker.record_step(cost_usd=0.06)
+    tracker.check()
+    tracker.record_step(cost_usd=0.05)  # one turn may overshoot; the next check stops the run
+
+    with pytest.raises(BudgetExceeded) as e:
+        tracker.check()
+    assert e.value.reason is FailureReason.BUDGET_USD
+    assert tracker.cost_usd == pytest.approx(0.11)

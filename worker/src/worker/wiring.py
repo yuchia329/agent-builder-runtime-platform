@@ -6,13 +6,18 @@ from dataclasses import dataclass
 
 from worker.adapters.clock_system import SystemClock
 from worker.adapters.control_plane_http import HttpControlPlane, default_signer
+from worker.adapters.model_openai_compat import OpenAICompatModel
+from worker.adapters.model_router import ModelRouter
 from worker.adapters.model_stub import StubModel, demo_turns
 from worker.adapters.queue_memory import InMemoryRunQueue
 from worker.adapters.queue_sqs import SqsRunQueue
 from worker.adapters.tools_fake import issue_triage_tools
+from worker.adapters.tools_local import GitHubTools
 from worker.config import Config
 from worker.core.handle_run import Deps
+from worker.ports.model import Model
 from worker.ports.queue import RunQueue
+from worker.ports.tools import ToolClient
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,16 @@ def build(config: Config) -> App:
         queue = InMemoryRunQueue(config.visibility_seconds)
 
     control_plane = HttpControlPlane(config.control_plane_url, default_signer(config.aws_region))
-    model = StubModel(demo_turns())  # MODEL_PROVIDER=stub is the only choice until M1
-    tools = issue_triage_tools()  # TOOLS_PROVIDER=fake is the only choice until M1
+    providers: dict[str, Model] = {"stub": StubModel(demo_turns())}
+    for p in config.model_providers:  # protocol "openai" is the only one Config accepts so far
+        providers[p.name] = OpenAICompatModel(
+            p.base_url, p.api_key, max_tokens=p.max_tokens, extra_body=p.extra_body
+        )
+    model = ModelRouter(providers)
+    tools: ToolClient
+    if config.tools_provider == "local":
+        assert config.github_token  # checked by Config
+        tools = GitHubTools(config.github_token, config.github_repos, api_url=config.github_api_url)
+    else:
+        tools = issue_triage_tools()
     return App(queue, Deps(control_plane, model, tools, SystemClock()))

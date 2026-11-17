@@ -172,12 +172,18 @@ class Usage:
 
 @dataclass(frozen=True)
 class ModelTurn:
-    """One model reply."""
+    """One model reply.
+
+    ``provider_data`` is opaque to the core: an adapter stores what its provider needs to see
+    again in later turns (for example the model's reasoning) and reads it back from the history.
+    It must stay JSON-serializable so it can be checkpointed.
+    """
 
     stop_reason: StopReason
     text: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
     usage: Usage = field(default_factory=Usage)
+    provider_data: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +194,7 @@ class Message:
     text: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
     tool_result: ToolResult | None = None
+    provider_data: dict[str, Any] | None = None  # assistant only; see ModelTurn
 
     @classmethod
     def user(cls, text: str) -> Message:
@@ -195,7 +202,12 @@ class Message:
 
     @classmethod
     def assistant(cls, turn: ModelTurn) -> Message:
-        return cls(role="assistant", text=turn.text, tool_calls=turn.tool_calls)
+        return cls(
+            role="assistant",
+            text=turn.text,
+            tool_calls=turn.tool_calls,
+            provider_data=turn.provider_data,
+        )
 
     @classmethod
     def tool(cls, result: ToolResult) -> Message:

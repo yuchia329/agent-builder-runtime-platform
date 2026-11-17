@@ -18,7 +18,7 @@ flowchart LR
   Q -->|long-poll| W[Worker pool<br/>Python · Fargate, 0..N]
   W <-->|load spec, report status<br/>SigV4| API
   W -->|lease, checkpoint, idempotency| DDB[(DynamoDB<br/>run-state table)]
-  W -->|invoke model| BR[Amazon Bedrock]
+  W -->|model turn| BR[Model provider<br/>MiniMax · OpenAI-compatible · Bedrock · self-hosted]
   W -->|MCP call + run token<br/>SigV4| API
   API --> GW[Tool gateway<br/>Python · Lambda]
   GW -->|acts_as credential| EXT[GitHub · Slack · Notion · Calendar]
@@ -40,7 +40,7 @@ sequenceDiagram
   participant Q as SQS run queue
   participant W as Worker (Fargate)
   participant RS as DynamoDB run-state table
-  participant BR as Bedrock
+  participant BR as Model provider
   participant GW as Tool gateway (Lambda)
   participant SL as Slack
 
@@ -80,7 +80,7 @@ sequenceDiagram
 ```
 
 Nothing is billed per hour while idle: the control plane and gateway are Lambda functions, workers
-scale to 0, both data stores are DynamoDB on-demand, and Bedrock is billed per token
+scale to 0, both data stores are DynamoDB on-demand, and model providers bill per token
 ([ADR 0007](adr/0007-serverless-scale-to-zero-deployment.md)).
 
 ## Components
@@ -88,7 +88,7 @@ scale to 0, both data stores are DynamoDB on-demand, and Bedrock is billed per t
 | Component     | Runs on                 | Owns                                                          | Talks to                                                 |
 | ------------- | ----------------------- | ------------------------------------------------------------- | -------------------------------------------------------- |
 | Control plane | Lambda (SnapStart)      | Tenants, specs and versions, runs, approvals, Slack bot       | Control-plane DynamoDB table, SQS (send), Slack          |
-| Worker        | ECS Fargate, 0..N tasks | Executing one run: agent loop, budget, checkpoints            | SQS (receive), run-state DynamoDB table, Bedrock, control plane, gateway |
+| Worker        | ECS Fargate, 0..N tasks | Executing one run: agent loop, budget, checkpoints            | SQS (receive), run-state DynamoDB table, model providers, control plane, gateway |
 | Tool gateway  | Lambda                  | OAuth tokens, connector definitions, outside API calls        | Secrets Manager / KMS, outside APIs                      |
 
 Supporting components are not deployed as services but are built and worked on the same way:
@@ -104,14 +104,15 @@ Supporting components are not deployed as services but are built and worked on t
 | `ci`          | `.github/workflows/`                                      | Build, test and eval workflows                                       |
 
 The component names in both tables are the names used for work sessions and roadmap tasks.
-Managed services (API Gateway, SQS, DynamoDB, Bedrock, Secrets Manager, KMS, CloudWatch, X-Ray) are
-not components: code reaches them through adapters inside the services, and `infra` creates them.
+Managed services (API Gateway, SQS, DynamoDB, Secrets Manager, KMS, CloudWatch, X-Ray) and model
+providers (MiniMax, Bedrock, others) are not components: code reaches them through adapters inside the services, and `infra` creates them.
 
 Boundaries the design depends on:
 
 - Only the control plane reads or writes the control-plane table
   ([ADR 0001](adr/0001-workers-use-control-plane-api.md), [ADR 0008](adr/0008-control-plane-data-in-dynamodb.md)).
-- Only the worker touches the run-state table and Bedrock.
+- Only the worker touches the run-state table and calls model providers
+  ([ADR 0010](adr/0010-provider-neutral-model-layer.md)).
 - Only the gateway holds credentials and calls outside APIs ([ADR 0006](adr/0006-separate-tool-gateway.md)).
 - SQS is the only hand-off between control plane and worker.
 
@@ -123,12 +124,12 @@ Boundaries the design depends on:
 | Control-plane DB | DynamoDB on-demand, own table (DynamoDB Local for dev)                |
 | API entry        | API Gateway HTTP API, custom domain (DNS on Cloudflare, ACM cert)     |
 | Queue            | Amazon SQS with a dead-letter queue (ElasticMQ locally)               |
-| Workers          | Python 3.12, uv, own agent loop; Bedrock via a model adapter (Strands provider or Converse API), ECS Fargate |
+| Workers          | Python 3.12, uv, own agent loop; model adapters per protocol (OpenAI-compatible, Bedrock Converse) behind a router, ECS Fargate |
 | Run state        | DynamoDB (DynamoDB Local for dev)                                     |
 | Tool gateway     | Python, FastAPI, MCP Python SDK (stateless Streamable HTTP), Lambda   |
 | Secrets          | AWS Secrets Manager, KMS                                              |
 | Observability    | OpenTelemetry (Java + Python SDKs), ADOT collector, CloudWatch, X-Ray |
-| Evals / CI       | GitHub Actions, pytest-based eval runner, LLM judge on Bedrock        |
+| Evals / CI       | GitHub Actions, pytest-based eval runner, LLM judge on a configured provider |
 | Load test        | Stub model server + k6 or Locust                                      |
 | Infra            | Terraform                                                             |
 
@@ -219,6 +220,26 @@ SIGTERM the worker stops polling and finishes the runs it holds.
 Each worker task runs several runs concurrently, because most of a run is spent waiting on the
 model or an API.
 
+Model providers ([ADR 0010](adr/0010-provider-neutral-model-layer.md)): the spec's `model` is
+`<provider>/<model id>`, for example `minimax/MiniMax-M3`. The loop passes it with every call to
+the `Model` port; a router adapter looks up the provider in the worker config and forwards to the
+adapter for its protocol:
+
+| Protocol | Adapter | Providers |
+| --- | --- | --- |
+| OpenAI Chat Completions | `model_openai_compat.py` | MiniMax, OpenAI, OpenRouter, Together AI, Gemini (OpenAI-compatible endpoint), vLLM, Ollama, llama.cpp |
+| Bedrock Converse | `model_bedrock.py` | Amazon Bedrock (worker's AWS credentials) |
+
+Price and context window live in `core/models.py` per `provider/model` (or `provider/*`); a run
+whose model is not listed fails before its first step, because every spec has a dollar budget.
+Adapters retry throttling, server errors and timeouts with backoff (honoring `Retry-After`)
+before raising `ModelError`. Before each call, once the conversation passes 70% of the context
+window, `core/trim.py` shortens old tool results, then drops the oldest steps (always keeping the
+run input and the latest two steps); if it still does not fit, the run fails. Cost is checked before
+each step, so one model turn can overshoot `max_usd` before the run stops. What a provider needs
+to see again in later turns (MiniMax's reasoning) travels in `provider_data` on each model turn;
+core stores it in the history without reading it.
+
 ## Idempotency
 
 - Every tool call gets a key: `hash(run_id, step_number, tool_name, arguments)`.
@@ -234,7 +255,9 @@ model or an API.
   `openapi.yaml` and `allowlist.yaml`, no code.
 - Operations not on the allowlist do not exist as tools.
 - Built in stages: in M1 tool calls run inside the worker; in M4 they move into this service
-  ([ADR 0006](adr/0006-separate-tool-gateway.md)).
+  ([ADR 0006](adr/0006-separate-tool-gateway.md)). The M1 adapter (`worker/.../tools_local.py`)
+  already enforces what the gateway will: a repo allowlist, search kept inside the repo, short
+  results without issue bodies, and labels limited to existing ones.
 - Runs on Lambda behind the shared API Gateway. `/mcp` requires IAM authorization (SigV4) and a
   valid run token. MCP uses stateless Streamable HTTP with JSON responses, so nothing depends on a
   warm instance. OAuth callback routes are public.
@@ -268,7 +291,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `RunStore`          | control plane | Runs, steps, approvals; status changes only from the expected current status                       | DynamoDB, in-memory                        |
 | `RunQueue`          | worker        | At-least-once delivery, redelivery after timeout, extendable timeout, delivery count, DLQ after N   | SQS, in-memory                             |
 | `RunStateStore`     | worker        | Atomic conditional writes for lease, checkpoint (step n only after n-1), idempotency claim         | DynamoDB, in-memory                        |
-| `Model`             | worker        | Messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors     | Stub (scripted), Bedrock (M1)              |
+| `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock (optional) |
 | `ToolClient`        | worker        | `describe(names)` returns tool schemas; `call(name, args)` returns a result or raises `ToolError`    | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
 | `ApprovalChannel`   | control plane | Send an approval request; verify a callback into an `ApprovalDecision`                               | Slack                                      |
@@ -291,8 +314,8 @@ definition environment, with secrets from Secrets Manager.
 | Run-state table     | worker                                 | `STATE_BACKEND=dynamodb\|memory`, `STATE_TABLE`         |
 | Control plane URL   | worker, gateway                        | `CONTROL_PLANE_URL` (custom domain; SigV4-signed)       |
 | Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (custom domain; SigV4-signed)        |
-| Bedrock             | worker                                 | `MODEL_PROVIDER=bedrock\|anthropic\|stub`, `AWS_REGION` |
-| Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`                       |
+| Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`, `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret), optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_EXTRA_BODY` (JSON merged into each request, for example `{"reasoning_split":true}` for MiniMax); Bedrock uses `AWS_REGION` |
+| Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL` |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=secrets_manager\|memory`, `KMS_KEY_ID`     |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`         |
@@ -301,8 +324,9 @@ definition environment, with secrets from Secrets Manager.
 | Tenant (M0 only)    | control plane                          | `TENANT_ID`, `TENANT_API_KEY`                           |
 
 The "Used by" column is also each service's least-privilege IAM role (Lambda execution role or ECS
-task role). The model id comes from
-the spec, not from config.
+task role). The model comes from
+the spec as `<provider>/<model id>`; config only defines the providers
+([ADR 0010](adr/0010-provider-neutral-model-layer.md)).
 
 ## Observability
 
@@ -342,7 +366,7 @@ AWS (one region)                                idle cost
 │   ├── control-plane table                     ~$0   storage only
 │   └── run-state table (from M2)               ~$0   storage only
 ├── SQS run queue + dead-letter queue           $0    per request
-├── Bedrock                                     $0    per token
+├── Bedrock (if configured)                     $0    per token
 ├── Secrets Manager                             $0.40 per secret per month
 ├── KMS key                                     $1 per month
 └── ECR, CloudWatch logs and alarms, X-Ray      cents
@@ -360,8 +384,10 @@ AWS (one region)                                idle cost
   entrypoint can be added later if that is too slow.
 - **Data:** two DynamoDB tables (control plane, run state), on-demand capacity.
 - **Not used:** load balancer, NAT gateway, interface VPC endpoints, RDS, RDS Proxy, always-on EC2.
-- **Bedrock:** on-demand, billed per token, nothing when idle. Provisioned Throughput is not
-  needed. Enable model access in the deploy region first.
+- **Model providers:** billed per token, nothing when idle. Non-AWS providers (MiniMax, OpenAI,
+  OpenRouter) are reached over the internet from the public subnet; their API keys are in Secrets
+  Manager. Bedrock, if configured: on-demand, no Provisioned Throughput; enable model access in the
+  deploy region first.
 
 ## Repository layout
 

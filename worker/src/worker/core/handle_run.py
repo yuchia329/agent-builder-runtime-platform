@@ -10,7 +10,9 @@ Every model reply passes through this loop before anything acts on it:
 - tool arguments are checked against the tool's schema before the call;
 - a tool in ``require_approval`` stops the run in WAITING_APPROVAL without being called;
 - a cut-off or refused reply ends the run as FAILED, never as a final answer;
-- the budget is checked before every step;
+- the budget (steps, dollars, seconds) is checked before every step;
+- a model with no known price or context size fails the run before its first step;
+- the conversation is trimmed before a call once it nears the model's context window;
 - any unexpected error ends the run as FAILED with reason ``error``.
 """
 
@@ -18,13 +20,16 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from worker.core.budget import BudgetExceeded, BudgetTracker
 from worker.core.errors import RunConflict, ToolError
+from worker.core.models import MODELS, ModelInfo, UnknownModel, model_info
+from worker.core.trim import ContextTooLarge, fit_context, message_chars
 from worker.core.types import (
     Failure,
     FailureReason,
@@ -46,6 +51,8 @@ from worker.ports.tools import ToolClient
 log = logging.getLogger(__name__)
 
 MAX_FAILURE_MESSAGE = 2000  # contract limit on failure.message
+TRIM_AT = 0.7  # share of the context window the conversation may fill; the rest is for the reply
+DEFAULT_TOKENS_PER_CHAR = 1 / 3  # until the first reply reports real usage; errs high for English
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,7 @@ class Deps:
     model: Model
     tools: ToolClient
     clock: Clock
+    models: Mapping[str, ModelInfo] = field(default_factory=lambda: MODELS)
 
 
 def handle_run(run_id: str, deps: Deps) -> RunStatus:
@@ -74,7 +82,10 @@ def handle_run(run_id: str, deps: Deps) -> RunStatus:
 
     budget = BudgetTracker(run.spec.budget, deps.clock)
     try:
-        final = _AgentLoop(run, deps, budget).run()
+        info = model_info(run.spec.model, dict(deps.models))
+        final = _AgentLoop(run, deps, budget, info).run()
+    except (UnknownModel, ContextTooLarge) as e:
+        final = _failed(budget, FailureReason.ERROR, str(e))
     except BudgetExceeded as e:
         final = _failed(budget, e.reason, e.message)
     except Exception as e:  # noqa: BLE001 - any crash must still end the run
@@ -89,25 +100,41 @@ def _failed(budget: BudgetTracker, reason: FailureReason, message: str) -> RunUp
     return RunUpdate(
         RunStatus.FAILED,
         steps=budget.steps,
+        cost_usd=_cost(budget),
         failure=Failure(reason, message[:MAX_FAILURE_MESSAGE]),
     )
 
 
+def _cost(budget: BudgetTracker) -> float:
+    return round(budget.cost_usd, 6)
+
+
 class _AgentLoop:
-    def __init__(self, run: RunRecord, deps: Deps, budget: BudgetTracker) -> None:
+    def __init__(self, run: RunRecord, deps: Deps, budget: BudgetTracker, info: ModelInfo) -> None:
         self._run = run
         self._spec = run.spec
         self._deps = deps
         self._budget = budget
+        self._price = info.price
+        self._context_limit = int(info.context_tokens * TRIM_AT)
         self._tools: list[ToolSpec] = deps.tools.describe(run.spec.tools)
         self._validators = {t.name: Draft202012Validator(t.input_schema) for t in self._tools}
         self._messages: list[Message] = [Message.user(_initial_prompt(run.input))]
+        # System prompt and tool schemas are sent with every call.
+        self._fixed_chars = len(run.spec.instructions) + sum(
+            len(t.name) + len(t.description) + len(json.dumps(t.input_schema)) for t in self._tools
+        )
+        self._tokens_per_char = DEFAULT_TOKENS_PER_CHAR
 
     def run(self) -> RunUpdate:
         while True:
             self._budget.check()
-            turn = self._deps.model.complete(self._spec.instructions, self._messages, self._tools)
-            self._budget.record_step()
+            self._fit_context()
+            turn = self._deps.model.complete(
+                self._spec.model, self._spec.instructions, self._messages, self._tools
+            )
+            self._learn_token_ratio(turn.usage.input_tokens)
+            self._budget.record_step(self._price.cost_usd(turn.usage))
             self._messages.append(Message.assistant(turn))
 
             if turn.stop_reason is StopReason.REFUSAL:
@@ -115,7 +142,12 @@ class _AgentLoop:
             if turn.stop_reason is StopReason.MAX_TOKENS:
                 return self._fail("The model reply was cut off (max tokens)")
             if not turn.tool_calls:
-                return RunUpdate(RunStatus.SUCCEEDED, steps=self._budget.steps, output=turn.text)
+                return RunUpdate(
+                    RunStatus.SUCCEEDED,
+                    steps=self._budget.steps,
+                    cost_usd=_cost(self._budget),
+                    output=turn.text,
+                )
 
             for call in turn.tool_calls:
                 rejection = self._rejection(call)
@@ -127,6 +159,27 @@ class _AgentLoop:
                 else:
                     result = self._execute(call)
                 self._messages.append(Message.tool(result))
+
+    def _estimate(self, messages: Sequence[Message]) -> int:
+        chars = self._fixed_chars + sum(message_chars(m) for m in messages)
+        return int(chars * self._tokens_per_char)
+
+    def _fit_context(self) -> None:
+        fitted = fit_context(self._messages, self._context_limit, self._estimate)
+        if fitted != self._messages:
+            log.info(
+                "run %s: trimmed conversation to fit the context window (%d -> %d messages)",
+                self._run.run_id,
+                len(self._messages),
+                len(fitted),
+            )
+        self._messages = fitted
+
+    def _learn_token_ratio(self, input_tokens: int) -> None:
+        """Calibrates the estimate with the tokens the provider counted for what we sent."""
+        chars = self._fixed_chars + sum(message_chars(m) for m in self._messages)
+        if input_tokens > 0 and chars > 0:
+            self._tokens_per_char = input_tokens / chars
 
     def _execute(self, call: ToolCall) -> ToolResult:
         """Runs an allowed, well-formed call. A tool failure becomes an error result."""
@@ -155,6 +208,7 @@ class _AgentLoop:
         return RunUpdate(
             RunStatus.WAITING_APPROVAL,
             steps=self._budget.steps,
+            cost_usd=_cost(self._budget),
             pending_approval=PendingApproval(
                 step=self._budget.steps + 1, tool=call.name, arguments=call.arguments
             ),

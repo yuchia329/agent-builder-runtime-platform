@@ -1,0 +1,57 @@
+{
+  "id": "074b0f21bac670d61b04ecf94fbd13f6",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "id": "call_01a1e7d3e9ff7005b0d2f421",
+            "type": "function",
+            "function": {
+              "name": "github-add_label",
+              "arguments": "{\"label\":\"bug\"}"
+            }
+          }
+        ],
+        "reasoning_content": "The user says \"Issue 42: crash\" \u2014 I need to add a label. The issue title is \"crash\". I should add a label like \"bug\" since a crash is a bug. Let me think about what's the appropriate label. The task: \"Label the issue.\" with issue title \"crash\".\n\nLet me check what labels exist... I don't have a tool to list labels. The tool is github-add_label. I should infer the appropriate label from the issue title. \"crash\" \u2192 \"bug\".\n\nLet me just add the \"bug\" label.",
+        "reasoning_details": [
+          {
+            "type": "reasoning.text",
+            "id": "reasoning-text-1",
+            "format": "MiniMax-response-v1",
+            "index": 0,
+            "text": "The user says \"Issue 42: crash\" \u2014 I need to add a label. The issue title is \"crash\". I should add a label like \"bug\" since a crash is a bug. Let me think about what's the appropriate label. The task: \"Label the issue.\" with issue title \"crash\".\n\nLet me check what labels exist... I don't have a tool to list labels. The tool is github-add_label. I should infer the appropriate label from the issue title. \"crash\" \u2192 \"bug\".\n\nLet me just add the \"bug\" label."
+          }
+        ]
+      }
+    }
+  ],
+  "created": 1794890785,
+  "model": "MiniMax-M3",
+  "object": "chat.completion",
+  "usage": {
+    "total_tokens": 573,
+    "total_characters": 0,
+    "prompt_tokens": 425,
+    "completion_tokens": 148,
+    "completion_tokens_details": {
+      "reasoning_tokens": 118
+    },
+    "prompt_tokens_details": {
+      "cached_tokens": 182
+    }
+  },
+  "input_sensitive": false,
+  "output_sensitive": false,
+  "input_sensitive_type": 0,
+  "output_sensitive_type": 0,
+  "output_sensitive_int": 0,
+  "service_tier": "standard",
+  "base_resp": {
+    "status_code": 0,
+    "status_msg": ""
+  }
+}

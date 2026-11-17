@@ -40,6 +40,7 @@ def final_turn(text: str) -> ModelTurn:
 class ModelCall:
     """What the model received on one call, for assertions."""
 
+    model: str
     system: str
     messages: tuple[Message, ...]
     tools: tuple[ToolSpec, ...]
@@ -51,9 +52,9 @@ class ScriptedModel:
         self.calls: list[ModelCall] = []
 
     def complete(
-        self, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
+        self, model: str, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
     ) -> ModelTurn:
-        self.calls.append(ModelCall(system, tuple(messages), tuple(tools)))
+        self.calls.append(ModelCall(model, system, tuple(messages), tuple(tools)))
         if len(self.calls) > len(self._turns):
             raise ModelError(f"Script has only {len(self._turns)} turns")
         return self._turns[len(self.calls) - 1]
@@ -71,7 +72,7 @@ class StubModel:
         self._turns = list(turns)
 
     def complete(
-        self, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
+        self, model: str, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
     ) -> ModelTurn:
         position = sum(1 for m in messages if m.role == "assistant")
         if position >= len(self._turns):

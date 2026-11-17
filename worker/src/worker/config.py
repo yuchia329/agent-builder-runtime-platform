@@ -6,13 +6,31 @@ AWS_REGION, credentials and AWS_ENDPOINT_URL_SQS are read by boto3 itself.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 QUEUE_BACKENDS = ("sqs", "memory")
-MODEL_PROVIDERS = ("stub",)  # bedrock in M1
-TOOLS_PROVIDERS = ("fake",)  # local in M1, mcp in M4
+MODEL_PROTOCOLS = ("openai",)  # bedrock: optional M1 task
+TOOLS_PROVIDERS = ("fake", "local")  # mcp in M4
+PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
+BUILT_IN_PROVIDERS = ("stub",)
+REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+@dataclass(frozen=True)
+class ModelProviderConfig:
+    """One entry of MODEL_PROVIDERS. Specs name it as the part of `model` before the '/'."""
+
+    name: str
+    protocol: str
+    base_url: str
+    api_key: str | None = field(default=None, repr=False)  # secret: never logged
+    max_tokens: int = 4096
+    extra_body: dict[str, Any] = field(default_factory=dict)
 
 
 class ConfigError(Exception):
@@ -24,8 +42,11 @@ class Config:
     queue_backend: str
     run_queue_url: str | None
     control_plane_url: str
-    model_provider: str
+    model_providers: tuple[ModelProviderConfig, ...]
     tools_provider: str
+    github_token: str | None = field(repr=False)  # secret: never logged
+    github_repos: tuple[str, ...]
+    github_api_url: str
     aws_region: str
     concurrency: int
     visibility_seconds: int
@@ -52,15 +73,76 @@ class Config:
             queue_backend=choice("QUEUE_BACKEND", QUEUE_BACKENDS, "sqs"),
             run_queue_url=env.get("RUN_QUEUE_URL") or None,
             control_plane_url=env.get("CONTROL_PLANE_URL", "http://localhost:8080"),
-            model_provider=choice("MODEL_PROVIDER", MODEL_PROVIDERS, "stub"),
+            model_providers=_model_providers(env, errors),
             tools_provider=choice("TOOLS_PROVIDER", TOOLS_PROVIDERS, "fake"),
+            github_token=env.get("GITHUB_TOKEN") or None,
+            github_repos=tuple(
+                r.strip() for r in env.get("GITHUB_REPOS", "").split(",") if r.strip()
+            ),
+            github_api_url=env.get("GITHUB_API_URL", "https://api.github.com"),
             aws_region=env.get("AWS_REGION", "us-east-1"),
             concurrency=positive_int("WORKER_CONCURRENCY", 4),
             visibility_seconds=positive_int("RUN_VISIBILITY_SECONDS", 60),
             log_level=env.get("LOG_LEVEL", "INFO"),
         )
+        if config.tools_provider == "local":
+            if not config.github_token:
+                errors.append("GITHUB_TOKEN is required when TOOLS_PROVIDER=local")
+            if not config.github_repos:
+                errors.append("GITHUB_REPOS (owner/name,...) is required when TOOLS_PROVIDER=local")
+            bad = [r for r in config.github_repos if not REPO.match(r)]
+            if bad:
+                errors.append(f"GITHUB_REPOS: expected owner/name, got {', '.join(bad)}")
+        if "MODEL_PROVIDER" in env:
+            errors.append("MODEL_PROVIDER was replaced by MODEL_PROVIDERS (ADR 0010); remove it")
         if config.queue_backend == "sqs" and not config.run_queue_url:
             errors.append("RUN_QUEUE_URL is required when QUEUE_BACKEND=sqs")
         if errors:
             raise ConfigError("Invalid worker configuration:\n  " + "\n  ".join(errors))
         return config
+
+
+def _model_providers(env: Mapping[str, str], errors: list[str]) -> tuple[ModelProviderConfig, ...]:
+    """MODEL_PROVIDERS=minimax,local plus MODEL_<NAME>_* per name. `stub` is always built in."""
+    names = [n.strip() for n in env.get("MODEL_PROVIDERS", "").split(",") if n.strip()]
+    providers = []
+    for name in names:
+        prefix = f"MODEL_{name.upper()}_"
+        if not PROVIDER_NAME.match(name):
+            errors.append(f"MODEL_PROVIDERS: {name!r} must be lowercase letters, digits and _")
+            continue
+        if name in BUILT_IN_PROVIDERS:
+            errors.append(f"MODEL_PROVIDERS: {name!r} is built in; do not list it")
+            continue
+        protocol = env.get(prefix + "PROTOCOL", "")
+        if protocol not in MODEL_PROTOCOLS:
+            errors.append(
+                f"{prefix}PROTOCOL={protocol!r}: expected one of {', '.join(MODEL_PROTOCOLS)}"
+            )
+        base_url = env.get(prefix + "BASE_URL", "")
+        if not base_url:
+            errors.append(f"{prefix}BASE_URL is required")
+        max_tokens_raw = env.get(prefix + "MAX_TOKENS", "4096")
+        if not max_tokens_raw.isdigit() or int(max_tokens_raw) < 1:
+            errors.append(f"{prefix}MAX_TOKENS={max_tokens_raw!r}: expected a positive integer")
+            max_tokens_raw = "4096"
+        extra_body: Any = {}
+        if raw := env.get(prefix + "EXTRA_BODY"):
+            try:
+                extra_body = json.loads(raw)
+            except json.JSONDecodeError:
+                extra_body = None
+            if not isinstance(extra_body, dict):
+                errors.append(f"{prefix}EXTRA_BODY must be a JSON object")
+                extra_body = {}
+        providers.append(
+            ModelProviderConfig(
+                name=name,
+                protocol=protocol,
+                base_url=base_url,
+                api_key=env.get(prefix + "API_KEY") or None,
+                max_tokens=int(max_tokens_raw),
+                extra_body=extra_body,
+            )
+        )
+    return tuple(providers)

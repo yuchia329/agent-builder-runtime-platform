@@ -1,0 +1,102 @@
+[
+  {
+    "id": 13111902763,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/accessibility",
+    "name": "accessibility",
+    "color": "f143ab",
+    "default": true,
+    "description": "Barrier affecting people with disabilities",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902743,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/bug",
+    "name": "bug",
+    "color": "d73a4a",
+    "default": true,
+    "description": "Something isn't working",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902780,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/documentation",
+    "name": "documentation",
+    "color": "0075ca",
+    "default": true,
+    "description": "Improvements or additions to documentation",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902797,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/duplicate",
+    "name": "duplicate",
+    "color": "cfd3d7",
+    "default": true,
+    "description": "This issue or pull request already exists",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902811,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/enhancement",
+    "name": "enhancement",
+    "color": "a2eeef",
+    "default": true,
+    "description": "New feature or request",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902847,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/good%20first%20issue",
+    "name": "good first issue",
+    "color": "7057ff",
+    "default": true,
+    "description": "Good for newcomers",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902827,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/help%20wanted",
+    "name": "help wanted",
+    "color": "008672",
+    "default": true,
+    "description": "Extra attention is needed",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902864,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/invalid",
+    "name": "invalid",
+    "color": "e4e669",
+    "default": true,
+    "description": "This doesn't seem right",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902881,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/question",
+    "name": "question",
+    "color": "d876e3",
+    "default": true,
+    "description": "Further information is requested",
+    "archived_at": null,
+    "archived_by": null
+  },
+  {
+    "id": 13111902897,
+    "url": "https://api.github.com/repos/octocat/Hello-World/labels/wontfix",
+    "name": "wontfix",
+    "color": "ffffff",
+    "default": true,
+    "description": "This will not be worked on",
+    "archived_at": null,
+    "archived_by": null
+  }
+]

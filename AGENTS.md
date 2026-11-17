@@ -90,4 +90,5 @@ Filled in as each component is scaffolded.
 | control-plane | `cd control-plane && ./gradlew bootJar` | `cd control-plane && ./gradlew test` (needs Docker) | `cd control-plane && ./gradlew bootRun` |
 | worker        | `cd worker && uv sync` | `cd worker && uv run pytest` (needs Docker; `-m "not docker"` without) | `cd worker && set -a && . ../.env && set +a && uv run worker` |
 | tool-gateway  | TBD   | TBD  | TBD         |
+| specs         | — | validate: see `specs/AGENTS.md` | real run: `specs/README.md` |
 | local-stack   | `make up` (builds both images) | `make up && make demo` | `make up` / `make stack` / `make down` (repo root; see `local-stack/AGENTS.md`) |

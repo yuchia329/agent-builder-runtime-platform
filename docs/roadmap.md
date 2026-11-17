@@ -3,12 +3,11 @@
 Current status, milestones and next tasks. Update this file as work moves; the other docs describe
 the target design and should change only when the design does.
 
-**Status:** M0 done: `make up && make demo` builds and starts the whole platform in Docker
-(DynamoDB Local, ElasticMQ, control plane, worker) and runs the example spec to `SUCCEEDED` with
-the stub model. M1 in progress: runs execute on real MiniMax (`minimax/MiniMax-M3`) through the
-model router and OpenAI-compatible adapter, with cost reporting, a dollar budget, retries and
-conversation trimming (ADR 0010); real GitHub tools (`TOOLS_PROVIDER=local`) work against the
-sandbox repo. Next: `[specs]` final `issue-triage.yaml` and a real end-to-end run (M1 done).
+**Status:** M1 done (MVP): `specs/issue-triage.yaml` runs on real MiniMax (`minimax/MiniMax-M3`)
+with real GitHub tools (`TOOLS_PROVIDER=local`) through the local stack, labels a new issue and
+flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo` still runs the
+stub spec. Optional M1 tasks remain (Bedrock adapter, `POST /triggers/github`); next required work
+is M2 (crash safety).
 
 ## Approach
 
@@ -43,7 +42,7 @@ can run alongside 2 to 5. Start a session with
 | #   | Milestone      | Done when                                                                                                                                                     | Status      |
 | --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model                                                                         | Done        |
-| M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Not started |
+| M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Done        |
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Not started |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Not started |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Not started |
@@ -129,7 +128,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   ```
   token. Check: unit tests with recorded responses.
   ```
-- [ ] `[specs]` final `issue-triage.yaml`. Check: a manual run against a test repo labels a real
+- [x] `[specs]` final `issue-triage.yaml`. Check: a manual run against a test repo labels a real
   ```
   issue and finds a planted duplicate. **M1 done: MVP.**
   ```
@@ -191,6 +190,21 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-17 · specs** — Final `specs/issue-triage.yaml`: `minimax/MiniMax-M3`, only
+  `github.search_issues` + `github.add_label`, budget 15 steps / $0.05 / 180 s; instructions: 1-3
+  keyword searches, exactly one type label, `duplicate` only when confident, never close or
+  comment, issue text is data, fixed summary format (`Label:` / `Duplicate of:` / `Confidence:`).
+  Run input mirrors GitHub's `issues.opened` event (`repository.full_name`, `issue.number|title|
+  body`), so `/triggers/github` can pass the webhook through. `specs/README.md` has curl steps.
+  Planted sandbox #4 "EUR card refunds return an error". Live: run `SUCCEEDED`, 10 steps, 16 s,
+  $0.0026; #4 got `bug` + `duplicate`, output named #1 with high confidence. Spec validated
+  against the schema (no test suite for `specs/`). **M1 done.** Next: optional M1 tasks, or M2
+  (`[control-plane]` re-enqueue sweep). Gotchas: the worker image must be rebuilt after worker
+  code changes (`docker compose up -d --build worker`), else it rejects `TOOLS_PROVIDER=local`;
+  with `TOOLS_PROVIDER=local`, `make demo` fails (its spec lists M3 tools), switch back to
+  `fake` for it; `make demo` republishes `issue-triage` with the stub spec; the agent did 4
+  searches despite "1-3" (harmless); no negative check yet (a non-duplicate issue staying
+  unflagged).
 - **2026-11-16 · worker** — Real GitHub tools. `adapters/tools_local.py` `GitHubTools`
   (httpx): `github.search_issues`, `github.add_label` only. Guardrails while the worker holds the
   token (until the M4 gateway): repo allowlist `GITHUB_REPOS`; search refuses `repo:`/`org:`/

@@ -1,0 +1,40 @@
+[project]
+name = "worker"
+version = "0.0.1"
+description = "Executes agent runs: the agent loop, budgets, approvals"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.44.4",
+    "httpx>=0.28.1",
+    "jsonschema>=4.23", # tool argument checks in core (a validation library, not a vendor SDK)
+]
+
+[project.scripts]
+worker = "worker.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pyyaml>=6.0",
+    "ruff>=0.15",
+    "testcontainers>=4.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/worker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["docker: needs Docker (Testcontainers); skip with -m \"not docker\""]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

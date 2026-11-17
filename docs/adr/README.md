@@ -16,11 +16,12 @@ Rules:
 | [0001](0001-workers-use-control-plane-api.md)       | Workers reach run data through the control plane API | Accepted |
 | [0002](0002-control-plane-owns-approvals.md)        | The control plane sends and receives approvals       | Accepted |
 | [0003](0003-run-identity-and-run-token.md)          | Run identity via `acts_as` and a signed run token    | Accepted |
-| [0004](0004-ports-and-adapters.md)                  | Swappable backends behind ports with contract tests  | Accepted, partly superseded by 0008 |
+| [0004](0004-ports-and-adapters.md)                  | Swappable backends behind ports with contract tests  | Accepted, partly superseded by 0008, 0009 |
 | [0005](0005-compute-agnostic-worker-core.md)        | Compute-agnostic worker core                         | Accepted |
 | [0006](0006-separate-tool-gateway.md)               | Tool gateway as a separate service, built in stages  | Accepted |
 | [0007](0007-serverless-scale-to-zero-deployment.md) | Serverless, scale-to-zero deployment                 | Accepted |
 | [0008](0008-control-plane-data-in-dynamodb.md)      | Control-plane data in DynamoDB                       | Accepted |
+| [0009](0009-worker-owns-agent-loop.md)              | The worker owns the agent loop                       | Accepted |
 
 ## Template
 

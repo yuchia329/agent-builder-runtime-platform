@@ -1,6 +1,6 @@
 # 0004. Swappable backends behind ports with contract tests
 
-- Status: Accepted; the control-plane database exception is superseded by [0008](0008-control-plane-data-in-dynamodb.md)
+- Status: Accepted; the control-plane database exception is superseded by [0008](0008-control-plane-data-in-dynamodb.md), the model exception by [0009](0009-worker-owns-agent-loop.md)
 - Date: 2026-11-16
 
 ## Context

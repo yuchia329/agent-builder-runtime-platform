@@ -24,7 +24,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from worker.core.errors import LeaseLost, QueueError, RunNotFound, StateError
-from worker.core.handle_run import Deps, handle_run
+from worker.core.handle_run import Attempt, Deps, handle_run
 from worker.core.run_message import InvalidRunMessage, parse_run_message
 from worker.core.types import RunStatus
 from worker.ports.queue import QueueMessage, RunQueue
@@ -32,7 +32,7 @@ from worker.ports.run_state import RunStateStore
 
 log = logging.getLogger(__name__)
 
-Handler = Callable[..., RunStatus]  # (run_id, deps, cancelled=...) like handle_run
+Handler = Callable[[str, Deps, Attempt], RunStatus]  # like handle_run
 
 
 class PollLoop:
@@ -133,7 +133,7 @@ class PollLoop:
         try:
             with beat:
                 try:
-                    status = self._handler(run.run_id, self._deps, cancelled=beat.lost.is_set)
+                    status = self._handler(run.run_id, self._deps, Attempt(owner, beat.lost.is_set))
                 except RunNotFound:
                     log.warning("run %s not found (receive %d)", run.run_id, message.receive_count)
                     return

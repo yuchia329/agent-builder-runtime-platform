@@ -24,6 +24,7 @@ Rules:
 | [0009](0009-worker-owns-agent-loop.md)              | The worker owns the agent loop                       | Accepted, Bedrock-only adapter plan superseded by 0010 |
 | [0010](0010-provider-neutral-model-layer.md)        | Provider-neutral model layer                         | Accepted |
 | [0011](0011-run-state-per-step-fenced.md)          | Run state: one item per step, fenced writes, 15-day TTL | Accepted |
+| [0012](0012-time-budget-counts-working-time.md)    | The time budget counts working time across attempts | Accepted |
 
 ## Template
 

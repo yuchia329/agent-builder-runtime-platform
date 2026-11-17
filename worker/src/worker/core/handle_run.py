@@ -1,8 +1,9 @@
-"""The worker's agent loop (ADR 0005, ADR 0009).
+"""The worker's agent loop (ADR 0005, ADR 0009, ADR 0011).
 
-``handle_run(run_id, deps)`` loads a run, drives the model and tools until the run finishes,
-pauses or exceeds its budget, and reports every status change to the control plane. It knows
-nothing about how it was invoked (queue poll loop, Lambda) or which vendors sit behind the ports.
+``handle_run(run_id, deps, attempt)`` loads a run, drives the model and tools until the run
+finishes, pauses or exceeds its budget, and reports every status change to the control plane. It
+knows nothing about how it was invoked (queue poll loop, Lambda) or which vendors sit behind the
+ports.
 
 Every model reply passes through this loop before anything acts on it:
 
@@ -10,12 +11,19 @@ Every model reply passes through this loop before anything acts on it:
 - tool arguments are checked against the tool's schema before the call;
 - a tool in ``require_approval`` stops the run in WAITING_APPROVAL without being called;
 - a cut-off or refused reply ends the run as FAILED, never as a final answer;
-- the budget (steps, dollars, seconds) is checked before every step;
-- a worker that lost the run's lease (``cancelled()`` turns true) stops before its next step
-  with ``LeaseLost`` and reports nothing: another worker owns the run now;
+- the budget (steps, dollars, working seconds) is checked before every step;
+- a worker that lost the run's lease (``attempt.cancelled()`` turns true, or a checkpoint write
+  raises LeaseLost) stops with ``LeaseLost`` and reports nothing: another worker owns the run;
 - a model with no known price or context size fails the run before its first step;
-- the conversation is trimmed before a call once it nears the model's context window;
+- a copy of the conversation is trimmed before a call once it nears the model's context window;
 - any unexpected error ends the run as FAILED with reason ``error``.
+
+Checkpoints (with an ``attempt`` and ``deps.state``): after every step the messages it added, its
+cost, the working seconds so far and (model steps) the stop reason are saved as step n. A run
+picked up again rebuilds its history from them and continues: tool calls of the last model turn
+without a saved result are processed again, then the next model turn. The run's input message is
+not saved; it is rebuilt from the run. If the run-state store fails (StateError), the attempt
+stops without reporting, and the run resumes later from its last checkpoint.
 """
 
 from __future__ import annotations
@@ -29,7 +37,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from worker.core.budget import BudgetExceeded, BudgetTracker
-from worker.core.errors import LeaseLost, RunConflict, ToolError
+from worker.core.errors import LeaseLost, RunConflict, StateError, ToolError
 from worker.core.models import MODELS, ModelInfo, UnknownModel, model_info
 from worker.core.trim import ContextTooLarge, fit_context, message_chars
 from worker.core.types import (
@@ -48,6 +56,7 @@ from worker.core.types import (
 from worker.ports.clock import Clock
 from worker.ports.control_plane import ControlPlane
 from worker.ports.model import Model
+from worker.ports.run_state import Checkpoint, RunStateStore
 from worker.ports.tools import ToolClient
 
 log = logging.getLogger(__name__)
@@ -64,33 +73,59 @@ class Deps:
     tools: ToolClient
     clock: Clock
     models: Mapping[str, ModelInfo] = field(default_factory=lambda: MODELS)
+    state: RunStateStore | None = None  # checkpoints; None: nothing is saved
 
 
-def handle_run(run_id: str, deps: Deps, cancelled: Callable[[], bool] | None = None) -> RunStatus:
-    """Executes one run and returns the status it ended in (or was already in).
+@dataclass(frozen=True)
+class Attempt:
+    """One worker's turn at a run, under its lease: `owner` signs checkpoint writes,
+    `cancelled()` turns true once the lease is lost."""
 
-    ``cancelled`` is checked before every step; once it returns True the run stops with
-    LeaseLost, leaving its status to the worker that holds the lease now."""
+    owner: str
+    cancelled: Callable[[], bool]
+
+
+@dataclass(frozen=True)
+class _Resume:
+    """What the checkpoints of a run add up to."""
+
+    messages: list[Message]
+    steps: int
+    cost_usd: float
+    elapsed: float
+    last_turn: tuple[Message, StopReason] | None  # the latest model turn, if any
+
+
+def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunStatus:
+    """Executes one run and returns the status it ended in (or was already in)."""
     run = deps.control_plane.get_run(run_id)
     if run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
         # Duplicate delivery of a run that is finished or paused: nothing to do.
         log.info("run %s is %s; skipping", run_id, run.status)
         return run.status
 
+    saving = attempt is not None and deps.state is not None
+    resume = _resume(deps.state.load_checkpoints(run_id)) if saving else _resume([])
+    if resume.steps:
+        log.info("run %s: resuming after step %d", run_id, resume.steps)
     try:
-        # QUEUED -> RUNNING, or RUNNING -> RUNNING when a crashed worker's run is redelivered.
-        # Without checkpoints (M2) a resumed run starts over from the first step.
-        deps.control_plane.update_run(run_id, RunUpdate(RunStatus.RUNNING, steps=0))
+        # QUEUED -> RUNNING, or RUNNING -> RUNNING when a run is picked up again.
+        deps.control_plane.update_run(run_id, RunUpdate(RunStatus.RUNNING, steps=resume.steps))
     except RunConflict:
         log.info("run %s was claimed or finished elsewhere; skipping", run_id)
         return deps.control_plane.get_run(run_id).status
 
-    budget = BudgetTracker(run.spec.budget, deps.clock)
+    budget = BudgetTracker(
+        run.spec.budget, deps.clock, resume.steps, resume.cost_usd, resume.elapsed
+    )
     try:
         info = model_info(run.spec.model, dict(deps.models))
-        final = _AgentLoop(run, deps, budget, info, cancelled or _never).run()
+        final = _AgentLoop(run, deps, budget, info, attempt, resume).run()
     except LeaseLost:
         log.warning("run %s: lease lost; stopping, another worker owns the run", run_id)
+        raise
+    except StateError:
+        log.error("run %s: run-state store failed; stopping, resumes later", run_id)
         raise
     except (UnknownModel, ContextTooLarge) as e:
         final = _failed(budget, FailureReason.ERROR, str(e))
@@ -104,8 +139,20 @@ def handle_run(run_id: str, deps: Deps, cancelled: Callable[[], bool] | None = N
     return final.status
 
 
-def _never() -> bool:
-    return False
+def _resume(checkpoints: Sequence[Checkpoint]) -> _Resume:
+    messages: list[Message] = []
+    cost, elapsed = 0.0, 0.0
+    last_turn: tuple[Message, StopReason] | None = None
+    for c in checkpoints:
+        added = [Message.from_json(m) for m in c.data["messages"]]
+        messages.extend(added)
+        cost += c.data["cost_usd"]
+        elapsed = c.data["elapsed_s"]
+        if "stop_reason" in c.data:
+            turn = next(m for m in reversed(added) if m.role == "assistant")
+            last_turn = (turn, StopReason(c.data["stop_reason"]))
+    steps = checkpoints[-1].step if checkpoints else 0
+    return _Resume(messages, steps, cost, elapsed, last_turn)
 
 
 def _failed(budget: BudgetTracker, reason: FailureReason, message: str) -> RunUpdate:
@@ -128,10 +175,11 @@ class _AgentLoop:
         deps: Deps,
         budget: BudgetTracker,
         info: ModelInfo,
-        cancelled: Callable[[], bool],
+        attempt: Attempt | None,
+        resume: _Resume,
     ) -> None:
         self._run = run
-        self._cancelled = cancelled
+        self._attempt = attempt
         self._spec = run.spec
         self._deps = deps
         self._budget = budget
@@ -139,7 +187,11 @@ class _AgentLoop:
         self._context_limit = int(info.context_tokens * TRIM_AT)
         self._tools: list[ToolSpec] = deps.tools.describe(run.spec.tools)
         self._validators = {t.name: Draft202012Validator(t.input_schema) for t in self._tools}
-        self._messages: list[Message] = [Message.user(_initial_prompt(run.input))]
+        # Full history (what checkpoints hold); a trimmed copy is what the model sees.
+        self._history: list[Message] = [Message.user(_initial_prompt(run.input)), *resume.messages]
+        self._unsaved: list[Message] = []  # added since the last checkpoint
+        self._last_turn = resume.last_turn
+        self._sent: list[Message] = self._history
         # System prompt and tool schemas are sent with every call.
         self._fixed_chars = len(run.spec.instructions) + sum(
             len(t.name) + len(t.description) + len(json.dumps(t.input_schema)) for t in self._tools
@@ -147,62 +199,104 @@ class _AgentLoop:
         self._tokens_per_char = DEFAULT_TOKENS_PER_CHAR
 
     def run(self) -> RunUpdate:
+        if self._last_turn is not None:  # resumed: finish what the latest saved turn asked for
+            turn, stop = self._last_turn
+            outcome = self._after_turn(turn, stop)
+            if outcome is not None:
+                return outcome
         while True:
             self._before_step()
             self._fit_context()
             turn = self._deps.model.complete(
-                self._spec.model, self._spec.instructions, self._messages, self._tools
+                self._spec.model, self._spec.instructions, self._sent, self._tools
             )
             self._learn_token_ratio(turn.usage.input_tokens)
-            self._budget.record_step(self._price.cost_usd(turn.usage))
-            self._messages.append(Message.assistant(turn))
+            cost = self._price.cost_usd(turn.usage)
+            self._budget.record_step(cost)
+            message = Message.assistant(turn)
+            self._add(message)
+            self._save(cost, turn.stop_reason)
+            outcome = self._after_turn(message, turn.stop_reason)
+            if outcome is not None:
+                return outcome
 
-            if turn.stop_reason is StopReason.REFUSAL:
-                return self._fail("The model declined the request")
-            if turn.stop_reason is StopReason.MAX_TOKENS:
-                return self._fail("The model reply was cut off (max tokens)")
-            if not turn.tool_calls:
-                return RunUpdate(
-                    RunStatus.SUCCEEDED,
-                    steps=self._budget.steps,
-                    cost_usd=_cost(self._budget),
-                    output=turn.text,
-                )
+    def _after_turn(self, turn: Message, stop: StopReason) -> RunUpdate | None:
+        """Acts on a model turn: the run's outcome, or None to ask the model again. Tool calls
+        that already have a result in the history (a resumed run) are skipped."""
+        if stop is StopReason.REFUSAL:
+            return self._fail("The model declined the request")
+        if stop is StopReason.MAX_TOKENS:
+            return self._fail("The model reply was cut off (max tokens)")
+        if not turn.tool_calls:
+            return RunUpdate(
+                RunStatus.SUCCEEDED,
+                steps=self._budget.steps,
+                cost_usd=_cost(self._budget),
+                output=turn.text,
+            )
+        # Results after this turn only: some providers reuse call ids across turns.
+        start = max(i for i, m in enumerate(self._history) if m is turn)
+        answered = {
+            m.tool_result.call_id for m in self._history[start:] if m.tool_result is not None
+        }
+        for call in turn.tool_calls:
+            if call.id in answered:
+                continue
+            rejection = self._rejection(call)
+            if rejection is not None:
+                log.warning("run %s: rejected %s: %s", self._run.run_id, call.name, rejection)
+                # Not a step: saved with the next checkpoint, or decided again on resume.
+                self._add(Message.tool(ToolResult(call.id, rejection, is_error=True)))
+            elif call.name in self._spec.require_approval:
+                return self._pause_for_approval(call)
+            else:
+                self._add(Message.tool(self._execute(call)))
+                self._save(0.0)
+        return None
 
-            for call in turn.tool_calls:
-                rejection = self._rejection(call)
-                if rejection is not None:
-                    log.warning("run %s: rejected %s: %s", self._run.run_id, call.name, rejection)
-                    result = ToolResult(call.id, rejection, is_error=True)
-                elif call.name in self._spec.require_approval:
-                    return self._pause_for_approval(call)
-                else:
-                    result = self._execute(call)
-                self._messages.append(Message.tool(result))
+    def _add(self, message: Message) -> None:
+        self._history.append(message)
+        self._unsaved.append(message)
+
+    def _save(self, cost_usd: float, stop: StopReason | None = None) -> None:
+        """Checkpoints the step just recorded (step number = steps so far)."""
+        if self._attempt is not None and self._deps.state is not None:
+            data: dict[str, Any] = {
+                "messages": [m.to_json() for m in self._unsaved],
+                "cost_usd": cost_usd,
+                "elapsed_s": round(self._budget.elapsed(), 3),
+            }
+            if stop is not None:
+                data["stop_reason"] = stop.value
+            self._deps.state.save_checkpoint(
+                self._run.run_id, self._attempt.owner, self._budget.steps, data
+            )
+        self._unsaved.clear()
 
     def _estimate(self, messages: Sequence[Message]) -> int:
         chars = self._fixed_chars + sum(message_chars(m) for m in messages)
         return int(chars * self._tokens_per_char)
 
     def _fit_context(self) -> None:
-        fitted = fit_context(self._messages, self._context_limit, self._estimate)
-        if fitted != self._messages:
+        """Sets what the next call sends: the history, or a trimmed copy if it is too long."""
+        fitted = fit_context(self._history, self._context_limit, self._estimate)
+        if fitted != self._history:
             log.info(
                 "run %s: trimmed conversation to fit the context window (%d -> %d messages)",
                 self._run.run_id,
-                len(self._messages),
+                len(self._history),
                 len(fitted),
             )
-        self._messages = fitted
+        self._sent = fitted
 
     def _learn_token_ratio(self, input_tokens: int) -> None:
         """Calibrates the estimate with the tokens the provider counted for what we sent."""
-        chars = self._fixed_chars + sum(message_chars(m) for m in self._messages)
+        chars = self._fixed_chars + sum(message_chars(m) for m in self._sent)
         if input_tokens > 0 and chars > 0:
             self._tokens_per_char = input_tokens / chars
 
     def _before_step(self) -> None:
-        if self._cancelled():
+        if self._attempt is not None and self._attempt.cancelled():
             raise LeaseLost(f"Run {self._run.run_id}: lease lost")
         self._budget.check()
 

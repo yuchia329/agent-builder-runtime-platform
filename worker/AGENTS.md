@@ -88,8 +88,14 @@ Run from `worker/`.
   contract test with a stale worker. Lease expiry uses `Clock.time()`, never `monotonic()`.
 - `STATE_BACKEND=memory` keeps leases in one process: fine for tests and a single host worker,
   no protection between workers. The local stack uses `dynamodb`.
-- Handlers given to `PollLoop` take `(run_id, deps, cancelled)` like `handle_run`; core checks
-  `cancelled()` before every step, next to the budget.
+- Handlers given to `PollLoop` take `(run_id, deps, attempt)` like `handle_run`; core checks
+  `attempt.cancelled()` before every step, next to the budget, and signs checkpoints with
+  `attempt.owner`. Without an `Attempt` or `Deps.state`, nothing is saved.
+- Checkpoints hold what a step added (`Message.to_json`); never mutate the history in place
+  (trim a copy), or saved steps stop matching it. A new message field needs `to_json` /
+  `from_json` and the round-trip test in `tests/unit/test_types.py`.
+- Resume tests (`tests/integration/test_resume.py`) kill a worker with `Killed`, a
+  `BaseException` that `handle_run` does not catch, at a checkpoint write or a status report.
 - DynamoDB expressions: put attribute names through `#` placeholders (`owner`, `ttl` are reserved)
   and pass only the names the expression uses, or DynamoDB rejects the call.
 - Tests that need Docker get `@pytest.mark.docker` (or `marks=` on a `pytest.param`).

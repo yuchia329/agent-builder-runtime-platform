@@ -13,7 +13,7 @@ from worker.adapters.control_plane_memory import InMemoryControlPlane
 from worker.adapters.model_stub import ScriptedModel, final_turn, tool_turn
 from worker.adapters.tools_fake import issue_triage_tools
 from worker.core.errors import LeaseLost, ToolError
-from worker.core.handle_run import Deps, handle_run
+from worker.core.handle_run import Attempt, Deps, handle_run
 from worker.core.models import ModelInfo, Price
 from worker.core.trim import TRIM_NOTE, message_chars
 from worker.core.types import ModelTurn, RunStatus, StopReason, Usage
@@ -41,7 +41,8 @@ class World:
             self.deps = replace(self.deps, models=models)
 
     def run(self, cancelled=None) -> RunStatus:
-        return handle_run(RUN_ID, self.deps, cancelled)
+        attempt = None if cancelled is None else Attempt("worker-a/1", cancelled)
+        return handle_run(RUN_ID, self.deps, attempt)
 
     @property
     def stored(self):

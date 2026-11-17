@@ -213,18 +213,27 @@ The worker core is one function, `handle_run(run_id)`, called from an entrypoint
    (`<host>-<pid>/<random>`), so one process receiving a run twice runs it once. If another
    worker holds a live lease, keep the message and hide it for one more lease length (deleting it
    could lose the run if the holder then crashes).
-2. Load the run and spec from the control plane, and (from M2) the latest checkpoint from DynamoDB.
+2. Load the run and spec from the control plane and the run's checkpoints from the run-state
+   table. A run with checkpoints is resumed: its history is rebuilt (the input message comes
+   from the run), the steps, cost and working seconds continue from the saved totals, and it
+   reports `RUNNING` with the saved step count.
 3. Run the agent loop in `core/handle_run.py` ([ADR 0009](adr/0009-worker-owns-agent-loop.md)).
    Every model reply is checked before anything acts on it: tools not in the spec are refused,
-   arguments are validated against the tool schema, refused or cut-off replies fail the run. From
-   M2, write a checkpoint after every model turn and every tool result.
+   arguments are validated against the tool schema, refused or cut-off replies fail the run.
+   After every step (model turn or tool result) save a checkpoint: the messages it added, its
+   cost, the working seconds so far, and for a model turn its stop reason. The loop keeps the
+   full history and trims only a copy for each call, so saved steps never change. On resume,
+   tool calls of the latest turn without a saved result run again, in order; a saved final
+   answer is reported without asking the model again. If the store fails, the attempt stops
+   without reporting and the run resumes later.
 4. Extend the SQS message visibility and renew the lease while working (heartbeat, every third
    of the timeout). If the lease is lost (the worker stalled past its expiry and another took
    over), the run stops before its next step and reports nothing. The lease is released when
    the run ends, so a retry can take it at once. If the worker dies, the message reappears and
    another worker resumes from the last checkpoint.
-5. Enforce the budget every step: steps, dollars from token usage, wall time. Over budget means
-   `FAILED` with a reason.
+5. Enforce the budget every step: steps, dollars from token usage, working seconds summed over
+   attempts ([ADR 0012](adr/0012-time-budget-counts-working-time.md); time waiting between
+   attempts does not count). Over budget means `FAILED` with a reason.
 6. A tool in `require_approval`: save the pending call, report `WAITING_APPROVAL`, delete the SQS
    message, exit. The approval re-enqueues the run.
 

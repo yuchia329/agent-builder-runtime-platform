@@ -212,3 +212,34 @@ class Message:
     @classmethod
     def tool(cls, result: ToolResult) -> Message:
         return cls(role="tool", tool_result=result)
+
+    def to_json(self) -> dict[str, Any]:
+        """A JSON-serializable dict (checkpoints); empty fields left out. See from_json."""
+        d: dict[str, Any] = {"role": self.role}
+        if self.text:
+            d["text"] = self.text
+        if self.tool_calls:
+            d["tool_calls"] = [
+                {"id": c.id, "name": c.name, "arguments": c.arguments} for c in self.tool_calls
+            ]
+        if self.tool_result is not None:
+            r = self.tool_result
+            d["tool_result"] = {"call_id": r.call_id, "content": r.content, "is_error": r.is_error}
+        if self.provider_data is not None:
+            d["provider_data"] = self.provider_data
+        return d
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> Message:
+        r = d.get("tool_result")
+        return cls(
+            role=d["role"],
+            text=d.get("text", ""),
+            tool_calls=tuple(
+                ToolCall(c["id"], c["name"], c["arguments"]) for c in d.get("tool_calls", [])
+            ),
+            tool_result=None
+            if r is None
+            else ToolResult(r["call_id"], r["content"], bool(r.get("is_error", False))),
+            provider_data=d.get("provider_data"),
+        )

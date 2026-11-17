@@ -17,16 +17,29 @@ class BudgetTracker:
     Call ``check()`` before starting a step and ``record_step()`` after it finishes, so a run
     never starts a step it is not allowed to finish counting. Model cost is only known after a
     turn, so one turn can take the run past ``max_usd``; the next ``check()`` then stops it.
+
+    A resumed run starts from its checkpointed steps, cost and working seconds
+    (``elapsed_before``): time between attempts (crash, queue wait) does not count.
     """
 
     def __init__(
-        self, budget: Budget, clock: Clock, steps_done: int = 0, cost_usd: float = 0.0
+        self,
+        budget: Budget,
+        clock: Clock,
+        steps_done: int = 0,
+        cost_usd: float = 0.0,
+        elapsed_before: float = 0.0,
     ) -> None:
         self._budget = budget
         self._clock = clock
         self._started = clock.monotonic()
         self.steps = steps_done
         self.cost_usd = cost_usd
+        self._elapsed_before = elapsed_before
+
+    def elapsed(self) -> float:
+        """Working seconds of this run, over every attempt so far."""
+        return self._elapsed_before + self._clock.monotonic() - self._started
 
     def check(self) -> None:
         if self.steps >= self._budget.max_steps:
@@ -39,7 +52,7 @@ class BudgetTracker:
                 FailureReason.BUDGET_USD,
                 f"Dollar budget used up: ${self.cost_usd:.4f} of ${self._budget.max_usd:.2f}",
             )
-        elapsed = self._clock.monotonic() - self._started
+        elapsed = self.elapsed()
         if elapsed >= self._budget.max_seconds:
             raise BudgetExceeded(
                 FailureReason.BUDGET_SECONDS,

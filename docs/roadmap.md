@@ -9,7 +9,8 @@ flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
 through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
-progress: run-state store, local table and lease done (ADR 0011); next checkpoints.
+progress: run-state store, local table, lease and checkpoints done (ADR 0011, 0012); next
+idempotent tool calls.
 
 ## Approach
 
@@ -163,7 +164,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   `handle_run` returns; a run leased by another live worker is left alone (message not deleted).
   Check: two workers given the same run, only one executes it.
   ```
-- [ ] `[worker]` checkpoints: write after every model turn and every tool result (messages,
+- [x] `[worker]` checkpoints: write after every model turn and every tool result (messages,
   ```
   usage, cost, `provider_data`); a picked-up run resumes from the latest. Check: integration
   test stops a run after step k, a second `handle_run` finishes it with no repeated model calls
@@ -231,6 +232,20 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-16 · worker** — Checkpoints and resume (ADR 0011; ADR 0012: time budget counts
+  working time summed over attempts). After every step `handle_run` saves the messages it added
+  (`Message.to_json`), its cost, `elapsed_s` and (model turns) `stop_reason`; resume rebuilds
+  the history, continues budget totals, reports `RUNNING` with the saved steps, runs only tool
+  calls of the latest turn without a saved result (matched after that turn: providers may reuse
+  call ids), reports a saved final answer without a model call. Loop keeps full history, trims a
+  copy. `Attempt(owner, cancelled)` replaces `cancelled`; `Deps.state`. `StateError` stops the
+  attempt (no FAILED). Tests: 255 passed (11 new, `test_resume.py` + JSON round trip). Live:
+  `make demo` wrote `STEP#000001..5` (140-220 bytes each). Next: `[worker]` idempotent tool
+  calls. Gotchas: a crash between a tool call and its checkpoint re-runs that call (task 5
+  fixes); a resumed run stopped at a `require_approval` call pauses again (M3 must pass the
+  approval in); a step over 350 KB raises `StateError` on every attempt until the DLQ, the run
+  stays `RUNNING` (tool results are capped, so unlikely); `make demo` republishes the stub
+  `issue-triage`, real spec republished as version 7.
 - **2026-11-16 · worker** — Lease in the poll loop: take before the run (owner per attempt
   `<host>-<pid>/<random>`), renew in the heartbeat, release in `finally`; held by another
   worker: message kept and hidden one lease length; `StateError` on take: message kept.

@@ -106,7 +106,7 @@ def test_unknown_run_is_kept_for_retry():
 
 
 def test_control_plane_outage_keeps_message_for_retry():
-    def unreachable(run_id, deps, cancelled):
+    def unreachable(run_id, deps, attempt):
         raise ControlPlaneError("connection refused")
 
     queue = InMemoryRunQueue()
@@ -120,7 +120,7 @@ def test_control_plane_outage_keeps_message_for_retry():
 def test_heartbeat_extends_visibility_while_run_is_in_progress():
     release = threading.Event()
 
-    def slow(run_id, deps, cancelled):
+    def slow(run_id, deps, attempt):
         release.wait(5)
         return RunStatus.SUCCEEDED
 
@@ -142,7 +142,7 @@ def test_asks_only_for_free_slots():
     release = threading.Event()
     started = []
 
-    def blocking(run_id, deps, cancelled):
+    def blocking(run_id, deps, attempt):
         started.append(run_id)
         release.wait(5)
         return RunStatus.SUCCEEDED
@@ -203,7 +203,7 @@ def test_two_workers_given_the_same_run_execute_it_once():
     release = threading.Event()
     calls = []
 
-    def slow(run_id, deps, cancelled):
+    def slow(run_id, deps, attempt):
         calls.append(run_id)
         release.wait(5)
         return RunStatus.SUCCEEDED
@@ -232,7 +232,7 @@ def test_same_process_receiving_a_run_twice_runs_it_once():
     release = threading.Event()
     calls = []
 
-    def slow(run_id, deps, cancelled):
+    def slow(run_id, deps, attempt):
         calls.append(run_id)
         release.wait(5)
         return RunStatus.SUCCEEDED
@@ -255,7 +255,7 @@ def test_lease_is_released_after_the_run_so_a_retry_can_take_it_at_once():
     queue = InMemoryRunQueue()
     queue.send(_body())
 
-    def unreachable(run_id, deps, cancelled):
+    def unreachable(run_id, deps, attempt):
         raise ControlPlaneError("connection refused")
 
     _run_once(PollLoop(queue, _deps(), state, wait_seconds=0, handler=unreachable))
@@ -267,7 +267,7 @@ def test_lease_is_released_after_the_run_so_a_retry_can_take_it_at_once():
 def test_heartbeat_renews_the_lease_past_its_first_expiry():
     release = threading.Event()
 
-    def slow(run_id, deps, cancelled):
+    def slow(run_id, deps, attempt):
         release.wait(5)
         return RunStatus.SUCCEEDED
 

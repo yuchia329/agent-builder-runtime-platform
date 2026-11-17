@@ -37,3 +37,28 @@ def test_every_update_shape_matches_contract():
 
     for update in updates:
         assert contract_errors("RunUpdate", update.to_dict()) == [], update
+
+
+def test_messages_survive_a_json_round_trip():
+    import json
+
+    from worker.core.types import Message, ModelTurn, StopReason, ToolCall, ToolResult, Usage
+
+    turn = ModelTurn(
+        StopReason.TOOL_USE,
+        text="Searching.",
+        tool_calls=(ToolCall("call_1", "github.search_issues", {"query": "CSV", "n": [1, 2]}),),
+        usage=Usage(10, 2),
+        provider_data={"reasoning": [{"text": "think"}]},
+    )
+    messages = [
+        Message.user("Run input"),
+        Message.assistant(turn),
+        Message.tool(ToolResult("call_1", {"items": [{"number": 3}]})),
+        Message.tool(ToolResult("call_2", "Tool failed: 404", is_error=True)),
+    ]
+
+    restored = [Message.from_json(json.loads(json.dumps(m.to_json()))) for m in messages]
+
+    assert restored == messages
+    assert Message.user("x").to_json() == {"role": "user", "text": "x"}

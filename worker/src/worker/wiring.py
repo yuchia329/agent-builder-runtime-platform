@@ -69,4 +69,4 @@ def build(config: Config) -> App:
         tools = GitHubTools(config.github_token, config.github_repos, api_url=config.github_api_url)
     else:
         tools = issue_triage_tools()
-    return App(queue, Deps(control_plane, model, tools, clock), state)
+    return App(queue, Deps(control_plane, model, tools, clock, state=state), state)

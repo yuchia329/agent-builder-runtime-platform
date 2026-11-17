@@ -1,8 +1,11 @@
 package dev.agentplatform.controlplane.trigger;
 
 import dev.agentplatform.controlplane.config.PlatformProperties;
+import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunService;
+import dev.agentplatform.controlplane.store.DeliveryStore;
+import java.time.Clock;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +24,11 @@ import tools.jackson.databind.node.ObjectNode;
  * {@code X-Hub-Signature-256} matches the configured secret. Starts one run per agent of the
  * configured tenant whose trigger matches the event (until the GitHub App maps installations to
  * tenants in M4).
+ *
+ * <p>Redeliveries: the {@code X-GitHub-Delivery} id is claimed before any run starts. A delivery
+ * seen before gets 200 with the first delivery's runs and {@code duplicate: true}, and starts
+ * nothing. If handling fails, the claim is released so GitHub's redelivery can try again, except
+ * when only the enqueue failed: those runs are saved QUEUED and the sweep sends them.
  */
 @RestController
 public class GitHubWebhookController {
@@ -28,18 +36,28 @@ public class GitHubWebhookController {
     private static final Logger log = LoggerFactory.getLogger(GitHubWebhookController.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
+    private static final String SOURCE = "github";
+
     private final RunService runs;
+    private final DeliveryStore deliveries;
+    private final Clock clock;
     private final String tenantId;
     private final String secret;
 
-    public GitHubWebhookController(RunService runs, PlatformProperties props) {
+    public GitHubWebhookController(RunService runs, DeliveryStore deliveries, Clock clock, PlatformProperties props) {
         this.runs = runs;
+        this.deliveries = deliveries;
+        this.clock = clock;
         this.tenantId = props.tenant().id();
         this.secret = props.githubWebhookSecret();
     }
 
-    /** Runs started for one delivery. */
-    public record Started(List<String> runs) {}
+    /** Runs started for one delivery; {@code duplicate} is true (else absent) for a redelivery. */
+    public record Started(List<String> runs, Boolean duplicate) {
+        Started(List<String> runs) {
+            this(runs, null);
+        }
+    }
 
     @PostMapping("/triggers/github")
     public ResponseEntity<Started> receive(
@@ -73,7 +91,32 @@ public class GitHubWebhookController {
 
         var trigger = GitHubWebhooks.triggerName(event, payload);
         var input = JSON.writeValueAsString(GitHubWebhooks.runInput(event, payload));
-        var started = runs.startForTrigger(tenantId, trigger, input).stream().map(Run::runId).toList();
+
+        var claimed = delivery != null && !delivery.isBlank();
+        if (claimed) {
+            var previous = deliveries.claim(SOURCE, delivery, clock.instant());
+            if (previous.isPresent()) {
+                log.info("GitHub delivery {} ({}) seen before; runs {}, nothing started", delivery, trigger, previous.get());
+                return ResponseEntity.ok(new Started(previous.get(), true));
+            }
+        } else {
+            log.warn("GitHub {} event without X-GitHub-Delivery; handled without redelivery check", trigger);
+        }
+
+        List<String> started;
+        try {
+            started = runs.startForTrigger(tenantId, trigger, input).stream().map(Run::runId).toList();
+        } catch (RunQueueException e) {
+            throw e; // runs are saved QUEUED and the sweep sends them: keep the claim
+        } catch (RuntimeException e) {
+            if (claimed) {
+                deliveries.release(SOURCE, delivery);
+            }
+            throw e;
+        }
+        if (claimed) {
+            deliveries.recordRuns(SOURCE, delivery, started);
+        }
         log.info("GitHub delivery {} ({}): started {} run(s) {}", delivery, trigger, started.size(), started);
         return ResponseEntity.accepted().body(new Started(started));
     }

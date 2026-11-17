@@ -9,8 +9,8 @@ flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
 through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
-progress: worker side and re-enqueue sweep done (ADR 0011-0013); left: webhook dedupe, then
-`make chaos`.
+progress: worker side, re-enqueue sweep and webhook dedupe done (ADR 0011-0013); left: `make
+chaos`.
 
 ## Approach
 
@@ -183,7 +183,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   `POST /runs` already returns 503 and leaves the run `QUEUED` when enqueueing fails. Needs a
   query by status (new index or a scan). Check: a run whose enqueue failed reaches the queue.
   ```
-- [ ] `[control-plane]` webhook redelivery dedupe on `X-GitHub-Delivery` (conditional put, short
+- [x] `[control-plane]` webhook redelivery dedupe on `X-GitHub-Delivery` (conditional put, short
   ```
   TTL). Check: the same delivery twice starts one run.
   ```
@@ -223,6 +223,11 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
+- **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
+  Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `local-stack`
+  (`create-tables.sh` enables it like run-state's TTL), `infra` (M6). Until then items never
+  expire; correctness does not depend on it (claims check `ttl` themselves).
+
 - **Internal API and gateway auth is IAM (SigV4) through API Gateway** (ADR 0007). Declared in
   `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`tools_mcp.py` in M4 signs
   gateway calls; `control_plane_http.py` done), `tool-gateway` (signs calls to the control plane).
@@ -232,6 +237,17 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-17 · control-plane** — Webhook redelivery dedupe. `DeliveryStore` port
+  (in-memory, DynamoDB; contract suite): `claim` (conditional put, `DELIVERY#<source>#<id>`,
+  `ttl` 7 days, expired item counts as absent), `recordRuns`, `release`. Controller claims
+  `X-GitHub-Delivery` after the signature check; duplicate: 200 `{runs, duplicate: true}`;
+  failure releases the claim except `RunQueueException`; no header: handled, warning. Also fixed
+  the flaky all-404 integration tests: test server binds `127.0.0.1` (`SERVER_ADDRESS` in
+  `build.gradle.kts`), clients call `127.0.0.1` (a Gradle daemon held the same random port on
+  `::1`; seen 3 of ~11 runs before, 0 of 6 after). Tests: 120 passed (15 new). Live: same signed
+  delivery twice: 202 then 200 duplicate with the same run id. Next: `[local-stack]` `make
+  chaos` (and enable the control-plane TTL, see Cross-service changes). Gotchas: local stack has
+  `sweep-demo` (stub, trigger `github.issue.locked`) from live checks.
 - **2026-11-17 · control-plane** — Re-enqueue sweep. Sparse index on GSI1 (`RUNS#QUEUED`,
   13-digit epoch-millis queued-at) set while `QUEUED`, removed on any other status;
   `RunStore.findQueuedBefore` / `touchQueued` (both adapters, contract tests). `RunSweeper`
@@ -242,8 +258,7 @@ than the current milestone.
   left in the local stack). Next: `[control-plane]` webhook dedupe. M6: add an EventBridge
   Scheduler rule that calls `sweepOnce` and set `SWEEP_INTERVAL_SECONDS=0` on Lambda. Gotchas:
   `GSI2SK` uses `Instant.toString()`, which misorders runs within one second (fix when an
-  agent's run list is built); `GitHubWebhookApiIntegrationTest` got 404 on every request in 1 of
-  6 full runs, passed in the other 5 and alone, cause unknown; returning to `QUEUED` (approvals,
+  agent's run list is built); the all-404 test flake is fixed (see the dedupe entry); returning to `QUEUED` (approvals,
   M3) re-adds the index key in `update`, untested until that transition exists.
 - **2026-11-17 · worker** — Idempotent tool calls (ADR 0013). `ToolSpec.read_only` /
   `idempotent` (MCP annotation names; fake and GitHub tools flagged, `slack.post_message` not).

@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -154,21 +155,75 @@ class GitHubWebhookApiIntegrationTest {
         assertThat(response.statusCode()).isEqualTo(201);
     }
 
+    @Test
+    void redeliveryOfTheSameDeliveryStartsNothingAndReturnsTheFirstRuns() throws Exception {
+        publishAgent("dedupe-agent", "github.issue.labeled");
+        var body = issuesPayload("labeled");
+        var before = queueSize();
+
+        var first = deliver("issues", body, "delivery-same");
+        var second = deliver("issues", body, "delivery-same");
+
+        assertThat(first.statusCode()).isEqualTo(202);
+        assertThat(second.statusCode()).isEqualTo(200);
+        var firstRuns = JSON.readTree(first.body()).get("runs");
+        var secondJson = JSON.readTree(second.body());
+        assertThat(secondJson.get("runs")).isEqualTo(firstRuns);
+        assertThat(secondJson.get("duplicate").asBoolean()).isTrue();
+        assertThat(JSON.readTree(first.body()).has("duplicate")).isFalse();
+        assertThat(queueSize()).isEqualTo(before + 1);
+    }
+
+    @Test
+    void aNewDeliveryOfTheSameEventStartsItsOwnRun() throws Exception {
+        publishAgent("new-delivery-agent", "github.issue.milestoned");
+        var body = issuesPayload("milestoned");
+        var before = queueSize();
+
+        deliver("issues", body, "delivery-1");
+        deliver("issues", body, "delivery-2");
+
+        assertThat(queueSize()).isEqualTo(before + 2);
+    }
+
+    @Test
+    void eventWithoutDeliveryIdIsStillHandled() throws Exception {
+        publishAgent("no-delivery-agent", "github.issue.pinned");
+        var body = issuesPayload("pinned");
+        var before = queueSize();
+
+        var response = send("issues", body, GitHubWebhooks.sign(SECRET, bytes(body)), null);
+
+        assertThat(response.statusCode()).isEqualTo(202);
+        assertThat(queueSize()).isEqualTo(before + 1);
+    }
+
     private static String issuesPayload(String action) throws Exception {
         return Files.readString(Path.of("src/test/resources/github/issues-opened.json"))
                 .replace("\"action\": \"opened\"", "\"action\": \"" + action + "\"");
     }
 
     private HttpResponse<String> deliver(String event, String body) throws Exception {
-        return send(event, body, GitHubWebhooks.sign(SECRET, bytes(body)));
+        return deliver(event, body, UUID.randomUUID().toString());
+    }
+
+    private HttpResponse<String> deliver(String event, String body, String delivery) throws Exception {
+        return send(event, body, GitHubWebhooks.sign(SECRET, bytes(body)), delivery);
+    }
+
+    private HttpResponse<String> send(String event, String body, String signature) throws Exception {
+        return send(event, body, signature, UUID.randomUUID().toString());
     }
 
     /** Sends like GitHub: JSON body, event and delivery headers, optional signature, no API key. */
-    private HttpResponse<String> send(String event, String body, String signature) throws Exception {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/triggers/github"))
+    private HttpResponse<String> send(String event, String body, String signature, String delivery)
+            throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/triggers/github"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(bytes(body)))
-                .header("Content-Type", "application/json")
-                .header("X-GitHub-Delivery", "delivery-test");
+                .header("Content-Type", "application/json");
+        if (delivery != null) {
+            request.header("X-GitHub-Delivery", delivery);
+        }
         if (event != null) {
             request.header("X-GitHub-Event", event);
         }

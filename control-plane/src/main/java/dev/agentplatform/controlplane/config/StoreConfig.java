@@ -4,9 +4,12 @@ import dev.agentplatform.controlplane.queue.InMemoryRunQueuePublisher;
 import dev.agentplatform.controlplane.queue.RunQueuePublisher;
 import dev.agentplatform.controlplane.queue.SqsRunQueuePublisher;
 import dev.agentplatform.controlplane.store.AgentStore;
+import dev.agentplatform.controlplane.store.DeliveryStore;
+import dev.agentplatform.controlplane.store.DynamoDbDeliveryStore;
 import dev.agentplatform.controlplane.store.DynamoDbAgentStore;
 import dev.agentplatform.controlplane.store.DynamoDbRunStore;
 import dev.agentplatform.controlplane.store.InMemoryAgentStore;
+import dev.agentplatform.controlplane.store.InMemoryDeliveryStore;
 import dev.agentplatform.controlplane.store.InMemoryRunStore;
 import dev.agentplatform.controlplane.store.RunStore;
 import java.time.Clock;
@@ -55,6 +58,14 @@ public class StoreConfig {
         return switch (props.storeBackend()) {
             case MEMORY -> new InMemoryRunStore();
             case DYNAMODB -> new DynamoDbRunStore(dynamo.getObject(), props.table());
+        };
+    }
+
+    @Bean
+    DeliveryStore deliveryStore(PlatformProperties props, ObjectProvider<DynamoDbClient> dynamo) {
+        return switch (props.storeBackend()) {
+            case MEMORY -> new InMemoryDeliveryStore();
+            case DYNAMODB -> new DynamoDbDeliveryStore(dynamo.getObject(), props.table());
         };
     }
 

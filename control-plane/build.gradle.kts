@@ -49,6 +49,10 @@ tasks.test {
     useJUnitPlatform()
     // No background sweep during tests; RunSweepScheduleIntegrationTest turns it on itself.
     environment("SWEEP_INTERVAL_SECONDS", "0")
+    // Test servers listen on 127.0.0.1 and clients call 127.0.0.1, never "localhost": a server on
+    // all addresses can get a random port that another process (a Gradle daemon) holds on ::1, and
+    // "localhost" may resolve to ::1, so requests would reach that process.
+    environment("SERVER_ADDRESS", "127.0.0.1")
 }
 
 // `./gradlew bootRun` uses the local profile unless SPRING_PROFILES_ACTIVE says otherwise.

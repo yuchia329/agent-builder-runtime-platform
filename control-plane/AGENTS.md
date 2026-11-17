@@ -58,6 +58,12 @@ build again.
   `internal`, `store`, `queue`, `contract`, `tenant`, `config`, `web`).
 - Webhook routes (`/triggers/*`) have no API key; they trust only a valid signature. Keep the
   verification and payload rules in plain classes (`GitHubWebhooks`) so they test without HTTP.
+- Webhook deliveries are claimed in `DeliveryStore` before any run starts; tests send a unique
+  `X-GitHub-Delivery` per request, or the second request is a duplicate.
+- Ports: `DeliveryStore` joins `AgentStore` / `RunStore` (contract suite `DeliveryStoreContractTest`).
+- Tests bind the server to `127.0.0.1` (`SERVER_ADDRESS` in `build.gradle.kts`) and call
+  `127.0.0.1`, never `localhost`: `localhost` can resolve to `::1`, where another process (a Gradle
+  daemon) may hold the same random port; symptom: every request 404 or "Invalid status line".
 - Ports: `AgentStore`, `RunStore` (in `store/`), `RunQueuePublisher` (in `queue/`). Each port has
   an abstract `*ContractTest`; every adapter has a subclass of it. New adapters must pass it.
   DynamoDB tests share one container through `DynamoDbLocal`.

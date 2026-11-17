@@ -24,7 +24,7 @@ public final class ApiClient {
 
     public HttpResponse<String> send(String method, String path, String body, String contentType, boolean withKey)
             throws Exception {
-        var builder = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+        var builder = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
                 .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
         if (contentType != null) {
             builder.header("Content-Type", contentType);

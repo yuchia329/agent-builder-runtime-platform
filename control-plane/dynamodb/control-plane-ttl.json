@@ -1,0 +1,4 @@
+{
+  "TableName": "control-plane",
+  "TimeToLiveSpecification": { "Enabled": true, "AttributeName": "ttl" }
+}

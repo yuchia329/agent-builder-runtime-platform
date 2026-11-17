@@ -158,8 +158,11 @@ Public and internal JSON use snake_case field names and leave out empty fields.
   number, title, body, state, URL, label names and author login, and `sender.login`: the full
   payload is 10-30 KB, mostly URLs, and the model rereads the input on every step. Other events
   pass through whole. Until the GitHub App (M4) maps an installation to a tenant, only agents of
-  the configured tenant are matched. Redeliveries (same `X-GitHub-Delivery`) are not
-  deduplicated yet (M2 idempotency).
+  the configured tenant are matched. Redeliveries: the `X-GitHub-Delivery` id is claimed
+  (conditional put, item `DELIVERY#github#<id>`, `ttl` 7 days, covering GitHub's 3-day
+  redelivery window) before any run starts; a delivery seen before gets 200 with the first
+  delivery's run ids and `"duplicate": true` and starts nothing. If handling fails the claim is
+  released, except when only the enqueue failed (runs saved `QUEUED`, the sweep sends them).
 - `POST /approvals/slack`: Slack interactivity callback. Verify the signing secret, record the
   decision, re-enqueue the run.
 
@@ -352,6 +355,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `RunQueuePublisher` | control plane | Enqueue a run id                                                                                    | SQS, in-memory                             |
 | `AgentStore`        | control plane | Tenants, agents, immutable versions with gap-free numbering, lookup by trigger                     | DynamoDB, in-memory                        |
 | `RunStore`          | control plane | Runs, steps, approvals; status changes only from the expected current status                       | DynamoDB, in-memory                        |
+| `DeliveryStore`     | control plane | Claim a webhook delivery id once (first caller wins), record its runs, release; forgotten after 7 days | DynamoDB, in-memory                        |
 | `RunQueue`          | worker        | At-least-once delivery, redelivery after timeout, extendable timeout, delivery count, DLQ after N   | SQS, in-memory                             |
 | `RunStateStore`     | worker        | Atomic conditional writes for lease, checkpoint (step n only after n-1), idempotency claim         | DynamoDB, in-memory                        |
 | `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock Converse (M1) |

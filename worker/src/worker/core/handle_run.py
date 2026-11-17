@@ -14,6 +14,9 @@ Every model reply passes through this loop before anything acts on it:
 - the budget (steps, dollars, working seconds) is checked before every step;
 - a worker that lost the run's lease (``attempt.cancelled()`` turns true, or a checkpoint write
   raises LeaseLost) stops with ``LeaseLost`` and reports nothing: another worker owns the run;
+- every tool call claims an idempotency key first; a resumed run reuses a stored result instead
+  of calling again, and a call whose outcome a crash left unknown is repeated only if the tool
+  is read-only or idempotent, else the run fails (never a duplicate side effect);
 - a model with no known price or context size fails the run before its first step;
 - a copy of the conversation is trimmed before a call once it nears the model's context window;
 - any unexpected error ends the run as FAILED with reason ``error``.
@@ -28,6 +31,7 @@ stops without reporting, and the run resumes later from its last checkpoint.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
@@ -127,7 +131,7 @@ def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunSt
     except StateError:
         log.error("run %s: run-state store failed; stopping, resumes later", run_id)
         raise
-    except (UnknownModel, ContextTooLarge) as e:
+    except (UnknownModel, ContextTooLarge, ToolOutcomeUnknown) as e:
         final = _failed(budget, FailureReason.ERROR, str(e))
     except BudgetExceeded as e:
         final = _failed(budget, e.reason, e.message)
@@ -137,6 +141,19 @@ def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunSt
 
     deps.control_plane.update_run(run_id, final)
     return final.status
+
+
+class ToolOutcomeUnknown(Exception):
+    """A claimed call has no stored result (the worker died during or right after it) and the
+    tool is not safe to repeat."""
+
+
+def tool_call_key(run_id: str, step: int, call: ToolCall) -> str:
+    """Idempotency key of a tool call: the same call at the same step gets the same key."""
+    canonical = json.dumps(
+        [run_id, step, call.name, call.arguments], sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _resume(checkpoints: Sequence[Checkpoint]) -> _Resume:
@@ -187,6 +204,7 @@ class _AgentLoop:
         self._context_limit = int(info.context_tokens * TRIM_AT)
         self._tools: list[ToolSpec] = deps.tools.describe(run.spec.tools)
         self._validators = {t.name: Draft202012Validator(t.input_schema) for t in self._tools}
+        self._specs = {t.name: t for t in self._tools}
         # Full history (what checkpoints hold); a trimmed copy is what the model sees.
         self._history: list[Message] = [Message.user(_initial_prompt(run.input)), *resume.messages]
         self._unsaved: list[Message] = []  # added since the last checkpoint
@@ -301,15 +319,51 @@ class _AgentLoop:
         self._budget.check()
 
     def _execute(self, call: ToolCall) -> ToolResult:
-        """Runs an allowed, well-formed call. A tool failure becomes an error result."""
+        """Runs an allowed, well-formed call. A tool failure becomes an error result.
+
+        With a run-state store: claim the call's key, call the tool, store the result. A key
+        claimed before (a resumed run) returns its stored result without calling again."""
         self._before_step()
+        key = self._claim(call)
+        if isinstance(key, ToolResult):
+            self._budget.record_step()
+            return key
         try:
             content = self._deps.tools.call(call.name, call.arguments)
             result = ToolResult(call.id, content)
         except ToolError as e:
             result = ToolResult(call.id, f"Tool failed: {e}", is_error=True)
+        if key is not None:
+            assert self._deps.state is not None and self._attempt is not None
+            self._deps.state.complete_tool_call(
+                self._run.run_id,
+                self._attempt.owner,
+                key,
+                {"content": result.content, "is_error": result.is_error},
+            )
         self._budget.record_step()
         return result
+
+    def _claim(self, call: ToolCall) -> str | ToolResult | None:
+        """The key to store the result under, the stored result of an earlier attempt, or None
+        when nothing is saved (no store or attempt)."""
+        state, attempt = self._deps.state, self._attempt
+        if state is None or attempt is None:
+            return None
+        run_id = self._run.run_id
+        key = tool_call_key(run_id, self._budget.steps + 1, call)
+        claim = state.claim_tool_call(run_id, attempt.owner, key)
+        if claim.result is not None:
+            log.info("run %s: %s already ran; reusing its result", run_id, call.name)
+            return ToolResult(call.id, claim.result["content"], claim.result["is_error"])
+        if not claim.fresh:
+            if not self._specs[call.name].safe_to_repeat:
+                raise ToolOutcomeUnknown(
+                    f"Outcome unknown: {call.name} may have run before a worker crash; "
+                    "not repeated because it is neither read-only nor idempotent"
+                )
+            log.warning("run %s: repeating %s (outcome unknown, safe to repeat)", run_id, call.name)
+        return key
 
     def _rejection(self, call: ToolCall) -> str | None:
         if call.name not in self._spec.tools:

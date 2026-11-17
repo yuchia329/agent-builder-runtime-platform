@@ -25,6 +25,7 @@ Rules:
 | [0010](0010-provider-neutral-model-layer.md)        | Provider-neutral model layer                         | Accepted |
 | [0011](0011-run-state-per-step-fenced.md)          | Run state: one item per step, fenced writes, 15-day TTL | Accepted |
 | [0012](0012-time-budget-counts-working-time.md)    | The time budget counts working time across attempts | Accepted |
+| [0013](0013-unknown-tool-outcome.md)              | Unknown tool outcome: repeat only safe-to-repeat tools | Accepted |
 
 ## Template
 

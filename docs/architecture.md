@@ -292,9 +292,16 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
 
 ## Idempotency
 
-- Every tool call gets a key: `hash(run_id, step_number, tool_name, arguments)`.
-- Before executing, conditionally put the key in DynamoDB. If it already exists with a stored
-  result, return that result instead of calling the API again.
+- Every tool call gets a key: SHA-256 of `run_id`, step number, tool name and arguments
+  (canonical JSON). A resumed run gives the same call the same step number, because tools run
+  only after their model turn is checkpointed.
+- Order per call: claim the key (conditional put in the run-state table), call the tool, store
+  the result (tool errors too), then checkpoint the step. A key with a stored result returns
+  that result instead of calling the API again.
+- A key claimed without a result (the worker died during or right after the call) means the
+  outcome is unknown. The call is repeated only if the tool is `read_only` or `idempotent` (MCP
+  annotations); otherwise the run fails, saying so
+  ([ADR 0013](adr/0013-unknown-tool-outcome.md)).
 - This is what makes "worker killed mid-run, zero duplicate Slack posts or issue closes" true.
 
 ## Tool gateway

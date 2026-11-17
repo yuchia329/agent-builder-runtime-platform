@@ -9,8 +9,8 @@ flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
 through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
-progress: run-state store, local table, lease and checkpoints done (ADR 0011, 0012); next
-idempotent tool calls.
+progress: worker side done (lease, checkpoints, idempotent tool calls; ADR 0011-0013); left:
+control-plane sweep and webhook dedupe, then `make chaos`.
 
 ## Approach
 
@@ -170,7 +170,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   test stops a run after step k, a second `handle_run` finishes it with no repeated model calls
   for steps 1..k and the same budget totals.
   ```
-- [ ] `[worker]` idempotent tool calls: key `hash(run_id, step, tool, arguments)`, claim before
+- [x] `[worker]` idempotent tool calls: key `hash(run_id, step, tool, arguments)`, claim before
   ```
   calling, store the result after; a resumed run gets the stored result. Decide in session (ADR
   if it is a rule) what a claimed key without a result means after a crash: retry, fail the
@@ -232,6 +232,17 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-17 · worker** — Idempotent tool calls (ADR 0013). `ToolSpec.read_only` /
+  `idempotent` (MCP annotation names; fake and GitHub tools flagged, `slack.post_message` not).
+  `_execute`: claim key `tool_call_key(run_id, step, call)` (SHA-256), call, store
+  `{content, is_error}`, then checkpoint; stored result reused on resume; claimed without result:
+  repeat if safe, else FAILED "Outcome unknown: ...". Tests: 261 passed (7 new, incl. the
+  roadmap check: worker killed after `add_label` reached the fake GitHub server, resumed, one
+  POST). Live: `make demo` stored two `TOOL#` items with results. Next: `[control-plane]`
+  re-enqueue sweep or webhook dedupe, then `[local-stack]` `make chaos`. Gotchas: claim, store
+  and checkpoint are separate writes, so the claim-to-store window is where "unknown" comes
+  from; a run failed for unknown outcome needs a person to check and rerun; `make demo`
+  republished the stub `issue-triage`, real spec now version 9.
 - **2026-11-16 · worker** — Checkpoints and resume (ADR 0011; ADR 0012: time budget counts
   working time summed over attempts). After every step `handle_run` saves the messages it added
   (`Message.to_json`), its cost, `elapsed_s` and (model turns) `stop_reason`; resume rebuilds

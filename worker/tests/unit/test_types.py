@@ -62,3 +62,19 @@ def test_messages_survive_a_json_round_trip():
 
     assert restored == messages
     assert Message.user("x").to_json() == {"role": "user", "text": "x"}
+
+
+def test_tool_call_key_depends_on_run_step_tool_and_arguments_only():
+    from worker.core.handle_run import tool_call_key
+    from worker.core.types import ToolCall
+
+    call = ToolCall("call_1", "github.add_label", {"label": "bug", "issue_number": 42})
+    same = ToolCall("call_9", "github.add_label", {"issue_number": 42, "label": "bug"})
+
+    key = tool_call_key("run_1", 4, call)
+    assert key == tool_call_key("run_1", 4, same)  # call id and key order do not matter
+    assert len(key) == 64
+    assert key != tool_call_key("run_1", 5, call)
+    assert key != tool_call_key("run_2", 4, call)
+    other = ToolCall("call_1", "github.add_label", {"label": "duplicate", "issue_number": 42})
+    assert key != tool_call_key("run_1", 4, other)

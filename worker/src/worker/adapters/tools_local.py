@@ -57,6 +57,7 @@ SPECS = {
             "required": ["repo", "query"],
             "additionalProperties": False,
         },
+        read_only=True,
     ),
     "github.add_label": ToolSpec(
         "github.add_label",
@@ -72,6 +73,7 @@ SPECS = {
             "required": ["repo", "issue_number", "label"],
             "additionalProperties": False,
         },
+        idempotent=True,  # adding a label the issue already has changes nothing
     ),
 }
 

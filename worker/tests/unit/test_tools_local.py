@@ -138,3 +138,11 @@ def test_client_error_message_reaches_the_model_without_the_token(github):
 def test_unknown_tool(github):
     with pytest.raises(ToolError):
         tools(github).describe(["github.close_issue"])
+
+
+def test_tools_say_whether_a_repeat_is_safe():
+    with FakeGitHubServer() as server:
+        search, label = tools(server).describe(["github.search_issues", "github.add_label"])
+
+    assert search.read_only and search.safe_to_repeat
+    assert label.idempotent and not label.read_only  # adding an existing label changes nothing

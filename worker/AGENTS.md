@@ -101,6 +101,8 @@ Run from `worker/`.
 - Tests that need Docker get `@pytest.mark.docker` (or `marks=` on a `pytest.param`).
 - `ScriptedModel` (tests: one script, records calls) vs `StubModel` (running worker: stateless,
   picks the turn by how many assistant replies the conversation has, safe across concurrent runs).
+- Every tool declares `read_only` / `idempotent` in its `ToolSpec` (ADR 0013). Set them only if
+  true: a repeat after a crash relies on them. No flag means a crash mid-call fails the run.
 - `tools_local.py` holds a real token until the M4 gateway: keep its guardrails (repo
   allowlist, search scoped to the repo, no issue bodies, existing labels only) and add the same
   kind for any new tool. Tool results and errors go to the model; never include the token.

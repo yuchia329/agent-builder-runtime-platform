@@ -136,11 +136,22 @@ class RunUpdate:
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """A tool as offered to the model."""
+    """A tool as offered to the model.
+
+    ``read_only`` (changes nothing) and ``idempotent`` (doing it twice has the same effect as
+    once) follow MCP's tool annotations (readOnlyHint, idempotentHint). Either makes a call safe
+    to repeat when a crash leaves its outcome unknown; a tool with neither is never repeated.
+    """
 
     name: str
     description: str
     input_schema: dict[str, Any]
+    read_only: bool = False
+    idempotent: bool = False
+
+    @property
+    def safe_to_repeat(self) -> bool:
+        return self.read_only or self.idempotent
 
 
 @dataclass(frozen=True)

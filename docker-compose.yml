@@ -62,6 +62,18 @@ services:
       timeout: 2s
       retries: 60
 
+  # Fake GitHub API for `make chaos` only (profile chaos: `make up` does not start it).
+  fake-github:
+    image: python:3.12.8-slim
+    profiles: ["chaos"]
+    command: ["python", "-u", "/local-stack/fake-github.py"]
+    environment:
+      SEARCH_DELAY_SECONDS: "8"
+    ports:
+      - "8099:8099"
+    volumes:
+      - ./local-stack:/local-stack:ro
+
   # Built from worker/Dockerfile: polls the run queue, stub model and fake tools (M0).
   worker:
     build:

@@ -1,0 +1,11 @@
+# Agent for `make chaos`: stub model (search, then add a label, then answer) and the real GitHub
+# tools, which the chaos worker points at the fake-github service.
+name: chaos-demo
+model: stub/demo
+instructions: Triage the issue. Search for duplicates, then add a label.
+trigger: manual.chaos
+acts_as: team-bot
+tools:
+  - github.search_issues
+  - github.add_label
+budget: { max_steps: 20, max_usd: 0.10, max_seconds: 300 }

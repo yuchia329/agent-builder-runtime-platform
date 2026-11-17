@@ -1,4 +1,4 @@
-.PHONY: up stack demo down status logs
+.PHONY: up stack demo chaos down status logs
 
 AWS = docker compose run --rm --no-deps --entrypoint aws aws-init
 STACK = dynamodb elasticmq aws-init
@@ -16,9 +16,13 @@ stack: .env
 demo: .env
 	@sh local-stack/demo.sh
 
+## chaos: kill the worker mid-run and check the run resumes with no duplicate side effect (needs `make up`)
+chaos: .env
+	@sh local-stack/chaos.sh
+
 ## down: stop everything and delete local data
 down:
-	docker compose down -v
+	docker compose --profile chaos down -v
 
 ## status: list the local tables and queues
 status:

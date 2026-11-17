@@ -8,9 +8,10 @@ with real GitHub tools (`TOOLS_PROVIDER=local`) through the local stack, labels 
 flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo` still runs the
 stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
 webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.nova-lite-v1:0`
-through the Converse adapter), though Nova Lite triages worse than MiniMax. M2 (crash safety) in
-progress: worker side, re-enqueue sweep and webhook dedupe done (ADR 0011-0013); left: `make
-chaos`.
+through the Converse adapter), though Nova Lite triages worse than MiniMax. **M2 done (crash
+safety):** lease, per-step checkpoints, idempotent tool calls (ADR 0011-0013), re-enqueue sweep,
+webhook dedupe; `make chaos` kills the worker mid-run with SIGKILL and the run resumes and adds
+its label exactly once. Next: plan M3 (approvals and Slack).
 
 ## Approach
 
@@ -46,7 +47,7 @@ can run alongside 2 to 5. Start a session with
 | --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model                                                                         | Done        |
 | M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Done        |
-| M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | In progress |
+| M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Done        |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Not started |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Not started |
 | M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
@@ -187,7 +188,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   ```
   TTL). Check: the same delivery twice starts one run.
   ```
-- [ ] `[local-stack]` chaos demo: `make chaos` kills the worker container mid-run (stub model,
+- [x] `[local-stack]` chaos demo: `make chaos` kills the worker container mid-run (stub model,
   ```
   fake tools that count calls), restarts it, and checks the run succeeds with no duplicate tool
   call. **M2 done.**
@@ -224,9 +225,9 @@ Changes to `contracts/` that another service still has to adopt. Remove an entry
 service has followed.
 
 - **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
-  Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `local-stack`
-  (`create-tables.sh` enables it like run-state's TTL), `infra` (M6). Until then items never
-  expire; correctness does not depend on it (claims check `ttl` themselves).
+  Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `infra` (M6;
+  `local-stack` done). Until then items never expire; correctness does not depend on it (claims
+  check `ttl` themselves).
 
 - **Internal API and gateway auth is IAM (SigV4) through API Gateway** (ADR 0007). Declared in
   `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`tools_mcp.py` in M4 signs
@@ -237,6 +238,19 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-17 · local-stack** — `make chaos` (`local-stack/chaos.sh`): fake GitHub API
+  (`fake-github.py`, stdlib, compose profile `chaos`, port 8099, search delayed 8 s, request
+  counts at `/_requests`), chaos worker override (`chaos.compose.yml`: real GitHub tools at the
+  fake, dummy token, `RUN_VISIBILITY_SECONDS=10`), agent `chaos-demo` (`chaos-spec.yaml`, stub
+  model). SIGKILLs the worker during the search, restarts it, checks SUCCEEDED, 5 steps, 2
+  searches, 1 add-label. Passed twice on a fresh stack. `create-tables.sh` also enables TTL on
+  the control-plane table. `make demo` still passes (fake tools). **M2 done.** Next: plan M3 tasks
+  (approvals, Slack) in this file before starting them. Gotchas: replacing the worker container
+  leaves its last 20 s long poll open at ElasticMQ, and a message sent then is hidden for the old
+  visibility timeout (chaos waits 21 s; affects any worker swap); the kill lands in the read-only
+  search on purpose: a kill inside add-label repeats the request (idempotent, ADR 0013), so the
+  label is set once but GitHub sees two requests; `make down` now also stops `fake-github`; the
+  stack was reset, real `issue-triage` republished as version 2.
 - **2026-11-17 · control-plane** — Webhook redelivery dedupe. `DeliveryStore` port
   (in-memory, DynamoDB; contract suite): `claim` (conditional put, `DELIVERY#<source>#<id>`,
   `ttl` 7 days, expired item counts as absent), `recordRuns`, `release`. Controller claims

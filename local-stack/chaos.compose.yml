@@ -1,0 +1,14 @@
+# Worker settings for `make chaos` only (local-stack/chaos.sh adds this file to the compose
+# command). Real GitHub tools pointed at the fake-github service, and a short visibility timeout
+# so a killed worker's run comes back in about 10 s. These values override .env.
+services:
+  worker:
+    environment:
+      TOOLS_PROVIDER: local
+      GITHUB_TOKEN: chaos-fake-token
+      GITHUB_REPOS: acme/payments
+      GITHUB_API_URL: http://fake-github:8099
+      RUN_VISIBILITY_SECONDS: "10"
+    depends_on:
+      fake-github:
+        condition: service_started

@@ -22,7 +22,13 @@ info:
     | RUNNING   | WAITING_APPROVAL, SUCCEEDED, FAILED           |
 
     Any other change returns 409. Moving WAITING_APPROVAL back to QUEUED after an approval, or to
-    FAILED after a rejection, is done by the control plane itself (ADR 0002), not through this API.
+    FAILED after a rejection (`approval_rejected`) or a timeout (`approval_expired`), is done by
+    the control plane itself (ADR 0002), not through this API.
+
+    Approvals: once a pending call is decided, the control plane clears `pending_approval` and
+    sets `approval` (the latest decision). A worker that picks the run up again makes the call it
+    paused on only if `approval.decision` is `approved` and `step`, `tool` and `arguments` all
+    equal that call; otherwise it pauses again.
 
     All requests are signed with AWS SigV4; API Gateway checks the signature (ADR 0007).
 servers:
@@ -184,6 +190,8 @@ components:
           $ref: "#/components/schemas/TraceId"
         pending_approval:
           $ref: "#/components/schemas/PendingApproval"
+        approval:
+          $ref: "#/components/schemas/ApprovalDecision"
         failure:
           $ref: "#/components/schemas/Failure"
         output:
@@ -272,6 +280,36 @@ components:
           description: Arguments the model chose for the call.
           type: object
 
+    ApprovalDecision:
+      description: |
+        The latest human decision on a pending call. Set by the control plane only; workers read
+        it and never send it.
+      type: object
+      additionalProperties: false
+      required: [step, tool, arguments, decision, decided_by, decided_at]
+      properties:
+        step:
+          description: Step number of the decided call (equal to the pending call's).
+          type: integer
+          minimum: 1
+        tool:
+          type: string
+          pattern: "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+        arguments:
+          description: Arguments of the decided call, exactly as they were pending.
+          type: object
+        decision:
+          type: string
+          enum: [approved, rejected]
+        decided_by:
+          description: Who decided, for example a Slack user id, or `api` for POST /runs/{id}/approval.
+          type: string
+          minLength: 1
+          maxLength: 200
+        decided_at:
+          type: string
+          format: date-time
+
     Failure:
       type: object
       additionalProperties: false
@@ -279,7 +317,9 @@ components:
       properties:
         reason:
           type: string
-          enum: [budget_steps, budget_usd, budget_seconds, approval_rejected, error]
+          description: |
+            approval_rejected and approval_expired are set by the control plane, never by a worker.
+          enum: [budget_steps, budget_usd, budget_seconds, approval_rejected, approval_expired, error]
         message:
           description: Human-readable detail. Must not contain secrets.
           type: string

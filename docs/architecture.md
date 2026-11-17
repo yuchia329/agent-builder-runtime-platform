@@ -169,7 +169,9 @@ Public and internal JSON use snake_case field names and leave out empty fields.
 Internal endpoints, for workers and the gateway only. API Gateway requires IAM authorization
 (SigV4) on these routes:
 
-- `GET /internal/runs/{id}`: run, spec version, and a signed run token.
+- `GET /internal/runs/{id}`: run, spec version, and a signed run token. Once a pending call is
+  decided, the run carries `approval` (the latest decision); the worker makes the paused call only
+  if it is approved and matches step, tool and arguments.
 - `PATCH /internal/runs/{id}`: status, steps, cost, trace id, pending approval call, failure
   reason, output. Allowed status changes are listed in `contracts/internal-api.openapi.yaml`.
 

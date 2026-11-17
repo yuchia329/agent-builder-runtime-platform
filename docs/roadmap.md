@@ -11,7 +11,7 @@ webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.
 through the Converse adapter), though Nova Lite triages worse than MiniMax. **M2 done (crash
 safety):** lease, per-step checkpoints, idempotent tool calls (ADR 0011-0013), re-enqueue sweep,
 webhook dedupe; `make chaos` kills the worker mid-run with SIGKILL and the run resumes and adds
-its label exactly once. Next: plan M3 (approvals and Slack).
+its label exactly once. Next: M3 (approvals and Slack), tasks below.
 
 ## Approach
 
@@ -194,6 +194,61 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   call. **M2 done.**
   ```
 
+## M3 tasks: approvals and Slack
+
+Work in this order. A `require_approval` tool pauses the run (the worker already reports
+`WAITING_APPROVAL` with the pending call); a person approves or rejects; approved runs resume and
+make the call exactly once, rejected runs fail with `approval_rejected` (ADR 0002).
+
+- [x] `[contracts]` approval decision in the internal API: `GET /internal/runs/{id}` returns
+  ```
+  `approval` (`step`, `tool`, `arguments`, `decision`, `decided_by`, `decided_at`) once a
+  pending call was decided; failure reason `approval_expired`. Check: contracts tests pass;
+  listed under "Cross-service changes" for control-plane and worker.
+  ```
+- [ ] `[control-plane]` approval decisions: store the pending call when a run reports
+  ```
+  `WAITING_APPROVAL`; `POST /runs/{id}/approval` (API key; web approval for development and
+  tests) records the decision once (conditional), approved moves the run to `QUEUED` and
+  enqueues it (the sweep covers a failed enqueue), rejected moves it to `FAILED`
+  `approval_rejected`; the internal GET returns the decision. Check: integration tests,
+  responses validated against the contract.
+  ```
+- [ ] `[worker]` resume after approval: a resumed run whose pending `require_approval` call
+  ```
+  matches an approved decision (step, tool, arguments) makes the call (idempotency key as
+  usual) and continues; no or non-matching decision pauses again. Check: integration test
+  pause, approve, resume runs the call once; a second resume does not repeat it.
+  ```
+- [ ] `[worker]` `github.close_issue` in `tools_local.py` (reason `completed`, `not_planned` or
+  ```
+  `duplicate`; repo allowlist; idempotent: closing a closed issue changes nothing). Check:
+  recorded-response tests.
+  ```
+- [ ] `[control-plane]` Slack `ApprovalChannel`: when a run reports `WAITING_APPROVAL`, post a
+  ```
+  Block Kit message with the call and Approve / Reject buttons (`SLACK_BOT_TOKEN`,
+  `SLACK_APPROVAL_CHANNEL`). A failed post does not fail the worker's PATCH; the sweep posts
+  approvals not yet sent. Check: unit tests with recorded Slack responses; a message appears in
+  a sandbox channel.
+  ```
+- [ ] `[control-plane]` `POST /approvals/slack`: verify the signing secret (v0, 5-minute window),
+  ```
+  read the button click, apply the same decision path as the web approval, update the message
+  to show who decided. Answers within Slack's 3 seconds. Check: Slack's documented signature
+  example; a real click in the sandbox through smee.io.
+  ```
+- [ ] `[control-plane]` approval expiry: the sweep fails runs left `WAITING_APPROVAL` longer than
+  ```
+  `APPROVAL_TIMEOUT_HOURS` (default 72; must stay under the worker's 15-day run-state retention,
+  ADR 0011) with `approval_expired`. Check: unit tests.
+  ```
+- [ ] `[specs]` issue-triage closes confirmed duplicates with `github.close_issue` under
+  ```
+  `require_approval`. Check: a planted duplicate in the sandbox pauses the run, Approve in Slack
+  closes it as duplicate, Reject leaves it open and fails the run. **M3 done.**
+  ```
+
 ## Cost guardrails
 
 - Set an AWS Budgets alert before deploying anything, and a spend limit or alert on every model
@@ -224,6 +279,13 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
+- **Approval decision in the internal API** (`approval` / `ApprovalDecision` on the run,
+  failure reason `approval_expired`). Declared in `contracts/internal-api.openapi.yaml`. Must
+  follow: `control-plane` (on a decision, clear `pending_approval` and set `approval`; set
+  `approval_rejected` / `approval_expired` itself), `worker` (on resume, make the paused call
+  only if `approval.decision` is `approved` and step, tool and arguments equal the pending call;
+  never send `approval` in a PATCH).
+
 - **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
   Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `infra` (M6;
   `local-stack` done). Until then items never expire; correctness does not depend on it (claims
@@ -237,6 +299,15 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-17 · contracts** — M3 planned (task list above). Internal API gains `approval`
+  (`ApprovalDecision`: `step`, `tool`, `arguments`, `decision` approved|rejected, `decided_by`,
+  `decided_at`; latest decision only) on `RunFields`, so GET returns it; `RunUpdate` still
+  rejects it (workers never decide). Failure reason `approval_expired` added; `approval_*`
+  reasons are control-plane only. 11 new contract tests; worker and control-plane suites pass
+  unchanged. Next: `[control-plane]` approval decisions. Gotchas: the worker must compare
+  arguments as JSON values, not strings; `approval` stays on the run after resume (the step
+  number tells the worker whether it is for the current pause).
 
 - **2026-11-17 · local-stack** — `make chaos` (`local-stack/chaos.sh`): fake GitHub API
   (`fake-github.py`, stdlib, compose profile `chaos`, port 8099, search delayed 8 s, request

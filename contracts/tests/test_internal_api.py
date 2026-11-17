@@ -60,6 +60,47 @@ def test_run_update_invalid_example_fails():
     assert not component("RunUpdate").is_valid(load(EXAMPLES / "internal-run-update.invalid.json"))
 
 
+APPROVED = {
+    "step": 4,
+    "tool": "github.close_issue",
+    "arguments": {"repo": "acme/payments", "issue_number": 42, "reason": "duplicate"},
+    "decision": "approved",
+    "decided_by": "U024BE7LH",
+    "decided_at": "2026-11-17T10:00:00Z",
+}
+
+
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+def test_run_with_a_decided_approval_passes(decision):
+    run = copy.deepcopy(load(EXAMPLES / "internal-run.valid.json"))
+    run["approval"] = APPROVED | {"decision": decision}
+    errors = list(component("InternalRun").iter_errors(run))
+    assert errors == [], [e.message for e in errors]
+    assert component("RunSummary").is_valid({k: v for k, v in run.items() if k not in ("spec", "input")})
+
+
+def _without(key):
+    return {k: v for k, v in APPROVED.items() if k != key}
+
+
+BAD_APPROVALS = {
+    "unknown decision": APPROVED | {"decision": "maybe"},
+    "missing decided_by": _without("decided_by"),
+    "empty decided_by": APPROVED | {"decided_by": ""},
+    "missing arguments": _without("arguments"),
+    "bad tool name": APPROVED | {"tool": "close issue"},
+    "step zero": APPROVED | {"step": 0},
+    "unknown field": APPROVED | {"comment": "ok"},
+}
+
+
+@pytest.mark.parametrize("approval", BAD_APPROVALS.values(), ids=BAD_APPROVALS.keys())
+def test_run_with_a_bad_approval_fails(approval):
+    run = copy.deepcopy(load(EXAMPLES / "internal-run.valid.json"))
+    run["approval"] = approval
+    assert not component("InternalRun").is_valid(run)
+
+
 INTERNAL_RUN_BREAKS = {
     "missing spec": lambda r: r.pop("spec"),
     "missing input": lambda r: r.pop("input"),
@@ -81,6 +122,8 @@ OK_UPDATES = {
     "running with progress": {"status": "RUNNING", "steps": 2, "cost_usd": 0.001},
     "succeeded with output": {"status": "SUCCEEDED", "steps": 9, "output": "Labeled as bug."},
     "failed with reason": {"status": "FAILED", "failure": {"reason": "budget_steps", "message": "20 steps"}},
+    "approval_expired is a known reason": {
+        "status": "FAILED", "failure": {"reason": "approval_expired", "message": "72 h"}},
 }
 
 BAD_UPDATES = {
@@ -94,6 +137,7 @@ BAD_UPDATES = {
     "negative cost": {"status": "RUNNING", "cost_usd": -1},
     "bad trace id": {"status": "RUNNING", "trace_id": "not-hex"},
     "unknown field": {"status": "RUNNING", "worker": "w-1"},
+    "workers never send a decision": {"status": "RUNNING", "approval": APPROVED},
     "missing status": {"steps": 1},
 }
 

@@ -1,7 +1,7 @@
 # Demo agent: GitHub issue triage. Sample spec used by tests and local demos.
 # The final version is written in the M1 [specs] task.
 name: issue-triage
-model: anthropic.claude-haiku-5-5
+model: stub/demo
 instructions: >
   Triage new issues for the payments repo. Search for duplicates, add labels,
   and post a short summary to Slack. Never close an issue without approval.

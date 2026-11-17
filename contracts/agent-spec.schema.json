@@ -12,9 +12,9 @@
       "pattern": "^[a-z][a-z0-9-]{1,62}$"
     },
     "model": {
-      "description": "Model id passed to the model provider, for example a Bedrock model id.",
+      "description": "<provider>/<model id>, split at the first '/'. The provider is a name defined in the worker config (ADR 0010), lowercase letters, digits and '_' because it becomes part of env var names; the model id is passed to that provider unchanged and may itself contain '/'. Examples: minimax/MiniMax-M3, openrouter/minimax/minimax-m3, stub/demo.",
       "type": "string",
-      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]{0,31}/\\S+$",
       "maxLength": 200
     },
     "instructions": {

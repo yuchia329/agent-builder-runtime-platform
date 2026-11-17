@@ -36,6 +36,10 @@ No system JDK 21 needed. `gradle/gradle-daemon-jvm.properties` makes Gradle down
 into `~/.gradle/jdks` and run the build on it; the `./gradlew` launcher works on any Java 8+.
 Keep Gradle on 8.14.x while machines may only have Java 11 (Gradle 9 needs Java 17 to launch).
 
+If a build fails with `Could not open cache executionHistory.bin` (`EOFException`), a crashed
+daemon left the cache cut short: `./gradlew --stop && rm -rf .gradle/*/executionHistory`, then
+build again.
+
 ## Conventions
 
 - Package `dev.agentplatform.controlplane`, one package per area (`agent`, `run`, `internal`,

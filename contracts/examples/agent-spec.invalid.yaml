@@ -2,7 +2,7 @@
 # an unknown acts_as value, and no budget.
 name: issue-triage
 version: 3
-model: anthropic.claude-haiku-5-5
+model: stub/demo
 instructions: Triage new issues.
 trigger: github.issue.opened
 acts_as: admin

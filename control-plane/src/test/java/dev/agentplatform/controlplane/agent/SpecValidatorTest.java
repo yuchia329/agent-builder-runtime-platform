@@ -51,7 +51,7 @@ class SpecValidatorTest {
     @Test
     void acceptsJson() {
         var body = """
-                {"name": "triage", "model": "m", "instructions": "i", "trigger": "github.issue.opened",
+                {"name": "triage", "model": "stub/m", "instructions": "i", "trigger": "github.issue.opened",
                  "acts_as": "owner", "tools": ["github.add_label"],
                  "budget": {"max_steps": 5, "max_usd": 0.5, "max_seconds": 60}}
                 """;

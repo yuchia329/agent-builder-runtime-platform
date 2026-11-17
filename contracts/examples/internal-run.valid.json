@@ -10,7 +10,7 @@
   "updated_at": "2026-11-16T18:00:00Z",
   "spec": {
     "name": "issue-triage",
-    "model": "anthropic.claude-haiku-5-5",
+    "model": "stub/demo",
     "instructions": "Triage new issues for the payments repo. Never close an issue without approval.",
     "trigger": "github.issue.opened",
     "acts_as": "team-bot",

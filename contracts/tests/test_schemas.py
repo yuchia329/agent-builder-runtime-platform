@@ -66,6 +66,11 @@ AGENT_SPEC_BREAKS = {
     "budget missing max_usd": lambda s: s["budget"].pop("max_usd"),
     "zero max_steps": lambda s: s["budget"].__setitem__("max_steps", 0),
     "zero max_usd": lambda s: s["budget"].__setitem__("max_usd", 0),
+    "model without provider": _set("model", "MiniMax-M3"),
+    "model with uppercase provider": _set("model", "MiniMax/MiniMax-M3"),
+    "model with hyphen in provider": _set("model", "my-host/llama3.1"),
+    "model with empty id": _set("model", "minimax/"),
+    "model with space": _set("model", "minimax/MiniMax M3"),
 }
 
 
@@ -74,3 +79,12 @@ def test_agent_spec_rule(break_spec):
     spec = copy.deepcopy(load(example("agent-spec", "valid")))
     break_spec(spec)
     assert not validator("agent-spec").is_valid(spec)
+
+
+@pytest.mark.parametrize(
+    "model", ["minimax/MiniMax-M3", "openrouter/minimax/minimax-m3", "local_vllm/llama3.1:8b"]
+)
+def test_agent_spec_model_formats(model):
+    spec = copy.deepcopy(load(example("agent-spec", "valid")))
+    spec["model"] = model
+    assert validator("agent-spec").is_valid(spec)

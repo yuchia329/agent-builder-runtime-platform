@@ -26,6 +26,18 @@ curl -X POST localhost:8080/runs -H 'X-Api-Key: local-dev-key' \
 curl localhost:8080/internal/runs/<run_id>          # no API key on /internal/*
 ```
 
+GitHub webhooks (`POST /triggers/github`, needs `GITHUB_WEBHOOK_SECRET`): sign a test delivery by
+hand, or forward real ones from a repo webhook (content type `application/json`, event Issues,
+same secret) through smee.io:
+
+```sh
+body='{"zen":"hi"}'
+sig="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" -hex | sed 's/.*= //')"
+curl localhost:8080/triggers/github -H 'X-GitHub-Event: ping' -H "X-Hub-Signature-256: $sig" \
+  -H 'Content-Type: application/json' -d "$body"
+npx smee-client --url https://smee.io/<channel> --target http://localhost:8080/triggers/github
+```
+
 Against the local stack (DynamoDB + SQS) instead of memory: `make stack` at the repo root (`make
 up` also starts a control-plane container on 8080), then
 `set -a && . ../.env && set +a && ./gradlew bootRun`.
@@ -42,8 +54,10 @@ build again.
 
 ## Conventions
 
-- Package `dev.agentplatform.controlplane`, one package per area (`agent`, `run`, `internal`,
-  `store`, `queue`, `contract`, `tenant`, `config`, `web`).
+- Package `dev.agentplatform.controlplane`, one package per area (`agent`, `run`, `trigger`,
+  `internal`, `store`, `queue`, `contract`, `tenant`, `config`, `web`).
+- Webhook routes (`/triggers/*`) have no API key; they trust only a valid signature. Keep the
+  verification and payload rules in plain classes (`GitHubWebhooks`) so they test without HTTP.
 - Ports: `AgentStore`, `RunStore` (in `store/`), `RunQueuePublisher` (in `queue/`). Each port has
   an abstract `*ContractTest`; every adapter has a subclass of it. New adapters must pass it.
   DynamoDB tests share one container through `DynamoDbLocal`.
@@ -59,6 +73,6 @@ build again.
   second copy.
 - Jackson 3 (`tools.jackson.*`), not Jackson 2 (`com.fasterxml.jackson.*`).
 - Config comes from env vars via `application.yml` (`STORE_BACKEND`, `CONTROL_PLANE_TABLE`,
-  `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `AWS_ENDPOINT_URL_DYNAMODB`,
-  `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
+  `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`,
+  `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
 - Errors: throw domain exceptions; `web/ApiExceptionHandler` maps them to problem+json.

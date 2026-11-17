@@ -14,7 +14,8 @@ public record PlatformProperties(
         @NotBlank String table,
         @NotNull QueueBackend queueBackend,
         String runQueueUrl,
-        @Valid @NotNull TenantProperties tenant) {
+        @Valid @NotNull TenantProperties tenant,
+        GitHubProperties github) {
 
     public enum StoreBackend { MEMORY, DYNAMODB }
 
@@ -22,4 +23,13 @@ public record PlatformProperties(
 
     /** The single hard-coded tenant used until tenants are stored (M0). */
     public record TenantProperties(@NotBlank String id, @NotBlank String apiKey) {}
+
+    /** {@code webhookSecret} signs GitHub webhooks; blank means the webhook route is off. */
+    public record GitHubProperties(String webhookSecret) {}
+
+    public String githubWebhookSecret() {
+        return github == null || github.webhookSecret() == null || github.webhookSecret().isBlank()
+                ? null
+                : github.webhookSecret();
+    }
 }

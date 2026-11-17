@@ -16,3 +16,5 @@ platform:
   tenant:
     id: ${TENANT_ID:tenant-demo}
     api-key: ${TENANT_API_KEY:}
+  github:
+    webhook-secret: ${GITHUB_WEBHOOK_SECRET:}

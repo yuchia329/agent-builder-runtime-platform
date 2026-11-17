@@ -8,6 +8,7 @@ import dev.agentplatform.controlplane.store.AgentAlreadyExistsException;
 import dev.agentplatform.controlplane.store.AgentNotFoundException;
 import dev.agentplatform.controlplane.store.IllegalTransitionException;
 import dev.agentplatform.controlplane.store.RunNotFoundException;
+import dev.agentplatform.controlplane.trigger.WebhookRejectedException;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +50,11 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         log.error("Run saved as QUEUED but not enqueued", e);
         return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
                 e.getMessage() + "; the run stays QUEUED and will be re-enqueued");
+    }
+
+    @ExceptionHandler
+    ProblemDetail webhookRejected(WebhookRejectedException e) {
+        return ProblemDetail.forStatusAndDetail(e.status(), e.getMessage());
     }
 
     private static ProblemDetail withErrors(String title, String detail, List<String> errors) {

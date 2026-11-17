@@ -149,8 +149,17 @@ Public endpoints, all tenant-scoped, authenticated by per-tenant API key:
 - `GET /runs/{id}`: status, steps, cost, trace id, pending approval, failure, output.
 
 Public and internal JSON use snake_case field names and leave out empty fields.
-- `POST /triggers/github`: GitHub webhook. Verify `X-Hub-Signature-256`, match agents by trigger,
-  create runs, enqueue.
+- `POST /triggers/github`: GitHub webhook, no API key. Verifies `X-Hub-Signature-256` (HMAC-SHA256
+  of the raw body with `GITHUB_WEBHOOK_SECRET`, constant-time compare; 401 if wrong, 503 if no
+  secret is set). The trigger is `github.<object>.<action>` from `X-GitHub-Event` and the body's
+  `action` (`issues` is named `issue`: `github.issue.opened`). Starts one run per agent whose
+  active version has that trigger, and answers 202 `{"runs": [...]}` (`ping`: 200, no runs).
+  The run input is trimmed for `issues` events to `action`, `repository.full_name`, the issue's
+  number, title, body, state, URL, label names and author login, and `sender.login`: the full
+  payload is 10-30 KB, mostly URLs, and the model rereads the input on every step. Other events
+  pass through whole. Until the GitHub App (M4) maps an installation to a tenant, only agents of
+  the configured tenant are matched. Redeliveries (same `X-GitHub-Delivery`) are not
+  deduplicated yet (M2 idempotency).
 - `POST /approvals/slack`: Slack interactivity callback. Verify the signing secret, record the
   decision, re-enqueue the run.
 
@@ -320,6 +329,7 @@ definition environment, with secrets from Secrets Manager.
 | Token store         | gateway                                | `TOKEN_STORE=secrets_manager\|memory`, `KMS_KEY_ID`     |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`         |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`               |
+| GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
 | Local AWS endpoints | all                                    | `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS` (unset in AWS; read by both AWS SDKs) |
 | Tenant (M0 only)    | control plane                          | `TENANT_ID`, `TENANT_API_KEY`                           |
 
@@ -402,8 +412,8 @@ contracts/
 control-plane/                  Java 21, Spring Boot 4, Gradle (see control-plane/AGENTS.md)
   dynamodb/                     control-plane table definition
   src/main/java/dev/agentplatform/controlplane/
-                                one package per area: agent, store, tenant, config, web;
-                                later run, trigger, approval, internal, queue, lambda
+                                one package per area: agent, run, trigger, internal, store,
+                                queue, contract, tenant, config, web; later approval, lambda
 
 worker/                         Python 3.12, uv, own agent loop (see worker/AGENTS.md)
   src/worker/                   core/ (no vendor imports), ports/, adapters/, entrypoints/,

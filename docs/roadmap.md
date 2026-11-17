@@ -6,8 +6,9 @@ the target design and should change only when the design does.
 **Status:** M1 done (MVP): `specs/issue-triage.yaml` runs on real MiniMax (`minimax/MiniMax-M3`)
 with real GitHub tools (`TOOLS_PROVIDER=local`) through the local stack, labels a new issue and
 flags a planted duplicate (steps in `specs/README.md`). M0 `make up && make demo` still runs the
-stub spec. Optional M1 tasks remain (Bedrock adapter, `POST /triggers/github`); next required work
-is M2 (crash safety).
+stub spec. Opening an issue in the sandbox starts a run by itself (`POST /triggers/github`, signed
+webhook delivered locally through smee.io). Optional M1 task left: Bedrock adapter; next required
+work is M2 (crash safety).
 
 ## Approach
 
@@ -137,7 +138,7 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
   ADR 0009, ADR 0010). Needs AWS credentials and Bedrock model access; keep them out of
   `.env`'s fake local keys. Check: same `Model` contract suite, one real run on Bedrock.
   ```
-- [ ] `[control-plane]` (optional) `POST /triggers/github` with HMAC check; deliver webhooks
+- [x] `[control-plane]` (optional) `POST /triggers/github` with HMAC check; deliver webhooks
   ```
   locally with smee.io. Check: opening an issue starts a run.
   ```
@@ -190,6 +191,25 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-17 · control-plane** — `POST /triggers/github` (package `trigger`):
+  `GitHubWebhooks` (HMAC check, trigger name, run input) + `GitHubWebhookController`;
+  `RunService.startForTrigger` (configured tenant only, sorted by agent name);
+  `WebhookRejectedException` mapped in `ApiExceptionHandler`. Config `GITHUB_WEBHOOK_SECRET`
+  (`platform.github.webhook-secret`; unset = 503). `issues` events trimmed to the fields agents
+  need (see architecture), others pass through. Tests: 89 passed (14 new, incl. GitHub's
+  documented signature example; recorded-style payload `src/test/resources/github/`). Live:
+  webhook on the sandbox repo -> smee.io -> local stack; GitHub `ping` 200; opening #5 "App
+  crashes when uploading a PNG over 5 MB" started a run automatically: `SUCCEEDED`, 9 steps,
+  9 s, $0.0021, labeled `bug`, correctly no `duplicate` (closes last session's negative-check
+  gap). `.env.example` (local-stack) got a commented `GITHUB_WEBHOOK_SECRET`. Next: optional
+  `[worker]` Bedrock adapter, or M2. Gotchas: the webhook needs content type
+  `application/json` (form-encoded gets 400); the smee forwarder
+  (`npx smee-client --url <smee url> --target http://localhost:8080/triggers/github`) must be
+  running or events are lost; while webhook + stack + forwarder are up, every sandbox issue is
+  a real ~$0.002 run; rebuild the control-plane image after code changes
+  (`docker compose up -d --build control-plane`); a failed enqueue partway through several
+  matching agents leaves the rest unstarted (503, sweep is M2); redeliveries create duplicate
+  runs until M2.
 - **2026-11-17 · specs** — Final `specs/issue-triage.yaml`: `minimax/MiniMax-M3`, only
   `github.search_issues` + `github.add_label`, budget 15 steps / $0.05 / 180 s; instructions: 1-3
   keyword searches, exactly one type label, `duplicate` only when confident, never close or

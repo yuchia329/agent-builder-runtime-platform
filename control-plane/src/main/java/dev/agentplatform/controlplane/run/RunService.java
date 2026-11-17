@@ -6,7 +6,10 @@ import dev.agentplatform.controlplane.store.AgentNotFoundException;
 import dev.agentplatform.controlplane.store.AgentStore;
 import dev.agentplatform.controlplane.store.RunNotFoundException;
 import dev.agentplatform.controlplane.store.RunStore;
+import dev.agentplatform.controlplane.agent.Agent;
 import java.time.Clock;
+import java.util.Comparator;
+import java.util.List;
 import java.util.HexFormat;
 import java.security.SecureRandom;
 import org.springframework.stereotype.Service;
@@ -46,6 +49,20 @@ public class RunService {
         runs.create(run);
         queue.publish(new RunMessage(run.runId(), tenantId));
         return run;
+    }
+
+    /**
+     * Starts a run of every agent of this tenant whose active version listens to {@code trigger}.
+     * Agents of other tenants are never matched. Returns the started runs (none if no agent
+     * matches). If enqueueing fails partway, the runs saved so far stay QUEUED and the
+     * {@link dev.agentplatform.controlplane.queue.RunQueueException} propagates.
+     */
+    public List<Run> startForTrigger(String tenantId, String trigger, String inputJson) {
+        return agents.findAgentsByTrigger(trigger).stream()
+                .filter(agent -> agent.tenantId().equals(tenantId))
+                .sorted(Comparator.comparing(Agent::name))
+                .map(agent -> start(tenantId, agent.name(), inputJson))
+                .toList();
     }
 
     /** A run as its tenant sees it; another tenant's run is reported as not found. */

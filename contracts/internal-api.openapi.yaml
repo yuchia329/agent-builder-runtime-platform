@@ -1,0 +1,296 @@
+openapi: 3.1.0
+info:
+  title: Control plane internal API
+  version: 1.0.0
+  description: |
+    Calls from workers (and, from M4, the tool gateway) to the control plane (ADR 0001).
+    Workers never read the control-plane table; they load a run and report its progress here.
+
+    Run states (docs/product.md):
+
+        QUEUED ─▶ RUNNING ─▶ WAITING_APPROVAL ─▶ (control plane re-queues) ─▶ QUEUED ─▶ RUNNING
+                     │
+                     ├─▶ SUCCEEDED
+                     └─▶ FAILED
+
+    Status changes a caller may request with PATCH:
+
+    | From      | To                                            |
+    | --------- | --------------------------------------------- |
+    | QUEUED    | RUNNING                                       |
+    | RUNNING   | RUNNING (progress, or resume after a crash)   |
+    | RUNNING   | WAITING_APPROVAL, SUCCEEDED, FAILED           |
+
+    Any other change returns 409. Moving WAITING_APPROVAL back to QUEUED after an approval, or to
+    FAILED after a rejection, is done by the control plane itself (ADR 0002), not through this API.
+
+    All requests are signed with AWS SigV4; API Gateway checks the signature (ADR 0007).
+servers:
+  - url: /
+    description: Same host as the public API (API Gateway custom domain, or localhost:8080 locally)
+security:
+  - sigv4: []
+tags:
+  - name: runs
+    description: Load a run and report its progress
+paths:
+  /internal/runs/{run_id}:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Load a run with its pinned spec version
+      description: |
+        Called by a worker after it receives a run message (contracts/run-message.schema.json).
+      responses:
+        "200":
+          description: The run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalRun"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateRun
+      tags: [runs]
+      summary: Report a run's status and progress
+      description: |
+        Sending the same update twice is safe: a RUNNING → RUNNING update only refreshes progress,
+        and a repeated final update returns 409 without changing the run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunUpdate"
+      responses:
+        "200":
+          description: The run after the update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The requested status change is not allowed from the run's current status
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+components:
+  securitySchemes:
+    sigv4:
+      type: apiKey
+      name: Authorization
+      in: header
+      description: AWS Signature Version 4, signed with the caller's IAM role.
+      x-amazon-apigateway-authtype: awsSigv4
+
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/RunId"
+
+  responses:
+    BadRequest:
+      description: The body is malformed or breaks a rule
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Missing or invalid SigV4 signature (returned by API Gateway)
+    NotFound:
+      description: No run with this id
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+  schemas:
+    RunId:
+      type: string
+      minLength: 1
+      maxLength: 64
+
+    RunStatus:
+      type: string
+      enum: [QUEUED, RUNNING, WAITING_APPROVAL, SUCCEEDED, FAILED]
+
+    Steps:
+      description: Steps completed so far (model turns plus tool calls).
+      type: integer
+      minimum: 0
+
+    CostUsd:
+      description: Model cost so far, in US dollars.
+      type: number
+      minimum: 0
+
+    TraceId:
+      description: OpenTelemetry trace id of the run.
+      type: string
+      pattern: "^[0-9a-f]{32}$"
+
+    Output:
+      description: Final answer or summary of the run, when SUCCEEDED.
+      type: string
+      maxLength: 100000
+
+    RunSummary:
+      description: A run without its spec and input.
+      allOf:
+        - $ref: "#/components/schemas/RunFields"
+      unevaluatedProperties: false
+
+    RunFields:
+      description: Fields shared by RunSummary and InternalRun. Open on purpose; each closes itself.
+      type: object
+      required: [run_id, tenant_id, agent_name, agent_version, status, steps, cost_usd,
+                 created_at, updated_at]
+      properties:
+        run_id:
+          $ref: "#/components/schemas/RunId"
+        tenant_id:
+          type: string
+          minLength: 1
+        agent_name:
+          type: string
+          minLength: 1
+        agent_version:
+          description: The spec version this run is pinned to.
+          type: integer
+          minimum: 1
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        steps:
+          $ref: "#/components/schemas/Steps"
+        cost_usd:
+          $ref: "#/components/schemas/CostUsd"
+        trace_id:
+          $ref: "#/components/schemas/TraceId"
+        pending_approval:
+          $ref: "#/components/schemas/PendingApproval"
+        failure:
+          $ref: "#/components/schemas/Failure"
+        output:
+          $ref: "#/components/schemas/Output"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    InternalRun:
+      description: Everything a worker needs to execute a run.
+      allOf:
+        - $ref: "#/components/schemas/RunFields"
+      unevaluatedProperties: false
+      required: [spec, input]
+      properties:
+        spec:
+          description: The exact published spec of agent_version.
+          $ref: "agent-spec.schema.json"
+        input:
+          description: |
+            What started the run: the trigger event payload (for example a GitHub webhook body),
+            or the input given to POST /runs. Free-form.
+          type: object
+        run_token:
+          description: |
+            Signed JWT the worker attaches to tool gateway calls (ADR 0003). Issued from M4;
+            absent before then.
+          type: string
+
+    RunUpdate:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          description: The status to move to. See the allowed changes in the API description.
+          type: string
+          enum: [RUNNING, WAITING_APPROVAL, SUCCEEDED, FAILED]
+        steps:
+          $ref: "#/components/schemas/Steps"
+        cost_usd:
+          $ref: "#/components/schemas/CostUsd"
+        trace_id:
+          $ref: "#/components/schemas/TraceId"
+        pending_approval:
+          $ref: "#/components/schemas/PendingApproval"
+        failure:
+          $ref: "#/components/schemas/Failure"
+        output:
+          $ref: "#/components/schemas/Output"
+      allOf:
+        - if:
+            properties: { status: { const: WAITING_APPROVAL } }
+          then:
+            required: [pending_approval]
+          else:
+            not: { required: [pending_approval] }
+        - if:
+            properties: { status: { const: FAILED } }
+          then:
+            required: [failure]
+          else:
+            not: { required: [failure] }
+        - if:
+            properties: { status: { not: { const: SUCCEEDED } } }
+          then:
+            not: { required: [output] }
+
+    PendingApproval:
+      description: The tool call waiting for a human decision (a tool in the spec's require_approval).
+      type: object
+      additionalProperties: false
+      required: [step, tool, arguments]
+      properties:
+        step:
+          description: Step number of the tool call.
+          type: integer
+          minimum: 1
+        tool:
+          type: string
+          pattern: "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+        arguments:
+          description: Arguments the model chose for the call.
+          type: object
+
+    Failure:
+      type: object
+      additionalProperties: false
+      required: [reason, message]
+      properties:
+        reason:
+          type: string
+          enum: [budget_steps, budget_usd, budget_seconds, approval_rejected, error]
+        message:
+          description: Human-readable detail. Must not contain secrets.
+          type: string
+          maxLength: 2000
+
+    Problem:
+      description: RFC 9457 problem details.
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }

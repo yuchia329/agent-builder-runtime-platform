@@ -1,0 +1,11 @@
+{
+  "status": "WAITING_APPROVAL",
+  "steps": 6,
+  "cost_usd": 0.0042,
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "pending_approval": {
+    "step": 7,
+    "tool": "github.close_issue",
+    "arguments": { "owner": "acme", "repo": "payments", "issue_number": 42, "reason": "duplicate" }
+  }
+}

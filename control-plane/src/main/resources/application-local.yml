@@ -1,0 +1,4 @@
+# Local development defaults. Never use this key outside your machine.
+platform:
+  tenant:
+    api-key: ${TENANT_API_KEY:local-dev-key}

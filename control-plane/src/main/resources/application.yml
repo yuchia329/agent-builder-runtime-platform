@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: control-plane
+  main:
+    banner-mode: off
+
+platform:
+  store-backend: ${STORE_BACKEND:memory}
+  table: ${CONTROL_PLANE_TABLE:control-plane}
+  tenant:
+    id: ${TENANT_ID:tenant-demo}
+    api-key: ${TENANT_API_KEY:}

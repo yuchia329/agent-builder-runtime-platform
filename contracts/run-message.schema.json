@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Run message",
+  "description": "Body of a message on the SQS run queue. The control plane sends it; the worker receives it and loads everything else through the internal API (ADR 0001). Delivery is at least once, so the same run_id may arrive more than once.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "tenant_id"],
+  "properties": {
+    "schema_version": {
+      "description": "Shape version of this message. Bump on any breaking change.",
+      "const": 1
+    },
+    "run_id": {
+      "description": "Run to execute.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "tenant_id": {
+      "description": "Tenant that owns the run. For logs and traces; the worker trusts the internal API, not this field.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  }
+}

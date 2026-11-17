@@ -1,0 +1,10 @@
+# Invalid on purpose: has a version field (the platform assigns versions),
+# an unknown acts_as value, and no budget.
+name: issue-triage
+version: 3
+model: anthropic.claude-haiku-5-5
+instructions: Triage new issues.
+trigger: github.issue.opened
+acts_as: admin
+tools:
+  - github.add_label

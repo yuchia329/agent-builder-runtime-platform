@@ -1,0 +1,26 @@
+{
+  "run_id": "run_01JD2Q7Z5K8M3N4P6R9S0T1V2W",
+  "tenant_id": "tenant-demo",
+  "agent_name": "issue-triage",
+  "agent_version": 3,
+  "status": "QUEUED",
+  "steps": 0,
+  "cost_usd": 0,
+  "created_at": "2026-11-16T18:00:00Z",
+  "updated_at": "2026-11-16T18:00:00Z",
+  "spec": {
+    "name": "issue-triage",
+    "model": "anthropic.claude-haiku-5-5",
+    "instructions": "Triage new issues for the payments repo. Never close an issue without approval.",
+    "trigger": "github.issue.opened",
+    "acts_as": "team-bot",
+    "tools": ["github.search_issues", "github.add_label", "github.close_issue", "slack.post_message"],
+    "require_approval": ["github.close_issue"],
+    "budget": { "max_steps": 20, "max_usd": 0.1, "max_seconds": 300 }
+  },
+  "input": {
+    "action": "opened",
+    "repository": { "full_name": "acme/payments" },
+    "issue": { "number": 42, "title": "Refund fails for EUR cards" }
+  }
+}

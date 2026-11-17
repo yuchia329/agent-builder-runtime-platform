@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent spec",
+  "description": "What an agent author publishes. The control plane stores each publish as a new immutable version and assigns the version number itself, so the spec has no version field. Rule not expressible here and enforced by the control plane: every entry of require_approval must also appear in tools.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "model", "instructions", "trigger", "acts_as", "tools", "budget"],
+  "properties": {
+    "name": {
+      "description": "Agent name, unique within a tenant. Lowercase slug.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "model": {
+      "description": "Model id passed to the model provider, for example a Bedrock model id.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "instructions": {
+      "description": "System instructions for the agent.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "trigger": {
+      "description": "Event that starts a run: <source>.<object>.<action>, for example github.issue.opened.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+    },
+    "acts_as": {
+      "description": "Whose credentials the run uses (ADR 0003).",
+      "type": "string",
+      "enum": ["owner", "team-bot"]
+    },
+    "tools": {
+      "description": "Tools the agent may call, as <connector>.<operation>.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/toolName" }
+    },
+    "require_approval": {
+      "description": "Tools that pause the run for a human approval before they run. Each must also be listed in tools.",
+      "type": "array",
+      "uniqueItems": true,
+      "default": [],
+      "items": { "$ref": "#/$defs/toolName" }
+    },
+    "budget": {
+      "description": "Per-run limits. A run over any limit ends FAILED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_steps", "max_usd", "max_seconds"],
+      "properties": {
+        "max_steps": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "max_usd": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+        "max_seconds": { "type": "integer", "minimum": 1, "maximum": 3600 }
+      }
+    }
+  },
+  "$defs": {
+    "toolName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+    }
+  }
+}

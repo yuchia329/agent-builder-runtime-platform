@@ -21,7 +21,8 @@ Rules:
 | [0006](0006-separate-tool-gateway.md)               | Tool gateway as a separate service, built in stages  | Accepted |
 | [0007](0007-serverless-scale-to-zero-deployment.md) | Serverless, scale-to-zero deployment                 | Accepted |
 | [0008](0008-control-plane-data-in-dynamodb.md)      | Control-plane data in DynamoDB                       | Accepted |
-| [0009](0009-worker-owns-agent-loop.md)              | The worker owns the agent loop                       | Accepted |
+| [0009](0009-worker-owns-agent-loop.md)              | The worker owns the agent loop                       | Accepted, Bedrock-only adapter plan superseded by 0010 |
+| [0010](0010-provider-neutral-model-layer.md)        | Provider-neutral model layer                         | Accepted |
 
 ## Template
 

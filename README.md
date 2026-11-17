@@ -4,7 +4,8 @@ A multi-tenant platform where a team creates an AI agent by writing a declarativ
 the platform runs that agent reliably whenever its trigger fires.
 
 - **Control plane** (Java, Spring Boot) versions agent specs and turns events into runs.
-- **Workers** (Python) run each agent's loop on Amazon Bedrock, checking every model reply against
+- **Workers** (Python) run each agent's loop on any configured model provider (MiniMax, OpenAI,
+  OpenRouter, Gemini, Amazon Bedrock, a self-hosted server), checking every model reply against
   the spec and budget, and checkpointing every step so a crashed worker resumes without repeating
   side effects.
 - **Tool gateway** (Python, MCP) exposes real APIs as tools and is the only component that holds
@@ -17,7 +18,7 @@ to Slack, and asks a human before closing anything.
 ## Status
 
 M0 (local skeleton) done: publish a spec and run it end to end on your machine with a stub model.
-Next: M1, a real agent on Bedrock. See the [roadmap](docs/roadmap.md).
+Next: M1, a real agent on a real model (MiniMax first). See the [roadmap](docs/roadmap.md).
 
 ## Documentation
 

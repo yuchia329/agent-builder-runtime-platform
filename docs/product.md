@@ -48,7 +48,7 @@ What an agent author writes:
 
 ```yaml
 name: issue-triage
-model: anthropic.claude-haiku-5-5 # any Bedrock model id
+model: minimax/MiniMax-M3 # <provider>/<model id>; providers are set in the worker config
 instructions: Triage new issues for the payments repo. Never close an issue without approval.
 trigger: github.issue.opened
 acts_as: team-bot # owner | team-bot

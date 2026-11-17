@@ -1,6 +1,6 @@
 # 0009. The worker owns the agent loop
 
-- Status: Accepted
+- Status: Accepted; the Bedrock-only adapter plan is superseded by [0010](0010-provider-neutral-model-layer.md)
 - Date: 2026-11-16
 - Supersedes: the "no custom port for the model" part of [ADR 0004](0004-ports-and-adapters.md)
 

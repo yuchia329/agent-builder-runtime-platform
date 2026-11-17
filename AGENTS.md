@@ -4,7 +4,8 @@ Instructions for AI coding agents (Claude Code, Cursor, others). This file is th
 tool-specific files only point here.
 
 Multi-tenant platform: teams publish a declarative agent spec; a Java control plane versions it and
-turns trigger events into runs; Python workers execute runs on Amazon Bedrock; a Python tool
+turns trigger events into runs; Python workers execute runs on any configured model provider
+(MiniMax, OpenAI-compatible APIs, Amazon Bedrock, self-hosted; ADR 0010); a Python tool
 gateway is the only path to outside APIs. Everything scales to zero when idle: control plane and
 gateway on Lambda, workers on Fargate scaled to 0 (ADR 0007). See README.md for the overview.
 
@@ -30,7 +31,7 @@ Do not break these without a new ADR.
 
 - Only `control-plane/` touches the control-plane DynamoDB table. Workers use its internal API
   (ADR 0001, ADR 0008).
-- Only `worker/` touches the run-state DynamoDB table and Bedrock.
+- Only `worker/` touches the run-state DynamoDB table and calls model providers (ADR 0010).
 - Only `tool-gateway/` holds credentials and calls outside APIs (ADR 0006).
 - Services talk only through shapes defined in `contracts/`: the SQS run message, the internal run
   API, MCP calls with a signed run token (ADR 0003).

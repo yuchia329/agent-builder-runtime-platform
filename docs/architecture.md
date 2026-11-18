@@ -338,7 +338,8 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
 - Built in stages: in M1 tool calls run inside the worker; in M4 they move into this service
   ([ADR 0006](adr/0006-separate-tool-gateway.md)). The M1 adapter (`worker/.../tools_local.py`)
   already enforces what the gateway will: a repo allowlist, search kept inside the repo, short
-  results without issue bodies, and labels limited to existing ones.
+  results without issue bodies, labels limited to existing ones, and closing only real issues
+  (read first: pull requests refused, an already closed issue left as it is).
 - Runs on Lambda behind the shared API Gateway. `/mcp` requires IAM authorization (SigV4) and a
   valid run token. MCP uses stateless Streamable HTTP with JSON responses, so nothing depends on a
   warm instance. OAuth callback routes are public.

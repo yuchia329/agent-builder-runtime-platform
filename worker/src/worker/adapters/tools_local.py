@@ -10,6 +10,10 @@ holds the token, so it also enforces the limits a gateway would:
   context, and less text written by outsiders for the model to read.
 - ``add_label`` only adds labels that already exist in the repo (GitHub would create any new
   name the model invents); the error lists the existing labels so the model can pick one.
+- ``close_issue`` reads the issue first: a pull request is refused (the issues endpoint would
+  close it), and an already closed issue is left as it is (a second PATCH would overwrite its
+  close reason, so the tool is idempotent only because it checks). ``duplicate_of`` must be
+  another issue in the same repo; it is linked by GitHub's issue id. No comment is posted.
 
 Errors become ToolError with GitHub's message (shown to the model; never the token). 5xx and
 network errors are retried with backoff; rate limits are reported, not waited out.
@@ -34,6 +38,7 @@ log = logging.getLogger(__name__)
 RETRY_STATUSES = frozenset({500, 502, 503, 504})
 SEARCH_LIMIT = 10
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+CLOSE_REASONS = ("completed", "not_planned", "duplicate")
 SCOPE_QUALIFIER = re.compile(r"(?:^|\s)-?(repo|org|user|owner):", re.IGNORECASE)
 
 _REPO_PROPERTY = {
@@ -74,6 +79,24 @@ SPECS = {
             "additionalProperties": False,
         },
         idempotent=True,  # adding a label the issue already has changes nothing
+    ),
+    "github.close_issue": ToolSpec(
+        "github.close_issue",
+        "Close an issue. reason: 'completed' (fixed or done), 'not_planned' (won't do) or "
+        "'duplicate' (give duplicate_of, the number of the original issue in the same "
+        "repository). Closing an issue that is already closed changes nothing.",
+        {
+            "type": "object",
+            "properties": {
+                "repo": _REPO_PROPERTY,
+                "issue_number": {"type": "integer", "minimum": 1},
+                "reason": {"type": "string", "enum": list(CLOSE_REASONS)},
+                "duplicate_of": {"type": "integer", "minimum": 1},
+            },
+            "required": ["repo", "issue_number", "reason"],
+            "additionalProperties": False,
+        },
+        idempotent=True,  # an already closed issue is reported, never closed again
     ),
 }
 
@@ -117,6 +140,15 @@ class GitHubTools:
         if name == "github.add_label":
             repo = self._repo(arguments["repo"])
             return self._add_label(repo, int(arguments["issue_number"]), arguments["label"])
+        if name == "github.close_issue":
+            repo = self._repo(arguments["repo"])
+            duplicate_of = arguments.get("duplicate_of")
+            return self._close_issue(
+                repo,
+                int(arguments["issue_number"]),
+                arguments["reason"],
+                None if duplicate_of is None else int(duplicate_of),
+            )
         raise ToolError(f"Unknown tool: {name}")
 
     # --- tools ---------------------------------------------------------------------------------
@@ -157,6 +189,37 @@ class GitHubTools:
             "POST", f"/repos/{repo}/issues/{issue_number}/labels", json={"labels": [label]}
         )
         return {"issue_number": issue_number, "labels": [item["name"] for item in labels]}
+
+    def _close_issue(
+        self, repo: str, number: int, reason: str, duplicate_of: int | None
+    ) -> dict[str, Any]:
+        if reason not in CLOSE_REASONS:
+            raise ToolError(f"reason must be one of: {', '.join(CLOSE_REASONS)}")
+        if duplicate_of is not None and reason != "duplicate":
+            raise ToolError("duplicate_of is only allowed with reason 'duplicate'")
+        if duplicate_of == number:
+            raise ToolError("An issue cannot be a duplicate of itself")
+        issue = self._issue(repo, number)
+        if issue["state"] == "closed":
+            return _closed(issue, already_closed=True)
+        body: dict[str, Any] = {"state": "closed", "state_reason": reason}
+        if duplicate_of is not None:
+            body["duplicate_issue_id"] = self._issue(repo, duplicate_of)["id"]
+        closed = self._request("PATCH", f"/repos/{repo}/issues/{number}", json=body)
+        return _closed(closed, already_closed=False) | (
+            {"duplicate_of": duplicate_of} if duplicate_of is not None else {}
+        )
+
+    def _issue(self, repo: str, number: int) -> dict[str, Any]:
+        """An issue of the repo; pull requests (also served by /issues) are refused."""
+        response = self._send("GET", f"/repos/{repo}/issues/{number}")
+        if response.status_code in (404, 410):
+            raise ToolError(f"Issue #{number} does not exist in {repo}")
+        self._check(response)
+        issue = response.json()
+        if "pull_request" in issue:
+            raise ToolError(f"#{number} in {repo} is a pull request, not an issue")
+        return issue
 
     # --- HTTP ----------------------------------------------------------------------------------
 
@@ -204,6 +267,16 @@ class GitHubTools:
         if rate_limited:
             raise ToolError("GitHub rate limit reached; try again later")
         raise ToolError(f"GitHub returned {response.status_code}: {message}")
+
+
+def _closed(issue: dict[str, Any], *, already_closed: bool) -> dict[str, Any]:
+    return {
+        "issue_number": issue["number"],
+        "state": issue["state"],
+        "state_reason": issue.get("state_reason"),
+        "already_closed": already_closed,
+        "url": issue["html_url"],
+    }
 
 
 def _message(response: httpx.Response) -> str:

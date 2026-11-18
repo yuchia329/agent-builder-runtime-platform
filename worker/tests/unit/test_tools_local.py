@@ -8,6 +8,8 @@ from worker.core.errors import ToolError
 
 TOKEN = "github_pat_test_secret"
 LABELS_PATH = f"/repos/{REPO}/issues/1/labels"
+ISSUE_PATH = f"/repos/{REPO}/issues/7"  # recorded: an open issue, closed as duplicate of #1
+ORIGINAL_PATH = f"/repos/{REPO}/issues/1"
 
 
 @pytest.fixture
@@ -17,6 +19,9 @@ def github():
         server.on("GET", f"/repos/{REPO}/labels/bug", fixture("label"))
         server.on("GET", f"/repos/{REPO}/labels", fixture("labels"))
         server.on("POST", LABELS_PATH, fixture("add_labels"))
+        server.on("GET", ISSUE_PATH, fixture("issue"))
+        server.on("GET", ORIGINAL_PATH, fixture("issue_original"))
+        server.on("PATCH", ISSUE_PATH, fixture("issue_closed"))
         yield server
 
 
@@ -137,12 +142,135 @@ def test_client_error_message_reaches_the_model_without_the_token(github):
 
 def test_unknown_tool(github):
     with pytest.raises(ToolError):
-        tools(github).describe(["github.close_issue"])
+        tools(github).describe(["github.delete_repo"])
+    with pytest.raises(ToolError, match="Unknown tool"):
+        tools(github).call("github.delete_repo", {"repo": REPO})
 
 
 def test_tools_say_whether_a_repeat_is_safe():
     with FakeGitHubServer() as server:
-        search, label = tools(server).describe(["github.search_issues", "github.add_label"])
+        search, label, close = tools(server).describe(
+            ["github.search_issues", "github.add_label", "github.close_issue"]
+        )
 
     assert search.read_only and search.safe_to_repeat
     assert label.idempotent and not label.read_only  # adding an existing label changes nothing
+    assert close.idempotent and not close.read_only  # a closed issue is reported, not re-closed
+
+
+# --- close_issue ------------------------------------------------------------------------------
+
+
+def close(server, reason="duplicate", repo=REPO, number=7, **extra):
+    arguments = {"repo": repo, "issue_number": number, "reason": reason} | extra
+    return tools(server).call("github.close_issue", arguments)
+
+
+def patches(server):
+    return [r for r in server.requests if r.method == "PATCH"]
+
+
+def test_close_as_duplicate_links_the_original_by_id(github):
+    result = close(github, duplicate_of=1)
+
+    assert result == {
+        "issue_number": 7,
+        "state": "closed",
+        "state_reason": "duplicate",
+        "already_closed": False,
+        "url": "https://github.com/octocat/Hello-World/issues/7",
+        "duplicate_of": 1,
+    }
+    [patch] = patches(github)
+    assert patch.path == ISSUE_PATH
+    assert patch.body == {
+        "state": "closed",
+        "state_reason": "duplicate",
+        "duplicate_issue_id": fixture("issue_original")["id"],  # id, not the #number
+    }
+
+
+@pytest.mark.parametrize("reason", ["completed", "not_planned"])
+def test_close_with_other_reasons_sends_only_state_and_reason(github, reason):
+    close(github, reason)
+
+    assert patches(github)[0].body == {"state": "closed", "state_reason": reason}
+
+
+def test_already_closed_issue_is_reported_not_closed_again(github):
+    # Recorded: a second PATCH on a closed issue answers 200 and overwrites its close reason.
+    github.on("GET", ISSUE_PATH, fixture("issue_closed"))
+
+    result = close(github, "completed")
+
+    assert result["already_closed"] is True
+    assert result["state_reason"] == "duplicate"  # unchanged
+    assert patches(github) == []
+
+
+def test_pull_request_is_refused(github):
+    github.on("GET", ISSUE_PATH, fixture("issue") | {"pull_request": {"url": "x"}})
+
+    with pytest.raises(ToolError, match="pull request"):
+        close(github, "completed")
+    assert patches(github) == []
+
+
+def test_duplicate_of_a_pull_request_is_refused(github):
+    github.on("GET", ORIGINAL_PATH, fixture("issue_original") | {"pull_request": {"url": "x"}})
+
+    with pytest.raises(ToolError, match="pull request"):
+        close(github, duplicate_of=1)
+    assert patches(github) == []
+
+
+@pytest.mark.parametrize(
+    ("number", "extra", "message"),
+    [
+        (7, {"duplicate_of": 99}, "#99 does not exist"),
+        (7, {"duplicate_of": 7}, "duplicate of itself"),
+        (99, {}, "#99 does not exist"),
+    ],
+)
+def test_missing_or_self_referencing_issues_are_refused(github, number, extra, message):
+    with pytest.raises(ToolError, match=message):
+        close(github, number=number, **extra)
+    assert patches(github) == []
+
+
+def test_duplicate_of_needs_reason_duplicate(github):
+    with pytest.raises(ToolError, match="only allowed with reason 'duplicate'"):
+        close(github, "completed", duplicate_of=1)
+    assert github.requests == []
+
+
+def test_unknown_reason_is_refused(github):
+    with pytest.raises(ToolError, match="reason must be one of"):
+        close(github, "spam")
+    assert github.requests == []
+
+
+def test_close_in_another_repo_is_refused(github):
+    with pytest.raises(ToolError, match="not allowed"):
+        close(github, "completed", repo="octocat/other")
+    assert github.requests == []
+
+
+def test_close_retries_server_errors(github):
+    github.fail_next(502, times=2)
+
+    assert close(github, "completed")["state"] == "closed"
+
+
+def test_close_result_has_no_body_or_token(github):
+    result = close(github, duplicate_of=1)
+
+    assert set(result) == {
+        "issue_number",
+        "state",
+        "state_reason",
+        "already_closed",
+        "url",
+        "duplicate_of",
+    }
+    assert TOKEN not in str(result)

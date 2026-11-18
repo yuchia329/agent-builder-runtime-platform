@@ -47,6 +47,9 @@ class FakeGitHubServer:
             def do_POST(self) -> None:  # noqa: N802
                 server._handle(self, "POST")
 
+            def do_PATCH(self) -> None:  # noqa: N802
+                server._handle(self, "PATCH")
+
             def log_message(self, *args: Any) -> None:
                 pass
 

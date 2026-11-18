@@ -48,7 +48,7 @@ can run alongside 2 to 5. Start a session with
 | M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model                                                                         | Done        |
 | M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Done        |
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Done        |
-| M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Not started |
+| M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | In progress |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Not started |
 | M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
@@ -220,7 +220,7 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   usual) and continues; no or non-matching decision pauses again. Check: integration test
   pause, approve, resume runs the call once; a second resume does not repeat it.
   ```
-- [ ] `[worker]` `github.close_issue` in `tools_local.py` (reason `completed`, `not_planned` or
+- [x] `[worker]` `github.close_issue` in `tools_local.py` (reason `completed`, `not_planned` or
   ```
   `duplicate`; repo allowlist; idempotent: closing a closed issue changes nothing). Check:
   recorded-response tests.
@@ -297,6 +297,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-17 · worker** — `github.close_issue` in `tools_local.py` (`reason` `completed`,
+  `not_planned` or `duplicate`; optional `duplicate_of`; `idempotent`, not `read_only`). It reads
+  the issue first: an already closed issue is reported (`already_closed: true`) without a write,
+  pull requests and missing issues are refused; `duplicate_of` needs reason `duplicate`, must be
+  another issue in the same repo, and is sent as `duplicate_issue_id` (the issue's id, looked
+  up, not its number). No comment is posted. Fixtures recorded from the sandbox (throwaway issue
+  #7, now closed; planted duplicates #4 and #6 untouched). 288 tests pass. Next:
+  `[control-plane]` Slack `ApprovalChannel` (needs a free Slack workspace and app: give exact
+  setup steps). Gotchas: recorded, a second PATCH on a closed issue answers 200 and overwrites
+  its `state_reason`, so the read-first check is what makes the tool idempotent; GitHub's PATCH
+  reply does not show the duplicate link; `/issues/{n}` also serves pull requests.
 
 - **2026-11-17 · worker** — Resume after approval: `RunRecord.approval` (`ApprovalDecision`); in
   `_after_turn` a `require_approval` call runs (through `_execute`, idempotency key as usual)

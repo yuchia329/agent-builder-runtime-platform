@@ -108,8 +108,11 @@ Run from `worker/`.
 - Every tool declares `read_only` / `idempotent` in its `ToolSpec` (ADR 0013). Set them only if
   true: a repeat after a crash relies on them. No flag means a crash mid-call fails the run.
 - `tools_local.py` holds a real token until the M4 gateway: keep its guardrails (repo
-  allowlist, search scoped to the repo, no issue bodies, existing labels only) and add the same
-  kind for any new tool. Tool results and errors go to the model; never include the token.
+  allowlist, search scoped to the repo, no issue bodies, existing labels only; `close_issue`
+  reads the issue first, refuses pull requests, never re-closes, links `duplicate_of` by issue
+  id in the same repo, posts no comment) and add the same kind for any new tool. GitHub write
+  calls are often not idempotent (a re-PATCH overwrites `state_reason`): record a repeat
+  before marking a tool `idempotent`. Tool results and errors go to the model; never include the token.
 - Recorded GitHub fixtures are cleaned: owner/repo become `octocat/Hello-World`; users, avatars,
   node ids and bodies are removed. Check with `grep -ri <your-login> tests/fixtures` before
   committing a new recording.

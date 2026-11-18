@@ -3,6 +3,7 @@ package dev.agentplatform.controlplane.store;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.agentplatform.controlplane.approval.ApprovalMessage;
 import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.ApprovalDecision.Decision;
 import dev.agentplatform.controlplane.run.Run;
@@ -376,6 +377,99 @@ abstract class RunStoreContractTest {
         queuedRun(T0.plusSeconds(2));
 
         var listed = store.findQueuedBefore(T1, 3).stream().map(Run::runId).toList();
+
+        assertThat(listed).containsExactly(first.runId(), subSecond.runId(), later.runId());
+    }
+
+    // Approval posts (approval sweep)
+
+    private static final ApprovalMessage POSTED = new ApprovalMessage("C0123456789", "1794980400.000100");
+
+    private List<String> unsentBefore(Instant cutoff) {
+        return store.findUnsentApprovalsBefore(cutoff, 100).stream().map(Run::runId).toList();
+    }
+
+    @Test
+    void waitingRunIsUnsentUntilItsCallIsPosted() {
+        var run = waitingRun(PENDING); // waiting since T1
+
+        assertThat(unsentBefore(T1)).isEmpty(); // strictly before
+        assertThat(unsentBefore(T1.plusMillis(1))).containsExactly(run.runId());
+        assertThat(store.findUnsentApprovalsBefore(T1.plusMillis(1), 10).getFirst()).isEqualTo(run);
+
+        assertThat(store.markApprovalSent(run.runId(), PENDING, POSTED)).isTrue();
+
+        assertThat(store.find(run.runId()).orElseThrow().approvalMessage()).isEqualTo(POSTED);
+        assertThat(unsentBefore(T1.plusSeconds(60))).isEmpty();
+    }
+
+    @Test
+    void aPendingCallIsMarkedSentOnce() {
+        var run = waitingRun(PENDING);
+        store.markApprovalSent(run.runId(), PENDING, POSTED);
+
+        var second = new ApprovalMessage("C0123456789", "1794980401.000200");
+        assertThat(store.markApprovalSent(run.runId(), PENDING, second)).isFalse();
+        assertThat(store.find(run.runId()).orElseThrow().approvalMessage()).isEqualTo(POSTED);
+    }
+
+    @Test
+    void markingAnotherCallADecidedRunOrAMissingRunIsFalse() {
+        var other = "{\"step\":9,\"tool\":\"github.close_issue\",\"arguments\":{\"issue_number\":43}}";
+        var run = waitingRun(PENDING);
+
+        assertThat(store.markApprovalSent(run.runId(), other, POSTED)).isFalse();
+        store.decideApproval(run.runId(), PENDING, decision(PENDING, Decision.rejected), T1);
+        assertThat(store.markApprovalSent(run.runId(), PENDING, POSTED)).isFalse();
+        assertThat(store.find(run.runId()).orElseThrow().approvalMessage()).isNull();
+        assertThat(store.markApprovalSent("run_missing", PENDING, POSTED)).isFalse();
+    }
+
+    @Test
+    void decidedRunsAreNotUnsent() {
+        var approved = waitingRun(PENDING);
+        var rejected = waitingRun(PENDING);
+
+        store.decideApproval(approved.runId(), PENDING, decision(PENDING, Decision.approved), T1);
+        store.decideApproval(rejected.runId(), PENDING, decision(PENDING, Decision.rejected), T1);
+
+        assertThat(unsentBefore(T1.plusSeconds(60))).isEmpty();
+        assertThat(queuedBefore(T1.plusSeconds(60))).containsExactly(approved.runId());
+    }
+
+    @Test
+    void decisionKeepsTheMessageAndANewPauseStartsUnsent() {
+        var run = waitingRun(PENDING);
+        store.markApprovalSent(run.runId(), PENDING, POSTED);
+        var decided = store.decideApproval(run.runId(), PENDING, decision(PENDING, Decision.approved), T1);
+        assertThat(decided.approvalMessage()).isEqualTo(POSTED); // the decision can update the message
+        store.update(run.runId(), to(RunStatus.RUNNING), T1);
+        var next = "{\"step\":9,\"tool\":\"github.close_issue\",\"arguments\":{\"issue_number\":43}}";
+        var later = T1.plusSeconds(30);
+
+        var paused = store.update(run.runId(),
+                new RunUpdate(RunStatus.WAITING_APPROVAL, null, null, null, next, null, null), later);
+
+        assertThat(paused.approvalMessage()).isNull();
+        assertThat(store.find(run.runId()).orElseThrow().approvalMessage()).isNull();
+        assertThat(unsentBefore(later)).isEmpty(); // waiting since the new pause
+        assertThat(unsentBefore(later.plusMillis(1))).containsExactly(run.runId());
+    }
+
+    private Run waitingSince(Instant at) {
+        var run = queuedRun();
+        store.update(run.runId(), to(RunStatus.RUNNING), at);
+        return store.update(run.runId(), new RunUpdate(RunStatus.WAITING_APPROVAL, null, null, null, PENDING, null, null), at);
+    }
+
+    @Test
+    void unsentRunsComeOldestFirstUpToTheLimit() {
+        var later = waitingSince(T1.plusSeconds(1));
+        var first = waitingSince(T1);
+        var subSecond = waitingSince(T1.plusMillis(500)); // fractional seconds must sort by time
+        waitingSince(T1.plusSeconds(2));
+
+        var listed = store.findUnsentApprovalsBefore(T1.plusSeconds(60), 3).stream().map(Run::runId).toList();
 
         assertThat(listed).containsExactly(first.runId(), subSecond.runId(), later.runId());
     }

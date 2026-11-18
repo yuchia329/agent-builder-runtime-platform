@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.approval.ApprovalMessage;
 import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunUpdate;
@@ -16,6 +17,7 @@ public class InMemoryRunStore implements RunStore {
 
     private final Map<String, Run> runs = new HashMap<>();
     private final Map<String, Instant> queuedAt = new HashMap<>(); // QUEUED runs only
+    private final Map<String, Instant> unsentSince = new HashMap<>(); // WAITING_APPROVAL, not posted
 
     @Override
     public synchronized void create(Run run) {
@@ -47,6 +49,11 @@ public class InMemoryRunStore implements RunStore {
             queuedAt.put(runId, now);
         } else {
             queuedAt.remove(runId);
+        }
+        if (updated.status() == RunStatus.WAITING_APPROVAL) {
+            unsentSince.put(runId, now);
+        } else {
+            unsentSince.remove(runId);
         }
         return updated;
     }
@@ -85,9 +92,33 @@ public class InMemoryRunStore implements RunStore {
         }
         var updated = current.decided(decision, now);
         runs.put(runId, updated);
+        unsentSince.remove(runId);
         if (updated.status() == RunStatus.QUEUED) {
             queuedAt.put(runId, now);
         }
         return updated;
+    }
+
+    @Override
+    public synchronized List<Run> findUnsentApprovalsBefore(Instant cutoff, int limit) {
+        return unsentSince.entrySet().stream()
+                .filter(e -> e.getValue().isBefore(cutoff))
+                .sorted(Map.Entry.<String, Instant>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
+                .limit(limit)
+                .map(e -> runs.get(e.getKey()))
+                .toList();
+    }
+
+    @Override
+    public synchronized boolean markApprovalSent(String runId, String pendingApprovalJson, ApprovalMessage message) {
+        var current = runs.get(runId);
+        if (current == null || current.status() != RunStatus.WAITING_APPROVAL
+                || !Objects.equals(current.pendingApprovalJson(), pendingApprovalJson)
+                || current.approvalMessage() != null) {
+            return false;
+        }
+        runs.put(runId, current.withApprovalMessage(message));
+        unsentSince.remove(runId);
+        return true;
     }
 }

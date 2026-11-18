@@ -16,7 +16,8 @@ public record PlatformProperties(
         String runQueueUrl,
         @Valid @NotNull TenantProperties tenant,
         GitHubProperties github,
-        SweepProperties sweep) {
+        SweepProperties sweep,
+        SlackProperties slack) {
 
     public enum StoreBackend { MEMORY, DYNAMODB }
 
@@ -33,6 +34,30 @@ public record PlatformProperties(
      * than {@code queuedAfterSeconds}.
      */
     public record SweepProperties(Integer intervalSeconds, Integer queuedAfterSeconds) {}
+
+    /**
+     * Slack bot for approval requests: {@code botToken} (scope chat:write; blank means approvals
+     * are only logged), {@code approvalChannel} (channel id), {@code apiUrl} (tests point it at a
+     * fake Slack).
+     */
+    public record SlackProperties(String botToken, String approvalChannel, String apiUrl) {}
+
+    public String slackBotToken() {
+        return slack == null ? null : blankToNull(slack.botToken());
+    }
+
+    public String slackApprovalChannel() {
+        return slack == null ? null : blankToNull(slack.approvalChannel());
+    }
+
+    public String slackApiUrl() {
+        var url = slack == null ? null : blankToNull(slack.apiUrl());
+        return url == null ? "https://slack.com/api" : url;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
 
     public int sweepQueuedAfterSeconds() {
         return sweep == null || sweep.queuedAfterSeconds() == null ? 300 : sweep.queuedAfterSeconds();

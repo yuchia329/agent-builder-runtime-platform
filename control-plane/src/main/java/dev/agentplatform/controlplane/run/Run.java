@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.run;
 
+import dev.agentplatform.controlplane.approval.ApprovalMessage;
 import java.math.BigDecimal;
 import java.time.Instant;
 
@@ -7,7 +8,8 @@ import java.time.Instant;
  * One execution of an agent version. Free-form parts ({@code inputJson},
  * {@code pendingApprovalJson}, {@code approvalJson}) are kept as JSON text; nullable fields are
  * absent until reported. {@code approvalJson} is the latest decision on a pending call
- * (ApprovalDecision in contracts/internal-api.openapi.yaml).
+ * (ApprovalDecision in contracts/internal-api.openapi.yaml). {@code approvalMessage} is where the
+ * pending call was posted for a person (absent until posted; each new pause starts without one).
  */
 public record Run(
         String runId,
@@ -20,6 +22,7 @@ public record Run(
         String traceId,
         String pendingApprovalJson,
         String approvalJson,
+        ApprovalMessage approvalMessage,
         Failure failure,
         String output,
         String inputJson,
@@ -31,10 +34,13 @@ public record Run(
     public static Run queued(String runId, String tenantId, String agentName, int agentVersion,
                              String inputJson, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, RunStatus.QUEUED, 0, BigDecimal.ZERO,
-                null, null, null, null, null, inputJson, now, now);
+                null, null, null, null, null, null, inputJson, now, now);
     }
 
-    /** Applies an update; null fields in the update leave the current value. */
+    /**
+     * Applies an update; null fields in the update leave the current value. A new pause
+     * (WAITING_APPROVAL) has not been posted yet, so it drops the previous approval message.
+     */
     public Run with(RunUpdate update, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, update.status(),
                 update.steps() != null ? update.steps() : steps,
@@ -42,6 +48,7 @@ public record Run(
                 update.traceId() != null ? update.traceId() : traceId,
                 update.pendingApprovalJson() != null ? update.pendingApprovalJson() : pendingApprovalJson,
                 approvalJson,
+                update.status() == RunStatus.WAITING_APPROVAL ? null : approvalMessage,
                 update.failure() != null ? update.failure() : failure,
                 update.output() != null ? update.output() : output,
                 inputJson, createdAt, now);
@@ -53,7 +60,13 @@ public record Run(
      */
     public Run decided(ApprovalDecision decision, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, decision.nextStatus(), steps, costUsd, traceId,
-                null, decision.toJson(), decision.approved() ? failure : decision.failure(), output, inputJson,
-                createdAt, now);
+                null, decision.toJson(), approvalMessage, decision.approved() ? failure : decision.failure(), output,
+                inputJson, createdAt, now);
+    }
+
+    /** The run with its pending call posted at {@code message}. */
+    public Run withApprovalMessage(ApprovalMessage message) {
+        return new Run(runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId, pendingApprovalJson,
+                approvalJson, message, failure, output, inputJson, createdAt, updatedAt);
     }
 }

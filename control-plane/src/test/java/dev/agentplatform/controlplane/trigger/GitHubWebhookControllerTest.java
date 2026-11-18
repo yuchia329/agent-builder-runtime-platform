@@ -1,5 +1,7 @@
 package dev.agentplatform.controlplane.trigger;
 
+import dev.agentplatform.controlplane.approval.ApprovalNotifier;
+import dev.agentplatform.controlplane.approval.InMemoryApprovalChannel;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -25,7 +27,7 @@ class GitHubWebhookControllerTest {
     private static final String BODY = "{\"action\":\"opened\",\"issue\":{\"number\":1}}";
     private static final PlatformProperties PROPS = new PlatformProperties(
             PlatformProperties.StoreBackend.MEMORY, "t", PlatformProperties.QueueBackend.MEMORY, null,
-            new PlatformProperties.TenantProperties("t1", "key"), new PlatformProperties.GitHubProperties(SECRET), null);
+            new PlatformProperties.TenantProperties("t1", "key"), new PlatformProperties.GitHubProperties(SECRET), null, null);
 
     private final Clock clock = Clock.systemUTC();
     private final InMemoryRunStore runs = new InMemoryRunStore();
@@ -34,7 +36,8 @@ class GitHubWebhookControllerTest {
     private GitHubWebhookController controller(InMemoryAgentStore agents, RunQueuePublisher queue) {
         agents.createAgent("t1", "triage");
         agents.publishVersion("t1", "triage", "github.issue.opened", "{}");
-        return new GitHubWebhookController(new RunService(agents, runs, queue, clock), deliveries, clock, PROPS);
+        return new GitHubWebhookController(new RunService(agents, runs, queue,
+                new ApprovalNotifier(new InMemoryApprovalChannel(), runs), clock), deliveries, clock, PROPS);
     }
 
     private static GitHubWebhookController.Started deliver(GitHubWebhookController c, String delivery) {

@@ -182,8 +182,16 @@ Internal endpoints, for workers and the gateway only. API Gateway requires IAM a
 - `PATCH /internal/runs/{id}`: status, steps, cost, trace id, pending approval call, failure
   reason, output. Allowed status changes are listed in `contracts/internal-api.openapi.yaml`.
 
-When a worker reports `WAITING_APPROVAL`, the control plane posts the Slack Approve / Reject
-buttons ([ADR 0002](adr/0002-control-plane-owns-approvals.md)).
+When a worker reports `WAITING_APPROVAL`, the control plane posts the pending call with Approve /
+Reject buttons through the `ApprovalChannel` port
+([ADR 0002](adr/0002-control-plane-owns-approvals.md)): Slack `chat.postMessage` to
+`SLACK_APPROVAL_CHANNEL` (agent, run, step, the arguments as literal preformatted text cut at 3,000
+characters; both buttons carry `{run_id, step}`). Without `SLACK_BOT_TOKEN` requests are only
+logged. The post happens inside the worker's PATCH with short timeouts (2 s connect, 3 s answer);
+a failed post does not fail the PATCH. Where it was posted (channel, message id) is saved on the
+run, only if the run still waits on the same call, so the decision can update the message. The
+approval sweep posts runs left unsent for 60 s, up to 20 per sweep, stopping at the first failure.
+The PATCH and the sweep can rarely post one call twice; a decision is still recorded once.
 
 Every endpoint must answer in seconds (Slack expects a reply within 3, API Gateway cuts off at
 30). Anything slower goes on the queue.
@@ -201,7 +209,8 @@ the table from that file.
 | Agent, its versions            | `PK=TENANT#<t>#AGENT#<a>`, `SK=META` or `VERSION#<10-digit n>`               | Built    |
 | Agents by trigger (webhooks)   | `GSI1PK=TRIGGER#<event>`, `GSI1SK=TENANT#<t>#AGENT#<a>` on the agent item    | Built    |
 | Tenant by API key              | `PK=APIKEY#<hash>`                                                           | Planned  |
-| Run and its approval           | `PK=RUN#<id>`, `SK=META` (`pendingApproval`, latest `approval` as JSON attributes) | Built |
+| Run and its approval           | `PK=RUN#<id>`, `SK=META` (`pendingApproval`, latest `approval` as JSON attributes; `approvalChannel`, `approvalMessageId` once posted) | Built |
+| Runs waiting for approval      | `GSI1PK=RUNS#APPROVAL_UNSENT` or `RUNS#APPROVAL_SENT`, `GSI1SK=<waiting-since, 13-digit epoch millis>#<runId>` on the run item (only while `WAITING_APPROVAL`) | Built |
 | Runs of an agent, newest first | `GSI2PK=TENANT#<t>#AGENT#<a>`, `GSI2SK=<created time>#<run id>` on the run item | Keys written, no query yet |
 
 - Publishing reads the agent's `latestVersion` n, then in one transaction sets it to n+1 (only if
@@ -217,6 +226,10 @@ the table from that file.
   published, so it is re-sent at most once per threshold; a second message for a slow run is
   harmless (worker lease and status check). Locally a Spring schedule runs it; on Lambda,
   EventBridge Scheduler invokes it (M6), since a function is frozen between requests.
+- The same schedule runs the approval sweep. A run moving to `WAITING_APPROVAL` enters
+  `RUNS#APPROVAL_UNSENT`; recording its post moves it to `RUNS#APPROVAL_SENT` (same sort key); any
+  other status, including a rejection, removes it. The sweep reads only the unsent partition;
+  approval expiry reads both.
 
 The same Spring Boot app runs as a normal server locally and behind a Lambda handler in AWS. Keep
 startup light for SnapStart: no eager network calls or connections at startup.
@@ -377,7 +390,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock Converse (M1) |
 | `ToolClient`        | worker        | `describe(names)` returns tool schemas; `call(name, args)` returns a result or raises `ToolError`    | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
-| `ApprovalChannel`   | control plane | Send an approval request; verify a callback into an `ApprovalDecision`                               | Slack                                      |
+| `ApprovalChannel`   | control plane | Post an approval request, return where it went; failures raise `ApprovalChannelException` (callback verification: next task) | Slack, in-memory (logs only)               |
 | `TokenStore`        | gateway       | Store and load encrypted tokens per identity and provider                                            | Secrets Manager, in-memory                 |
 
 - Each port has one contract test suite that runs against every adapter.
@@ -402,7 +415,7 @@ definition environment, with secrets from Secrets Manager.
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=secrets_manager\|memory`, `KMS_KEY_ID`     |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`         |
-| Slack bot           | control plane                          | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`               |
+| Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
 | Re-enqueue sweep    | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300) |
 | Local AWS endpoints | all                                    | `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS` (unset in AWS; read by both AWS SDKs) |
@@ -488,7 +501,7 @@ control-plane/                  Java 21, Spring Boot 4, Gradle (see control-plan
   dynamodb/                     control-plane table definition
   src/main/java/dev/agentplatform/controlplane/
                                 one package per area: agent, run, trigger, internal, store,
-                                queue, contract, tenant, config, web; later approval, lambda
+                                queue, contract, tenant, config, web, approval; later lambda
 
 worker/                         Python 3.12, uv, own agent loop (see worker/AGENTS.md)
   src/worker/                   core/ (no vendor imports), ports/, adapters/, entrypoints/,

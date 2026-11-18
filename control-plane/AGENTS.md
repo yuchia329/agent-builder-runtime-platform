@@ -38,6 +38,14 @@ curl localhost:8080/triggers/github -H 'X-GitHub-Event: ping' -H "X-Hub-Signatur
 npx smee-client --url https://smee.io/<channel> --target http://localhost:8080/triggers/github
 ```
 
+Slack approvals (`SLACK_BOT_TOKEN`, `SLACK_APPROVAL_CHANNEL` in `../.env`; unset = only logged):
+create an app at api.slack.com/apps (From scratch, Paste a manifest) with bot scope `chat:write`,
+`token_rotation_enabled: false` and interactivity off until `/approvals/slack` exists; Install to
+Workspace, copy the `xoxb-` Bot User OAuth Token and the Signing Secret (Basic Information), run
+`/invite @<app>` in the channel, take its Channel ID from the channel details. Try it: start with
+`set -a && . ../.env && set +a && STORE_BACKEND=memory QUEUE_BACKEND=memory ./gradlew bootRun`,
+start a run, PATCH it `RUNNING` then `WAITING_APPROVAL` with a `pending_approval`.
+
 Against the local stack (DynamoDB + SQS) instead of memory: `make stack` at the repo root (`make
 up` also starts a control-plane container on 8080), then
 `set -a && . ../.env && set +a && ./gradlew bootRun`.
@@ -65,7 +73,8 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 - Tests bind the server to `127.0.0.1` (`SERVER_ADDRESS` in `build.gradle.kts`) and call
   `127.0.0.1`, never `localhost`: `localhost` can resolve to `::1`, where another process (a Gradle
   daemon) may hold the same random port; symptom: every request 404 or "Invalid status line".
-- Ports: `AgentStore`, `RunStore` (in `store/`), `RunQueuePublisher` (in `queue/`). Each port has
+- Ports: `AgentStore`, `RunStore` (in `store/`), `RunQueuePublisher` (in `queue/`),
+  `ApprovalChannel` (in `approval/`). Each port has
   an abstract `*ContractTest`; every adapter has a subclass of it. New adapters must pass it.
   DynamoDB tests share one container through `DynamoDbLocal`.
 - Shapes from `contracts/` are checked with `ContractValidator` against the bundled files, never
@@ -83,7 +92,8 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 - Jackson 3 (`tools.jackson.*`), not Jackson 2 (`com.fasterxml.jackson.*`).
 - Config comes from env vars via `application.yml` (`STORE_BACKEND`, `CONTROL_PLANE_TABLE`,
   `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`,
-  `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`,
+  `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
+  `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`,
   `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
 - Errors: throw domain exceptions; `web/ApiExceptionHandler` maps them to problem+json.
 - Scheduled work is a plain class with a `...Once()` method (`RunSweeper.sweepOnce`) plus a thin
@@ -93,3 +103,11 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   trailing zeros, so text order breaks within a second). `GSI2SK` still uses `toString()`.
 - A class with two constructors needs `@Autowired` on the one Spring should use.
 - `InMemoryRunQueuePublisher.bodies()` returns a snapshot; read it again when polling.
+- Slack answers HTTP 200 for errors (`{"ok": false, "error"}`): check `ok`, never the status
+  alone, and do not branch on error names (a bad token gave `internal_error`). Model-chosen text
+  goes in `rich_text_preformatted` (shown literally), never in mrkdwn.
+- Posting approval requests never fails the worker's PATCH (`ApprovalNotifier` returns an
+  outcome, does not throw); a missed post is the approval sweep's job.
+- Slack fixtures (`src/test/resources/fixtures/slack/`) are recorded response bodies with
+  workspace, user, bot and app ids and bot profile removed, channel `C0123456789`; tests replay
+  them with `FakeSlackServer`. Recording posts to the real channel: delete probe messages after.

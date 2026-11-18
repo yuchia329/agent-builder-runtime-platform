@@ -1,12 +1,13 @@
 package dev.agentplatform.controlplane.run;
 
+import dev.agentplatform.controlplane.approval.ApprovalSweeper;
 import java.util.concurrent.TimeUnit;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Runs the sweep every {@code SWEEP_INTERVAL_SECONDS} while the app runs as a server. Off when the
+ * Runs the sweeps (re-enqueue, then approval posts) every {@code SWEEP_INTERVAL_SECONDS} while the app runs as a server. Off when the
  * interval is 0 (tests, Lambda: a function between requests is frozen, so EventBridge Scheduler
  * calls the sweep there instead, M6).
  */
@@ -15,9 +16,11 @@ import org.springframework.stereotype.Component;
 class RunSweepSchedule {
 
     private final RunSweeper sweeper;
+    private final ApprovalSweeper approvals;
 
-    RunSweepSchedule(RunSweeper sweeper) {
+    RunSweepSchedule(RunSweeper sweeper, ApprovalSweeper approvals) {
         this.sweeper = sweeper;
+        this.approvals = approvals;
     }
 
     @Scheduled(
@@ -26,5 +29,6 @@ class RunSweepSchedule {
             timeUnit = TimeUnit.SECONDS)
     void sweep() {
         sweeper.sweepOnce();
+        approvals.postUnsentOnce();
     }
 }

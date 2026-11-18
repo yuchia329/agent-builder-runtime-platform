@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.approval.ApprovalMessage;
 import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunStatus;
@@ -24,15 +25,19 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionChe
  * <pre>
  * Run  PK = RUN#&lt;id&gt;  SK = META
  *      runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId,
- *      pendingApproval (JSON), approval (JSON), failureReason, failureMessage, output, input (JSON),
- *      createdAt, updatedAt
+ *      pendingApproval (JSON), approval (JSON), approvalChannel, approvalMessageId, failureReason,
+ *      failureMessage, output, input (JSON), createdAt, updatedAt
  *      GSI2PK = TENANT#&lt;t&gt;#AGENT#&lt;name&gt;  GSI2SK = &lt;createdAt&gt;#&lt;runId&gt;  (runs of an agent by time)
  *      GSI1PK = RUNS#QUEUED  GSI1SK = &lt;queued-at epoch millis, 13 digits&gt;#&lt;runId&gt;
  *        (only while QUEUED: a sparse index of queued runs for the re-enqueue sweep)
+ *      GSI1PK = RUNS#APPROVAL_UNSENT | RUNS#APPROVAL_SENT
+ *      GSI1SK = &lt;waiting-since epoch millis, 13 digits&gt;#&lt;runId&gt;
+ *        (only while WAITING_APPROVAL: UNSENT until the call is posted, then SENT; the approval
+ *        sweep reads UNSENT, approval expiry reads both)
  * </pre>
  *
- * GSI1 is shared with agents ({@code TRIGGER#...} keys); the {@code RUNS#QUEUED} partition never
- * collides with them. Queued-at is zero-padded epoch millis so text order is time order.
+ * GSI1 is shared with agents ({@code TRIGGER#...} keys); the {@code RUNS#...} partitions never
+ * collide with them. Queued-at is zero-padded epoch millis so text order is time order.
  *
  * A status change is one conditional update: it applies only if the item exists and its status is
  * one of {@link RunStatus#allowedFrom()}. A decision is one conditional update on status
@@ -67,7 +72,7 @@ public class DynamoDbRunStore implements RunStore {
         item.put("GSI2SK", s(run.createdAt() + "#" + run.runId()));
         if (run.status() == RunStatus.QUEUED) {
             item.put("GSI1PK", s(QUEUED_PK));
-            item.put("GSI1SK", s(queuedSk(run.createdAt(), run.runId())));
+            item.put("GSI1SK", s(indexSk(run.createdAt(), run.runId())));
         }
         try {
             dynamo.putItem(r -> r.tableName(table).item(item).conditionExpression("attribute_not_exists(PK)"));
@@ -115,14 +120,23 @@ public class DynamoDbRunStore implements RunStore {
             values.put(":output", s(update.output()));
         }
 
-        var queued = update.status() == RunStatus.QUEUED;
-        if (queued) {
-            sets.add("GSI1PK = :queuedPk");
-            sets.add("GSI1SK = :queuedSk");
-            values.put(":queuedPk", s(QUEUED_PK));
-            values.put(":queuedSk", s(queuedSk(now, runId)));
+        var removes = new ArrayList<String>();
+        if (update.status() == RunStatus.QUEUED) {
+            sets.add("GSI1PK = :indexPk");
+            sets.add("GSI1SK = :indexSk");
+            values.put(":indexPk", s(QUEUED_PK));
+            values.put(":indexSk", s(indexSk(now, runId)));
+        } else if (update.status() == RunStatus.WAITING_APPROVAL) {
+            sets.add("GSI1PK = :indexPk");
+            sets.add("GSI1SK = :indexSk");
+            values.put(":indexPk", s(UNSENT_PK));
+            values.put(":indexSk", s(indexSk(now, runId)));
+            removes.addAll(List.of("approvalChannel", "approvalMessageId")); // a new pause is not posted yet
+        } else {
+            removes.addAll(List.of("GSI1PK", "GSI1SK"));
         }
-        var expression = "SET " + String.join(", ", sets) + (queued ? "" : " REMOVE GSI1PK, GSI1SK");
+        var expression = "SET " + String.join(", ", sets)
+                + (removes.isEmpty() ? "" : " REMOVE " + String.join(", ", removes));
 
         var allowed = new ArrayList<String>();
         for (var from : update.status().allowedFrom()) {
@@ -176,7 +190,7 @@ public class DynamoDbRunStore implements RunStore {
                     .conditionExpression("#status = :queued")
                     .expressionAttributeNames(Map.of("#status", "status"))
                     .expressionAttributeValues(Map.of(
-                            ":sk", s(queuedSk(now, runId)),
+                            ":sk", s(indexSk(now, runId)),
                             ":queued", s(RunStatus.QUEUED.name()))));
             return true;
         } catch (ConditionalCheckFailedException e) {
@@ -197,16 +211,17 @@ public class DynamoDbRunStore implements RunStore {
             sets.add("GSI1PK = :queuedPk");
             sets.add("GSI1SK = :queuedSk");
             values.put(":queuedPk", s(QUEUED_PK));
-            values.put(":queuedSk", s(queuedSk(now, runId)));
+            values.put(":queuedSk", s(indexSk(now, runId)));
         } else {
             sets.add("failureReason = :reason");
             sets.add("failureMessage = :message");
             values.put(":reason", s(decision.failure().reason()));
             values.put(":message", s(decision.failure().message()));
         }
+        var removes = decision.approved() ? "pendingApproval" : "pendingApproval, GSI1PK, GSI1SK";
         try {
             var result = dynamo.updateItem(r -> r.tableName(table).key(key(runId))
-                    .updateExpression("SET " + String.join(", ", sets) + " REMOVE pendingApproval")
+                    .updateExpression("SET " + String.join(", ", sets) + " REMOVE " + removes)
                     .conditionExpression("attribute_exists(PK) AND #status = :waiting AND pendingApproval = :pending")
                     .expressionAttributeNames(Map.of("#status", "status"))
                     .expressionAttributeValues(values)
@@ -225,10 +240,46 @@ public class DynamoDbRunStore implements RunStore {
         }
     }
 
-    private static final String QUEUED_PK = "RUNS#QUEUED";
+    @Override
+    public List<Run> findUnsentApprovalsBefore(Instant cutoff, int limit) {
+        var response = dynamo.query(r -> r.tableName(table)
+                .indexName(DynamoDbAgentStore.GSI_TRIGGER)
+                .keyConditionExpression("GSI1PK = :pk AND GSI1SK < :cutoff")
+                .expressionAttributeValues(Map.of(
+                        ":pk", s(UNSENT_PK),
+                        ":cutoff", s(epochMillis(cutoff))))
+                .scanIndexForward(true)
+                .limit(limit));
+        return response.items().stream().map(DynamoDbRunStore::toRun).toList();
+    }
 
-    static String queuedSk(Instant queuedAt, String runId) {
-        return epochMillis(queuedAt) + "#" + runId;
+    @Override
+    public boolean markApprovalSent(String runId, String pendingApprovalJson, ApprovalMessage message) {
+        try {
+            dynamo.updateItem(r -> r.tableName(table).key(key(runId))
+                    .updateExpression("SET approvalChannel = :channel, approvalMessageId = :id, GSI1PK = :sentPk")
+                    .conditionExpression("#status = :waiting AND pendingApproval = :pending"
+                            + " AND attribute_not_exists(approvalMessageId)")
+                    .expressionAttributeNames(Map.of("#status", "status"))
+                    .expressionAttributeValues(Map.of(
+                            ":channel", s(message.channel()),
+                            ":id", s(message.messageId()),
+                            ":sentPk", s(SENT_PK),
+                            ":waiting", s(RunStatus.WAITING_APPROVAL.name()),
+                            ":pending", s(pendingApprovalJson))));
+            return true;
+        } catch (ConditionalCheckFailedException e) {
+            return false; // missing, decided, paused on another call, or already posted
+        }
+    }
+
+    private static final String QUEUED_PK = "RUNS#QUEUED";
+    private static final String UNSENT_PK = "RUNS#APPROVAL_UNSENT";
+    private static final String SENT_PK = "RUNS#APPROVAL_SENT";
+
+    /** Index sort key: zero-padded epoch millis (queued-at or waiting-since), then the run id. */
+    static String indexSk(Instant at, String runId) {
+        return epochMillis(at) + "#" + runId;
     }
 
     private static String epochMillis(Instant instant) {
@@ -248,6 +299,9 @@ public class DynamoDbRunStore implements RunStore {
                 str(item, "traceId"),
                 str(item, "pendingApproval"),
                 str(item, "approval"),
+                item.containsKey("approvalMessageId")
+                        ? new ApprovalMessage(str(item, "approvalChannel"), str(item, "approvalMessageId"))
+                        : null,
                 failureReason == null ? null : new Run.Failure(failureReason, str(item, "failureMessage")),
                 str(item, "output"),
                 item.get("input").s(),

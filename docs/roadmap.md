@@ -225,7 +225,7 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   `duplicate`; repo allowlist; idempotent: closing a closed issue changes nothing). Check:
   recorded-response tests.
   ```
-- [ ] `[control-plane]` Slack `ApprovalChannel`: when a run reports `WAITING_APPROVAL`, post a
+- [x] `[control-plane]` Slack `ApprovalChannel`: when a run reports `WAITING_APPROVAL`, post a
   ```
   Block Kit message with the call and Approve / Reject buttons (`SLACK_BOT_TOKEN`,
   `SLACK_APPROVAL_CHANNEL`). A failed post does not fail the worker's PATCH; the sweep posts
@@ -297,6 +297,23 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-17 · control-plane** — Slack `ApprovalChannel` (package `approval/`): a worker's
+  `WAITING_APPROVAL` PATCH posts the pending call (`chat.postMessage`, Approve / Reject buttons
+  valued `{run_id, step}`, arguments as literal preformatted text, max 3,000 characters) and
+  saves channel and message ts on the run (`markApprovalSent`, conditional on the same pending
+  call). A failed post never fails the PATCH; the approval sweep (same schedule) posts runs
+  unsent for 60 s, 20 per sweep, stopping at the first failure. Index: `RUNS#APPROVAL_UNSENT` /
+  `RUNS#APPROVAL_SENT` on GSI1 while waiting (expiry task reads both); rejections now remove
+  GSI1 keys. No `SLACK_BOT_TOKEN` = requests only logged. Fixtures recorded from the user's own
+  Slack workspace (app "Agent Approvals", `chat:write`, interactivity off). 182 tests pass; a
+  real message appeared in the channel from a local `bootRun`. Next: `[control-plane]`
+  `POST /approvals/slack` (turn on Interactivity with the smee.io URL; signing secret already in
+  `.env`; `update_message.json` fixture already recorded for showing who decided). Gotchas:
+  Slack answers 200 with `ok: false` for errors; a fake token gave `internal_error`; mrkdwn
+  cannot escape a closing code fence, so model text goes in `rich_text_preformatted`; Slack
+  accepted 12,000 characters there, refused 40,000 (`msg_blocks_too_long`); python.org Python has
+  no CA bundle (use the worker venv with `certifi` for recording scripts).
 
 - **2026-11-17 · worker** — `github.close_issue` in `tools_local.py` (`reason` `completed`,
   `not_planned` or `duplicate`; optional `duplicate_of`; `idempotent`, not `read_only`). It reads

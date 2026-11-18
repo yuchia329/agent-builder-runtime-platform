@@ -3,6 +3,8 @@ package dev.agentplatform.controlplane.run;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.agentplatform.controlplane.approval.ApprovalNotifier;
+import dev.agentplatform.controlplane.approval.InMemoryApprovalChannel;
 import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.store.InMemoryAgentStore;
 import dev.agentplatform.controlplane.store.InMemoryRunStore;
@@ -22,7 +24,7 @@ class RunServiceTest {
         var service = new RunService(agents, runs, message -> {
             attempted.set(message.runId());
             throw new RunQueueException("queue down", null);
-        }, Clock.systemUTC());
+        }, new ApprovalNotifier(new InMemoryApprovalChannel(), runs), Clock.systemUTC());
 
         assertThatThrownBy(() -> service.start("t1", "triage", "{}")).isInstanceOf(RunQueueException.class);
 
@@ -49,7 +51,7 @@ class RunServiceTest {
             if (down.get()) {
                 throw new RunQueueException("queue down", null);
             }
-        }, Clock.systemUTC());
+        }, new ApprovalNotifier(new InMemoryApprovalChannel(), runs), Clock.systemUTC());
         var runId = service.start("t1", "triage", "{}").runId();
         service.update(runId, new RunUpdate(RunStatus.RUNNING, null, null, null, null, null, null));
         service.update(runId, new RunUpdate(RunStatus.WAITING_APPROVAL, null, null, null,

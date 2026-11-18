@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.run;
 
+import dev.agentplatform.controlplane.approval.ApprovalNotifier;
 import dev.agentplatform.controlplane.queue.RunMessage;
 import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.queue.RunQueuePublisher;
@@ -30,12 +31,15 @@ public class RunService {
     private final AgentStore agents;
     private final RunStore runs;
     private final RunQueuePublisher queue;
+    private final ApprovalNotifier approvals;
     private final Clock clock;
 
-    public RunService(AgentStore agents, RunStore runs, RunQueuePublisher queue, Clock clock) {
+    public RunService(AgentStore agents, RunStore runs, RunQueuePublisher queue, ApprovalNotifier approvals,
+                      Clock clock) {
         this.agents = agents;
         this.runs = runs;
         this.queue = queue;
+        this.approvals = approvals;
         this.clock = clock;
     }
 
@@ -88,8 +92,17 @@ public class RunService {
         return new RunWithSpec(run, version.specJson());
     }
 
+    /**
+     * Applies a worker's report. A move to WAITING_APPROVAL also posts the pending call for a
+     * person (ADR 0002); a failed post does not fail the report (the approval sweep retries).
+     */
     public Run update(String runId, RunUpdate update) {
-        return runs.update(runId, update, clock.instant());
+        var updated = runs.update(runId, update, clock.instant());
+        if (updated.status() == RunStatus.WAITING_APPROVAL
+                && approvals.post(updated) == ApprovalNotifier.Outcome.POSTED) {
+            return runs.find(runId).orElse(updated);
+        }
+        return updated;
     }
 
     /**

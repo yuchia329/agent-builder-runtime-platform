@@ -21,3 +21,7 @@ platform:
   sweep:
     interval-seconds: ${SWEEP_INTERVAL_SECONDS:60}
     queued-after-seconds: ${SWEEP_QUEUED_AFTER_SECONDS:300}
+  slack:
+    bot-token: ${SLACK_BOT_TOKEN:}
+    approval-channel: ${SLACK_APPROVAL_CHANNEL:}
+    api-url: ${SLACK_API_URL:https://slack.com/api}

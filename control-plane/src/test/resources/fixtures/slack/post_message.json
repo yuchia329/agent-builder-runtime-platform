@@ -1,0 +1,85 @@
+{
+  "ok": true,
+  "channel": "C0123456789",
+  "ts": "1794980400.000100",
+  "message": {
+    "type": "message",
+    "text": "Approval needed: issue-triage wants to call github.close_issue (run run_0123456789abcdef0123456789abcdef, step 5)",
+    "ts": "1794980400.000100",
+    "blocks": [
+      {
+        "type": "header",
+        "block_id": "cDNI/",
+        "text": {
+          "type": "plain_text",
+          "text": "Approval needed: github.close_issue",
+          "emoji": true
+        }
+      },
+      {
+        "type": "section",
+        "block_id": "QvgNs",
+        "fields": [
+          {
+            "type": "mrkdwn",
+            "text": "*Agent*\nissue-triage",
+            "verbatim": false
+          },
+          {
+            "type": "mrkdwn",
+            "text": "*Run*\n`run_0123456789abcdef0123456789abcdef`",
+            "verbatim": false
+          },
+          {
+            "type": "mrkdwn",
+            "text": "*Step*\n5",
+            "verbatim": false
+          }
+        ]
+      },
+      {
+        "type": "rich_text",
+        "block_id": "FrNjw",
+        "elements": [
+          {
+            "type": "rich_text_preformatted",
+            "elements": [
+              {
+                "type": "text",
+                "text": "{\n  \"repo\": \"octocat/Hello-World\",\n  \"issue_number\": 7,\n  \"reason\": \"duplicate\",\n  \"note\": \"``` <!channel> *bold* & <https://x.example|click>\"\n}"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "actions",
+        "block_id": "approval",
+        "elements": [
+          {
+            "type": "button",
+            "action_id": "approve",
+            "text": {
+              "type": "plain_text",
+              "text": "Approve",
+              "emoji": true
+            },
+            "style": "primary",
+            "value": "{\"run_id\":\"run_0123456789abcdef0123456789abcdef\",\"step\":5}"
+          },
+          {
+            "type": "button",
+            "action_id": "reject",
+            "text": {
+              "type": "plain_text",
+              "text": "Reject",
+              "emoji": true
+            },
+            "style": "danger",
+            "value": "{\"run_id\":\"run_0123456789abcdef0123456789abcdef\",\"step\":5}"
+          }
+        ]
+      }
+    ]
+  }
+}

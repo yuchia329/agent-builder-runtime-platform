@@ -1,0 +1,66 @@
+{
+  "ok": true,
+  "channel": "C0123456789",
+  "ts": "1794980400.000100",
+  "text": "Approved by tester",
+  "message": {
+    "type": "message",
+    "text": "Approved by tester",
+    "ts": "1794980400.000100",
+    "blocks": [
+      {
+        "type": "header",
+        "block_id": "G/jsA",
+        "text": {
+          "type": "plain_text",
+          "text": "Approval needed: github.close_issue",
+          "emoji": true
+        }
+      },
+      {
+        "type": "section",
+        "block_id": "TGd3C",
+        "fields": [
+          {
+            "type": "mrkdwn",
+            "text": "*Agent*\nissue-triage",
+            "verbatim": false
+          },
+          {
+            "type": "mrkdwn",
+            "text": "*Run*\n`run_0123456789abcdef0123456789abcdef`",
+            "verbatim": false
+          },
+          {
+            "type": "mrkdwn",
+            "text": "*Step*\n5",
+            "verbatim": false
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "block_id": "Tefe2",
+        "text": {
+          "type": "mrkdwn",
+          "text": "```{\n  \"repo\": \"octocat/Hello-World\",\n  \"issue_number\": 7,\n  \"reason\": \"duplicate\",\n  \"duplicate_of\": 1\n}```",
+          "verbatim": false
+        }
+      },
+      {
+        "type": "context",
+        "block_id": "w+dvo",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": "Recording test: approved (no action taken)",
+            "verbatim": false
+          }
+        ]
+      }
+    ],
+    "edited": {
+      "ts": "1794980460.000000"
+    }
+  }
+}

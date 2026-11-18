@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.approval.ApprovalMessage;
 import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunUpdate;
@@ -18,6 +19,8 @@ import java.util.Optional;
  *   <li>A QUEUED run has a queued-at time: its creation, its last return to QUEUED, or its last
  *       {@link #touchQueued}. Runs in other statuses are never listed as queued.
  *   <li>A pending call is decided at most once ({@link #decideApproval}).
+ *   <li>A WAITING_APPROVAL run has a waiting-since time (its last move to WAITING_APPROVAL) and is
+ *       listed as unsent until {@link #markApprovalSent} records where its call was posted.
  * </ul>
  */
 public interface RunStore {
@@ -60,4 +63,19 @@ public interface RunStore {
      * @throws ApprovalConflictException if the run waits on a different pending call
      */
     Run decideApproval(String runId, String pendingApprovalJson, ApprovalDecision decision, Instant now);
+
+    /**
+     * WAITING_APPROVAL runs whose pending call was not posted yet and that started waiting before
+     * {@code cutoff}, oldest first, at most {@code limit}. May lag a just-made change (DynamoDB
+     * index); {@link #markApprovalSent} confirms.
+     */
+    List<Run> findUnsentApprovalsBefore(Instant cutoff, int limit);
+
+    /**
+     * Records where the pending call was posted, only if the run still waits on exactly
+     * {@code pendingApprovalJson} and has no approval message yet.
+     *
+     * @return false if the run is missing, no longer waits on that call, or was already posted
+     */
+    boolean markApprovalSent(String runId, String pendingApprovalJson, ApprovalMessage message);
 }

@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "error": "invalid_blocks",
+  "errors": [
+    "unsupported type: nope [json-pointer:/blocks/0/type]"
+  ],
+  "response_metadata": {
+    "messages": [
+      "[ERROR] unsupported type: nope [json-pointer:/blocks/0/type]"
+    ]
+  }
+}

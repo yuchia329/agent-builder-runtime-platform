@@ -40,11 +40,20 @@ npx smee-client --url https://smee.io/<channel> --target http://localhost:8080/t
 
 Slack approvals (`SLACK_BOT_TOKEN`, `SLACK_APPROVAL_CHANNEL` in `../.env`; unset = only logged):
 create an app at api.slack.com/apps (From scratch, Paste a manifest) with bot scope `chat:write`,
-`token_rotation_enabled: false` and interactivity off until `/approvals/slack` exists; Install to
-Workspace, copy the `xoxb-` Bot User OAuth Token and the Signing Secret (Basic Information), run
-`/invite @<app>` in the channel, take its Channel ID from the channel details. Try it: start with
-`set -a && . ../.env && set +a && STORE_BACKEND=memory QUEUE_BACKEND=memory ./gradlew bootRun`,
-start a run, PATCH it `RUNNING` then `WAITING_APPROVAL` with a `pending_approval`.
+`token_rotation_enabled: false`; Install to Workspace, copy the `xoxb-` Bot User OAuth Token and
+the Signing Secret (Basic Information, `SLACK_SIGNING_SECRET`), run `/invite @<app>` in the
+channel, take its Channel ID from the channel details. Try it (port 8080 is taken by `make up`):
+
+```sh
+set -a && . ../.env && set +a && STORE_BACKEND=memory QUEUE_BACKEND=memory \
+  TENANT_API_KEY=local-dev-key SERVER_PORT=18080 ./gradlew bootRun
+cloudflared tunnel --url http://127.0.0.1:18080   # brew install cloudflared; no account
+```
+
+Paste `https://<name>.trycloudflare.com/approvals/slack` into the app's Interactivity & Shortcuts →
+Request URL (a new URL on every tunnel start; DNS can take a minute). Start a run, PATCH it
+`RUNNING` then `WAITING_APPROVAL` with a `pending_approval`, click in Slack. Use cloudflared, not
+smee.io: smee re-sends bodies as JSON, and Slack's form body must arrive byte for byte.
 
 Against the local stack (DynamoDB + SQS) instead of memory: `make stack` at the repo root (`make
 up` also starts a control-plane container on 8080), then
@@ -106,6 +115,10 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 - Slack answers HTTP 200 for errors (`{"ok": false, "error"}`): check `ok`, never the status
   alone, and do not branch on error names (a bad token gave `internal_error`). Model-chosen text
   goes in `rich_text_preformatted` (shown literally), never in mrkdwn.
+- Signed form bodies (`/approvals/slack`): read `HttpServletRequest.getInputStream()`, never
+  `@RequestBody byte[]` (Spring rebuilds form POST bodies from parsed parameters, re-encoded, so
+  real Slack signatures fail while Java-encoded test bodies pass). Tests send Slack-style
+  encoding (`%20`, unencoded `:`).
 - Posting approval requests never fails the worker's PATCH (`ApprovalNotifier` returns an
   outcome, does not throw); a missed post is the approval sweep's job.
 - Slack fixtures (`src/test/resources/fixtures/slack/`) are recorded response bodies with

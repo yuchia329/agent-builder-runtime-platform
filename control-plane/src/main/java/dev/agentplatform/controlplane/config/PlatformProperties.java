@@ -38,9 +38,14 @@ public record PlatformProperties(
     /**
      * Slack bot for approval requests: {@code botToken} (scope chat:write; blank means approvals
      * are only logged), {@code approvalChannel} (channel id), {@code apiUrl} (tests point it at a
-     * fake Slack).
+     * fake Slack), {@code signingSecret} (verifies button clicks).
      */
-    public record SlackProperties(String botToken, String approvalChannel, String apiUrl) {}
+    public record SlackProperties(String botToken, String approvalChannel, String apiUrl, String signingSecret) {}
+
+    /** Verifies {@code POST /approvals/slack}; blank means the route answers 503. */
+    public String slackSigningSecret() {
+        return slack == null ? null : blankToNull(slack.signingSecret());
+    }
 
     public String slackBotToken() {
         return slack == null ? null : blankToNull(slack.botToken());

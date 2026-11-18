@@ -47,6 +47,18 @@ class SlackApprovalChannelContractTest extends ApprovalChannelContractTest {
         assertThat(message).isEqualTo(new ApprovalMessage(CHANNEL, "1794980400.000100")); // from the recording
     }
 
+    @Test
+    void outcomeReplacesTheButtonsWithChatUpdate() {
+        slack.answer(fixture("update_message"));
+
+        channel.showOutcome(MESSAGE, REQUEST, APPROVED);
+
+        var request = slack.requests().getLast();
+        assertThat(request.path()).isEqualTo("/api/chat.update");
+        assertThat(request.header("Authorization")).isEqualTo("Bearer " + TOKEN);
+        assertThat(request.body()).isEqualTo(SlackApprovalMessage.decided(MESSAGE, REQUEST, APPROVED));
+    }
+
     @ParameterizedTest
     @CsvSource({
             "post_message_channel_not_found, channel_not_found",

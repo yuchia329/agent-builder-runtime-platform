@@ -14,4 +14,12 @@ public interface ApprovalChannel {
      * @throws ApprovalChannelException if it was not posted; the message never contains credentials
      */
     ApprovalMessage post(ApprovalRequest request);
+
+    /**
+     * Replaces the choices of the request posted at {@code message} with its outcome, so nobody
+     * clicks a decided call again.
+     *
+     * @throws ApprovalChannelException if the message was not updated
+     */
+    void showOutcome(ApprovalMessage message, ApprovalRequest request, ApprovalOutcome outcome);
 }

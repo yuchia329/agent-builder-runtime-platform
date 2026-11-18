@@ -12,7 +12,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * {@link ApprovalChannel} on Slack: posts the request to one channel with {@code chat.postMessage}
- * (bot token, scope {@code chat:write}, bot invited to the channel). Body: {@link SlackApprovalMessage}.
+ * and shows the outcome with {@code chat.update} (bot token, scope {@code chat:write}, bot invited
+ * to the channel). Bodies: {@link SlackApprovalMessage}.
  *
  * <p>Recorded behavior: Slack answers HTTP 200 for errors too, with {@code {"ok": false, "error"}}
  * ({@code channel_not_found}, {@code invalid_blocks}; a malformed token gave {@code internal_error},
@@ -27,11 +28,13 @@ public class SlackApprovalChannel implements ApprovalChannel {
     public static final String DEFAULT_API_URL = "https://slack.com/api";
     static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
     static final Duration ANSWER_TIMEOUT = Duration.ofSeconds(3);
+    /** Shorter: the update runs inside Slack's own 3-second wait for the click's answer. */
+    static final Duration UPDATE_TIMEOUT = Duration.ofMillis(1_500);
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final HttpClient http;
-    private final URI postMessage;
+    private final URI api;
     private final String botToken;
     private final String channel;
 
@@ -40,16 +43,27 @@ public class SlackApprovalChannel implements ApprovalChannel {
             throw new IllegalArgumentException("A Slack bot token and channel are required");
         }
         this.http = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
-        this.postMessage = URI.create(apiUrl.replaceAll("/+$", "") + "/chat.postMessage");
+        this.api = URI.create(apiUrl.replaceAll("/+$", "") + "/");
         this.botToken = botToken;
         this.channel = channel;
     }
 
     @Override
     public ApprovalMessage post(ApprovalRequest request) {
-        var body = SlackApprovalMessage.body(channel, request).toString();
-        var httpRequest = HttpRequest.newBuilder(postMessage)
-                .timeout(ANSWER_TIMEOUT)
+        var reply = call("chat.postMessage", SlackApprovalMessage.body(channel, request).toString(), ANSWER_TIMEOUT);
+        return new ApprovalMessage(reply.path("channel").asString(), reply.path("ts").asString());
+    }
+
+    /** {@code chat.update} on the bot's own message (scope chat:write). */
+    @Override
+    public void showOutcome(ApprovalMessage message, ApprovalRequest request, ApprovalOutcome outcome) {
+        call("chat.update", SlackApprovalMessage.decided(message, request, outcome).toString(), UPDATE_TIMEOUT);
+    }
+
+    /** Calls a Web API method; returns the reply if {@code ok}, else throws. */
+    private tools.jackson.databind.JsonNode call(String method, String body, Duration timeout) {
+        var httpRequest = HttpRequest.newBuilder(api.resolve(method))
+                .timeout(timeout)
                 .header("Authorization", "Bearer " + botToken)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -78,7 +92,7 @@ public class SlackApprovalChannel implements ApprovalChannel {
             if (!reply.path("ok").asBoolean(false)) {
                 throw new ApprovalChannelException("Slack refused the message: " + reply.path("error").asString("no error given"));
             }
-            return new ApprovalMessage(reply.path("channel").asString(), reply.path("ts").asString());
+            return reply;
         } catch (JacksonException e) {
             throw new ApprovalChannelException("Slack answered with a body that is not JSON");
         }

@@ -25,3 +25,4 @@ platform:
     bot-token: ${SLACK_BOT_TOKEN:}
     approval-channel: ${SLACK_APPROVAL_CHANNEL:}
     api-url: ${SLACK_API_URL:https://slack.com/api}
+    signing-secret: ${SLACK_SIGNING_SECRET:}

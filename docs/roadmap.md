@@ -232,7 +232,7 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   approvals not yet sent. Check: unit tests with recorded Slack responses; a message appears in
   a sandbox channel.
   ```
-- [ ] `[control-plane]` `POST /approvals/slack`: verify the signing secret (v0, 5-minute window),
+- [x] `[control-plane]` `POST /approvals/slack`: verify the signing secret (v0, 5-minute window),
   ```
   read the button click, apply the same decision path as the web approval, update the message
   to show who decided. Answers within Slack's 3 seconds. Check: Slack's documented signature
@@ -297,6 +297,21 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · control-plane** — `POST /approvals/slack`: `SlackInteractions` verifies the
+  signature (Slack's documented example is a test vector) and reads Approve / Reject clicks;
+  `ApprovalClicks` decides through `RunService.decideApproval` (`decided_by` =
+  `slack:<user id>`, anyone in `SLACK_APPROVAL_CHANNEL` may decide, other channels ignored) and
+  shows the outcome on the clicked message (`ApprovalChannel.showOutcome`, Slack `chat.update`,
+  1.5 s timeout; failure keeps the decision). 216 tests pass. Real clicks in the user's channel
+  through a Cloudflare quick tunnel approved and rejected one run each. Next: `[control-plane]`
+  approval expiry (read both `RUNS#APPROVAL_UNSENT` and `RUNS#APPROVAL_SENT`; show the expiry
+  on the message with `showOutcome`). Gotchas: the first real click got 401 because
+  `@RequestBody byte[]` on a form POST is rebuilt by Spring with Java's encoding; read the
+  servlet input stream. smee.io was replaced by `cloudflared tunnel --url` (smee re-sends bodies
+  as JSON); the quick tunnel URL changes on every start, so the Slack Request URL must be
+  updated (it now points at a dead tunnel). Click fixture `block_actions.json` is hand-made from
+  Slack's documented example, not recorded.
 
 - **2026-11-17 · control-plane** — Slack `ApprovalChannel` (package `approval/`): a worker's
   `WAITING_APPROVAL` PATCH posts the pending call (`chat.postMessage`, Approve / Reject buttons

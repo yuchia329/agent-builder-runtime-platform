@@ -90,6 +90,13 @@ class ApprovalPostIntegrationTest {
     }
 
     @Test
+    void slackClicksAreOffWithoutASigningSecret() throws Exception {
+        var response = api.send("POST", "/approvals/slack", "payload=%7B%7D", "application/x-www-form-urlencoded", false);
+
+        assertThat(response.statusCode()).isEqualTo(503);
+    }
+
+    @Test
     void failedPostDoesNotFailTheReport() throws Exception {
         var runId = runningRun("post-slack-down");
         SLACK.answer(fixture("post_message_channel_not_found"));

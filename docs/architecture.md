@@ -170,8 +170,17 @@ Public and internal JSON use snake_case field names and leave out empty fields.
   redelivery window) before any run starts; a delivery seen before gets 200 with the first
   delivery's run ids and `"duplicate": true` and starts nothing. If handling fails the claim is
   released, except when only the enqueue failed (runs saved `QUEUED`, the sweep sends them).
-- `POST /approvals/slack`: Slack interactivity callback. Verify the signing secret, record the
-  decision, re-enqueue the run.
+- `POST /approvals/slack`: Slack interactivity Request URL, no API key. Verifies
+  `X-Slack-Signature` (`v0=` HMAC-SHA256 of `v0:<timestamp>:<raw body>` with
+  `SLACK_SIGNING_SECRET`, constant-time compare, timestamp within 5 minutes; 401 if not, 503 if
+  no secret). The raw body is read from the request stream: Spring re-encodes form bodies, which
+  breaks the signature. Reads the `payload` form field; only Approve / Reject clicks
+  (`block_actions`, block `approval`) from `SLACK_APPROVAL_CHANNEL` are applied, through the same
+  decision path as `POST /runs/{id}/approval` with `decided_by` = `slack:<user id>`. Anyone who
+  can click in that channel may decide (until M4 maps identities). Then `chat.update` replaces the
+  clicked message's buttons with the run's outcome (who and when, or "no longer waiting"); a
+  failed update keeps the decision. A verified request always gets an empty 200 within Slack's 3
+  seconds (400 for a malformed body).
 
 Internal endpoints, for workers and the gateway only. API Gateway requires IAM authorization
 (SigV4) on these routes:
@@ -390,7 +399,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock Converse (M1) |
 | `ToolClient`        | worker        | `describe(names)` returns tool schemas; `call(name, args)` returns a result or raises `ToolError`    | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
-| `ApprovalChannel`   | control plane | Post an approval request, return where it went; failures raise `ApprovalChannelException` (callback verification: next task) | Slack, in-memory (logs only)               |
+| `ApprovalChannel`   | control plane | Post an approval request, return where it went; show its outcome on that message; failures raise `ApprovalChannelException` | Slack, in-memory (logs only)               |
 | `TokenStore`        | gateway       | Store and load encrypted tokens per identity and provider                                            | Secrets Manager, in-memory                 |
 
 - Each port has one contract test suite that runs against every adapter.

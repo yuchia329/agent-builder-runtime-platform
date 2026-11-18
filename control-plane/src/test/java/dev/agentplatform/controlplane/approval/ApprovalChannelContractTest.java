@@ -29,6 +29,26 @@ abstract class ApprovalChannelContractTest {
         assertThat(message.messageId()).isNotBlank();
     }
 
+    static final ApprovalMessage MESSAGE = new ApprovalMessage("C0123456789", "1794980400.000100");
+    static final ApprovalOutcome APPROVED = ApprovalOutcome.decided(
+            dev.agentplatform.controlplane.run.ApprovalDecision.Decision.approved, "slack:U0APPROVER1",
+            java.time.Instant.parse("2026-11-17T21:52:00Z"));
+
+    @Test
+    void outcomeIsShownOnAPostedMessage() {
+        var message = channel().post(REQUEST);
+
+        channel().showOutcome(message, REQUEST, APPROVED); // no exception
+    }
+
+    @Test
+    void failedOutcomeUpdateThrowsApprovalChannelException() {
+        failNextPost();
+
+        assertThatThrownBy(() -> channel().showOutcome(MESSAGE, REQUEST, APPROVED))
+                .isInstanceOf(ApprovalChannelException.class);
+    }
+
     @Test
     void failedPostThrowsApprovalChannelException() {
         failNextPost();

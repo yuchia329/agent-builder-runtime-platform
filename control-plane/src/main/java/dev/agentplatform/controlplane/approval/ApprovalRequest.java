@@ -4,7 +4,10 @@ import dev.agentplatform.controlplane.run.Run;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** What a person is asked to decide: a run's pending call (PendingApproval in the internal API). */
+/**
+ * What a person is asked to decide: a run's pending call (PendingApproval in the internal API).
+ * {@code tool} and {@code arguments} are null when only the step is known (a stale message).
+ */
 public record ApprovalRequest(String runId, String tenantId, String agentName, int step, String tool,
                               JsonNode arguments) {
 

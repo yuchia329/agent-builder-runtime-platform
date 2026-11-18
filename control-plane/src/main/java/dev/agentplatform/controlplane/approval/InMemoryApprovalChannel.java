@@ -16,6 +16,7 @@ public class InMemoryApprovalChannel implements ApprovalChannel {
     public static final String CHANNEL = "memory";
 
     private final List<ApprovalRequest> posted = new ArrayList<>();
+    private final List<Shown> shown = new ArrayList<>();
     private int failures;
 
     @Override
@@ -30,12 +31,29 @@ public class InMemoryApprovalChannel implements ApprovalChannel {
         return new ApprovalMessage(CHANNEL, Integer.toString(posted.size()));
     }
 
+    /** An outcome shown on a posted message. */
+    public record Shown(ApprovalMessage message, ApprovalRequest request, ApprovalOutcome outcome) {}
+
+    @Override
+    public synchronized void showOutcome(ApprovalMessage message, ApprovalRequest request, ApprovalOutcome outcome) {
+        if (failures > 0) {
+            failures--;
+            throw new ApprovalChannelException("Approval channel unavailable (test failure)");
+        }
+        shown.add(new Shown(message, request, outcome));
+    }
+
+    /** Outcomes shown so far, oldest first (a copy). */
+    public synchronized List<Shown> shown() {
+        return List.copyOf(shown);
+    }
+
     /** Requests posted so far, oldest first (a copy). */
     public synchronized List<ApprovalRequest> posted() {
         return List.copyOf(posted);
     }
 
-    /** Makes the next {@code times} posts fail. */
+    /** Makes the next {@code times} posts or outcome updates fail. */
     public synchronized void failNext(int times) {
         failures = times;
     }

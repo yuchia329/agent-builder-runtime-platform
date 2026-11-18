@@ -1,8 +1,11 @@
 package dev.agentplatform.controlplane.config;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -17,7 +20,8 @@ public record PlatformProperties(
         @Valid @NotNull TenantProperties tenant,
         GitHubProperties github,
         SweepProperties sweep,
-        SlackProperties slack) {
+        SlackProperties slack,
+        @Valid ApprovalProperties approval) {
 
     public enum StoreBackend { MEMORY, DYNAMODB }
 
@@ -41,6 +45,17 @@ public record PlatformProperties(
      * fake Slack), {@code signingSecret} (verifies button clicks).
      */
     public record SlackProperties(String botToken, String approvalChannel, String apiUrl, String signingSecret) {}
+
+    /**
+     * A run left WAITING_APPROVAL longer than {@code timeoutHours} fails with
+     * {@code approval_expired}. Must stay under the worker's 15-day (360 h) run-state retention
+     * (ADR 0011), or an approved run would find its saved steps gone.
+     */
+    public record ApprovalProperties(@Min(1) @Max(359) Integer timeoutHours) {}
+
+    public Duration approvalTimeout() {
+        return Duration.ofHours(approval == null || approval.timeoutHours() == null ? 72 : approval.timeoutHours());
+    }
 
     /** Verifies {@code POST /approvals/slack}; blank means the route answers 503. */
     public String slackSigningSecret() {

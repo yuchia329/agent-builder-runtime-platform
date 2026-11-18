@@ -106,4 +106,17 @@ class SlackApprovalMessageTest {
     private static String argumentsText(JsonNode body) {
         return body.get("blocks").get(2).get("elements").get(0).get("elements").get(0).get("text").asString();
     }
+
+    @Test
+    void expiredRequestKeepsTheCallAndSaysExpired() {
+        var expired = SlackApprovalMessage.decided(new ApprovalMessage("C1", "1.2"), REQUEST,
+                ApprovalOutcome.expired("Call to github.close_issue at step 5 got no decision within 72 h"));
+
+        assertThat(expired.get("text").asString())
+                .isEqualTo("Expired: github.close_issue (run %s, step 5)".formatted(REQUEST.runId()));
+        assertThat(expired.get("blocks").valueStream().map(b -> b.get("type").asString()).toList())
+                .containsExactly("header", "section", "rich_text", "context");
+        assertThat(expired.get("blocks").get(3).get("elements").get(0).get("text").asString())
+                .isEqualTo("_Expired: Call to github.close_issue at step 5 got no decision within 72 h_");
+    }
 }

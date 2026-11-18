@@ -8,6 +8,7 @@ import dev.agentplatform.controlplane.run.RunUpdate;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Locale;
 import java.util.HashMap;
 import java.util.List;
@@ -251,6 +252,49 @@ public class DynamoDbRunStore implements RunStore {
                 .scanIndexForward(true)
                 .limit(limit));
         return response.items().stream().map(DynamoDbRunStore::toRun).toList();
+    }
+
+    @Override
+    public List<Run> findWaitingApprovalsBefore(Instant cutoff, int limit) {
+        var items = new ArrayList<Map<String, AttributeValue>>();
+        for (var pk : List.of(UNSENT_PK, SENT_PK)) {
+            items.addAll(dynamo.query(r -> r.tableName(table)
+                    .indexName(DynamoDbAgentStore.GSI_TRIGGER)
+                    .keyConditionExpression("GSI1PK = :pk AND GSI1SK < :cutoff")
+                    .expressionAttributeValues(Map.of(
+                            ":pk", s(pk),
+                            ":cutoff", s(epochMillis(cutoff))))
+                    .scanIndexForward(true)
+                    .limit(limit)).items());
+        }
+        // Each partition is sorted; the oldest `limit` of both are among these.
+        return items.stream()
+                .sorted(Comparator.comparing((Map<String, AttributeValue> item) -> item.get("GSI1SK").s()))
+                .limit(limit)
+                .map(DynamoDbRunStore::toRun)
+                .toList();
+    }
+
+    @Override
+    public Optional<Run> expireApproval(String runId, String pendingApprovalJson, Run.Failure failure, Instant now) {
+        try {
+            var result = dynamo.updateItem(r -> r.tableName(table).key(key(runId))
+                    .updateExpression("SET #status = :failed, updatedAt = :now, failureReason = :reason,"
+                            + " failureMessage = :message REMOVE pendingApproval, GSI1PK, GSI1SK")
+                    .conditionExpression("#status = :waiting AND pendingApproval = :pending")
+                    .expressionAttributeNames(Map.of("#status", "status"))
+                    .expressionAttributeValues(Map.of(
+                            ":failed", s(RunStatus.FAILED.name()),
+                            ":now", s(now.toString()),
+                            ":reason", s(failure.reason()),
+                            ":message", s(failure.message()),
+                            ":waiting", s(RunStatus.WAITING_APPROVAL.name()),
+                            ":pending", s(pendingApprovalJson)))
+                    .returnValues(ReturnValue.ALL_NEW));
+            return Optional.of(toRun(result.attributes()));
+        } catch (ConditionalCheckFailedException e) {
+            return Optional.empty(); // missing, decided, or paused on another call
+        }
     }
 
     @Override

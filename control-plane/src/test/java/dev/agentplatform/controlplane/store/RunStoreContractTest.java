@@ -473,4 +473,111 @@ abstract class RunStoreContractTest {
 
         assertThat(listed).containsExactly(first.runId(), subSecond.runId(), later.runId());
     }
+
+    // Approval expiry
+
+    private static final Run.Failure EXPIRED = new Run.Failure(ApprovalDecision.EXPIRED_REASON, "no decision in 72 h");
+
+    private List<String> waitingBefore(Instant cutoff) {
+        return store.findWaitingApprovalsBefore(cutoff, 100).stream().map(Run::runId).toList();
+    }
+
+    @Test
+    void waitingRunsAreListedPostedOrNotOldestFirstUpToTheLimit() {
+        var posted = waitingSince(T1);
+        store.markApprovalSent(posted.runId(), PENDING, POSTED);
+        var unsent = waitingSince(T1.plusMillis(500));
+        var later = waitingSince(T1.plusSeconds(1));
+        waitingSince(T1.plusSeconds(2));
+
+        var listed = store.findWaitingApprovalsBefore(T1.plusSeconds(60), 3).stream().map(Run::runId).toList();
+
+        assertThat(listed).containsExactly(posted.runId(), unsent.runId(), later.runId());
+        assertThat(waitingBefore(T1)).isEmpty(); // strictly before the cutoff
+    }
+
+    @Test
+    void expiryFailsTheRunAndKeepsItsMessage() {
+        var run = waitingRun(PENDING);
+        store.markApprovalSent(run.runId(), PENDING, POSTED);
+        var at = T1.plusSeconds(10);
+
+        var expired = store.expireApproval(run.runId(), PENDING, EXPIRED, at).orElseThrow();
+
+        assertThat(expired.status()).isEqualTo(RunStatus.FAILED);
+        assertThat(expired.failure()).isEqualTo(EXPIRED);
+        assertThat(expired.pendingApprovalJson()).isNull();
+        assertThat(expired.approvalJson()).isNull(); // an expiry is not a decision
+        assertThat(expired.approvalMessage()).isEqualTo(POSTED);
+        assertThat(expired.updatedAt()).isEqualTo(at);
+        assertThat(store.find(run.runId()).orElseThrow()).isEqualTo(expired);
+        assertThat(waitingBefore(T1.plusSeconds(60))).isEmpty();
+        assertThat(unsentBefore(T1.plusSeconds(60))).isEmpty();
+    }
+
+    @Test
+    void decidedRunsAndOtherCallsDoNotExpire() {
+        var decided = waitingRun(PENDING);
+        store.decideApproval(decided.runId(), PENDING, decision(PENDING, Decision.approved), T1);
+        var other = waitingRun(PENDING);
+
+        assertThat(store.expireApproval(decided.runId(), PENDING, EXPIRED, T1)).isEmpty();
+        assertThat(store.expireApproval(other.runId(), PENDING.replace("42", "43"), EXPIRED, T1)).isEmpty();
+        assertThat(store.expireApproval("run_missing", PENDING, EXPIRED, T1)).isEmpty();
+
+        assertThat(store.find(decided.runId()).orElseThrow().status()).isEqualTo(RunStatus.QUEUED);
+        assertThat(store.find(other.runId()).orElseThrow().status()).isEqualTo(RunStatus.WAITING_APPROVAL);
+    }
+
+    @Test
+    void anExpiredCallCannotBeDecided() {
+        var run = waitingRun(PENDING);
+        store.expireApproval(run.runId(), PENDING, EXPIRED, T1);
+
+        assertThatThrownBy(() -> store.decideApproval(run.runId(), PENDING, decision(PENDING, Decision.approved), T1))
+                .isInstanceOf(IllegalTransitionException.class);
+    }
+
+    @Test
+    void expiryAndDecisionHaveOneWinner() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            var run = waitingRun(PENDING);
+            var start = new CountDownLatch(1);
+            var pool = Executors.newFixedThreadPool(2);
+            try {
+                var expiry = pool.submit(() -> {
+                    start.await();
+                    return store.expireApproval(run.runId(), PENDING, EXPIRED, T1).isPresent();
+                });
+                var decision = pool.submit(() -> {
+                    start.await();
+                    try {
+                        store.decideApproval(run.runId(), PENDING, decision(PENDING, Decision.approved), T1);
+                        return true;
+                    } catch (IllegalTransitionException e) {
+                        return false;
+                    }
+                });
+                start.countDown();
+                assertThat(expiry.get() ^ decision.get()).isTrue();
+                var status = store.find(run.runId()).orElseThrow().status();
+                assertThat(status).isEqualTo(expiry.get() ? RunStatus.FAILED : RunStatus.QUEUED);
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    void aNewPauseIsListedFromItsOwnStart() {
+        var run = waitingRun(PENDING);
+        store.decideApproval(run.runId(), PENDING, decision(PENDING, Decision.approved), T1);
+        var later = T1.plusSeconds(30);
+        store.update(run.runId(), to(RunStatus.RUNNING), later);
+        store.update(run.runId(), new RunUpdate(RunStatus.WAITING_APPROVAL, null, null, null,
+                PENDING.replace("7", "9"), null, null), later);
+
+        assertThat(waitingBefore(later)).isEmpty();
+        assertThat(waitingBefore(later.plusMillis(1))).containsExactly(run.runId());
+    }
 }

@@ -202,6 +202,17 @@ run, only if the run still waits on the same call, so the decision can update th
 approval sweep posts runs left unsent for 60 s, up to 20 per sweep, stopping at the first failure.
 The PATCH and the sweep can rarely post one call twice; a decision is still recorded once.
 
+Nobody deciding is an outcome too. A run left `WAITING_APPROVAL` longer than
+`APPROVAL_TIMEOUT_HOURS` (default 72, from the start of its current pause) is failed by the
+approval sweep with `approval_expired` ("Call to <tool> at step <n> got no decision within 72 h"),
+conditional on the same pending call, so a click at the same moment and the expiry cannot both
+win. The pending call is cleared and `approval` stays unset (an expiry is not a decision). A
+posted message shows "Expired" in place of its buttons; a failed update keeps the expiry, and the
+rest of that sweep skips Slack; a later click on such a message shows "Expired" too. The setting
+must stay under 360 h, the worker's run-state retention
+([ADR 0011](adr/0011-run-state-per-step-fenced.md)), or an approved run would find its saved steps
+gone; startup fails outside 1 to 359.
+
 Every endpoint must answer in seconds (Slack expects a reply within 3, API Gateway cuts off at
 30). Anything slower goes on the queue.
 
@@ -237,8 +248,9 @@ the table from that file.
   EventBridge Scheduler invokes it (M6), since a function is frozen between requests.
 - The same schedule runs the approval sweep. A run moving to `WAITING_APPROVAL` enters
   `RUNS#APPROVAL_UNSENT`; recording its post moves it to `RUNS#APPROVAL_SENT` (same sort key); any
-  other status, including a rejection, removes it. The sweep reads only the unsent partition;
-  approval expiry reads both.
+  other status, including a rejection or an expiry, removes it. The post sweep reads only the
+  unsent partition; the expiry sweep reads both (oldest 20 of each, merged by sort key), then
+  expires up to 20.
 
 The same Spring Boot app runs as a normal server locally and behind a Lambda handler in AWS. Keep
 startup light for SnapStart: no eager network calls or connections at startup.
@@ -427,6 +439,7 @@ definition environment, with secrets from Secrets Manager.
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
 | Re-enqueue sweep    | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300) |
+| Approval expiry     | control plane                          | `APPROVAL_TIMEOUT_HOURS` (default 72; 1 to 359, under the worker's 15-day run-state retention) |
 | Local AWS endpoints | all                                    | `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS` (unset in AWS; read by both AWS SDKs) |
 | Tenant (M0 only)    | control plane                          | `TENANT_ID`, `TENANT_API_KEY`                           |
 

@@ -18,6 +18,7 @@ public class InMemoryRunStore implements RunStore {
     private final Map<String, Run> runs = new HashMap<>();
     private final Map<String, Instant> queuedAt = new HashMap<>(); // QUEUED runs only
     private final Map<String, Instant> unsentSince = new HashMap<>(); // WAITING_APPROVAL, not posted
+    private final Map<String, Instant> waitingSince = new HashMap<>(); // WAITING_APPROVAL, posted or not
 
     @Override
     public synchronized void create(Run run) {
@@ -52,8 +53,10 @@ public class InMemoryRunStore implements RunStore {
         }
         if (updated.status() == RunStatus.WAITING_APPROVAL) {
             unsentSince.put(runId, now);
+            waitingSince.put(runId, now);
         } else {
             unsentSince.remove(runId);
+            waitingSince.remove(runId);
         }
         return updated;
     }
@@ -93,6 +96,7 @@ public class InMemoryRunStore implements RunStore {
         var updated = current.decided(decision, now);
         runs.put(runId, updated);
         unsentSince.remove(runId);
+        waitingSince.remove(runId);
         if (updated.status() == RunStatus.QUEUED) {
             queuedAt.put(runId, now);
         }
@@ -101,7 +105,31 @@ public class InMemoryRunStore implements RunStore {
 
     @Override
     public synchronized List<Run> findUnsentApprovalsBefore(Instant cutoff, int limit) {
-        return unsentSince.entrySet().stream()
+        return before(unsentSince, cutoff, limit);
+    }
+
+    @Override
+    public synchronized List<Run> findWaitingApprovalsBefore(Instant cutoff, int limit) {
+        return before(waitingSince, cutoff, limit);
+    }
+
+    @Override
+    public synchronized Optional<Run> expireApproval(String runId, String pendingApprovalJson, Run.Failure failure,
+                                                     Instant now) {
+        var current = runs.get(runId);
+        if (current == null || current.status() != RunStatus.WAITING_APPROVAL
+                || !Objects.equals(current.pendingApprovalJson(), pendingApprovalJson)) {
+            return Optional.empty();
+        }
+        var expired = current.expired(failure, now);
+        runs.put(runId, expired);
+        unsentSince.remove(runId);
+        waitingSince.remove(runId);
+        return Optional.of(expired);
+    }
+
+    private List<Run> before(Map<String, Instant> since, Instant cutoff, int limit) {
+        return since.entrySet().stream()
                 .filter(e -> e.getValue().isBefore(cutoff))
                 .sorted(Map.Entry.<String, Instant>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
                 .limit(limit)

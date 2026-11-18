@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.run;
 
+import java.time.Duration;
 import java.time.Instant;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -16,6 +17,8 @@ public record ApprovalDecision(int step, String tool, JsonNode arguments, Decisi
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     public static final String REJECTED_REASON = "approval_rejected";
+    /** Set by the approval sweep when nobody decided in time; not a decision, so no {@code approval}. */
+    public static final String EXPIRED_REASON = "approval_expired";
 
     /** Lower case, as on the wire. */
     public enum Decision { approved, rejected }
@@ -25,6 +28,13 @@ public record ApprovalDecision(int step, String tool, JsonNode arguments, Decisi
         var pending = JSON.readTree(pendingApprovalJson);
         return new ApprovalDecision(pending.get("step").asInt(), pending.get("tool").asString(),
                 pending.get("arguments"), decision, decidedBy, at);
+    }
+
+    /** The failure a run ends with when its pending call waited longer than {@code timeout}. */
+    public static Run.Failure expiredFailure(String pendingApprovalJson, Duration timeout) {
+        var pending = JSON.readTree(pendingApprovalJson);
+        return new Run.Failure(EXPIRED_REASON, "Call to %s at step %d got no decision within %d h".formatted(
+                pending.get("tool").asString(), pending.get("step").asInt(), timeout.toHours()));
     }
 
     public boolean approved() {

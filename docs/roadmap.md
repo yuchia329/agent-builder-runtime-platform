@@ -238,7 +238,7 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   to show who decided. Answers within Slack's 3 seconds. Check: Slack's documented signature
   example; a real click in the sandbox through smee.io.
   ```
-- [ ] `[control-plane]` approval expiry: the sweep fails runs left `WAITING_APPROVAL` longer than
+- [x] `[control-plane]` approval expiry: the sweep fails runs left `WAITING_APPROVAL` longer than
   ```
   `APPROVAL_TIMEOUT_HOURS` (default 72; must stay under the worker's 15-day run-state retention,
   ADR 0011) with `approval_expired`. Check: unit tests.
@@ -279,11 +279,6 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
-- **Approval decision in the internal API** (`approval` / `ApprovalDecision` on the run,
-  failure reason `approval_expired`). Declared in `contracts/internal-api.openapi.yaml`. Must
-  follow: `control-plane` (`approval_expired` in the expiry task; decisions and
-  `approval_rejected` done). `worker` done.
-
 - **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
   Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `infra` (M6;
   `local-stack` done). Until then items never expire; correctness does not depend on it (claims
@@ -297,6 +292,21 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · control-plane** — Approval expiry: `ApprovalSweeper.expireOnce()` (same sweep
+  schedule) fails runs left `WAITING_APPROVAL` longer than `APPROVAL_TIMEOUT_HOURS` (default 72,
+  from the start of the current pause; startup fails outside 1 to 359, under the worker's 15-day
+  retention) with `approval_expired`. New `RunStore` methods: `findWaitingApprovalsBefore` (both
+  `RUNS#APPROVAL_*` partitions, merged oldest first, 20 per sweep) and `expireApproval`
+  (conditional on the same pending call, like `decideApproval`; clears the pending call, leaves
+  `approval` unset). Posted messages show "Expired" (`ApprovalOutcome.expired`, `chat.update`); a
+  failed update keeps the expiry and the rest of the sweep skips Slack; a late click shows
+  "Expired". The cross-service entry for the approval decision is closed (both services follow).
+  238 tests pass (DynamoDB on Docker). No live Slack check (whole hours; unit tests per the task).
+  Next: `[specs]` issue-triage closes confirmed duplicates under `require_approval` (last M3
+  task; needs a fresh cloudflared URL in the Slack app's Request URL). Gotchas: the expiry race
+  test runs a decision and an expiry together on both stores; any new way out of
+  `WAITING_APPROVAL` needs the same.
 
 - **2026-11-18 · control-plane** — `POST /approvals/slack`: `SlackInteractions` verifies the
   signature (Slack's documented example is a test vector) and reads Approve / Reject clicks;

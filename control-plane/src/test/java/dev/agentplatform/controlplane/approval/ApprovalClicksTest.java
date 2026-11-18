@@ -109,4 +109,18 @@ class ApprovalClicksTest {
         assertThat(runs.find(runId).orElseThrow().status()).isEqualTo(RunStatus.QUEUED);
         assertThat(channel.shown()).isEmpty();
     }
+
+    @Test
+    void clickOnAnExpiredRunChangesNothingAndShowsTheExpiry() {
+        var failure = dev.agentplatform.controlplane.run.ApprovalDecision.expiredFailure(PENDING,
+                java.time.Duration.ofHours(72));
+        runs.expireApproval(runId, PENDING, failure, java.time.Instant.now());
+
+        clicks.apply(click(Decision.approved, 5, "U0APPROVER1"));
+
+        assertThat(runs.find(runId).orElseThrow().status()).isEqualTo(RunStatus.FAILED);
+        assertThat(queue.bodies()).hasSize(1); // only the start
+        assertThat(channel.shown().getLast().outcome().note())
+                .isEqualTo("Expired: Call to github.close_issue at step 5 got no decision within 72 h");
+    }
 }

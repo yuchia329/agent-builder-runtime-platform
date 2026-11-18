@@ -102,7 +102,7 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 - Config comes from env vars via `application.yml` (`STORE_BACKEND`, `CONTROL_PLANE_TABLE`,
   `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`,
   `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
-  `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`,
+  `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`, `SLACK_SIGNING_SECRET`, `APPROVAL_TIMEOUT_HOURS`,
   `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
 - Errors: throw domain exceptions; `web/ApiExceptionHandler` maps them to problem+json.
 - Scheduled work is a plain class with a `...Once()` method (`RunSweeper.sweepOnce`) plus a thin
@@ -119,6 +119,10 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   `@RequestBody byte[]` (Spring rebuilds form POST bodies from parsed parameters, re-encoded, so
   real Slack signatures fail while Java-encoded test bodies pass). Tests send Slack-style
   encoding (`%20`, unencoded `:`).
+- The control plane ends a wait in one of three ways, each conditional on the exact pending call:
+  `decideApproval` (approved / rejected, sets `approval`) or `expireApproval` (`approval_expired`,
+  no `approval`). A new way out of `WAITING_APPROVAL` gets the same condition and a race test
+  against `decideApproval` in `RunStoreContractTest`.
 - Posting approval requests never fails the worker's PATCH (`ApprovalNotifier` returns an
   outcome, does not throw); a missed post is the approval sweep's job.
 - Slack fixtures (`src/test/resources/fixtures/slack/`) are recorded response bodies with

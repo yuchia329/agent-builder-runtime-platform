@@ -26,3 +26,5 @@ platform:
     approval-channel: ${SLACK_APPROVAL_CHANNEL:}
     api-url: ${SLACK_API_URL:https://slack.com/api}
     signing-secret: ${SLACK_SIGNING_SECRET:}
+  approval:
+    timeout-hours: ${APPROVAL_TIMEOUT_HOURS:72}

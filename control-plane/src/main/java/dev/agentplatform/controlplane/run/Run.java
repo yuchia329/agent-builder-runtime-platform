@@ -64,6 +64,12 @@ public record Run(
                 inputJson, createdAt, now);
     }
 
+    /** Fails the run with {@code failure} ({@code approval_expired}) and clears the pending call. */
+    public Run expired(Failure failure, Instant now) {
+        return new Run(runId, tenantId, agentName, agentVersion, RunStatus.FAILED, steps, costUsd, traceId, null,
+                approvalJson, approvalMessage, failure, output, inputJson, createdAt, now);
+    }
+
     /** The run with its pending call posted at {@code message}. */
     public Run withApprovalMessage(ApprovalMessage message) {
         return new Run(runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId, pendingApprovalJson,

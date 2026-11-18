@@ -6,7 +6,9 @@ import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunStatus;
 import dev.agentplatform.controlplane.run.RunUpdate;
 import dev.agentplatform.controlplane.store.InMemoryRunStore;
+import dev.agentplatform.controlplane.run.ApprovalDecision;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,8 @@ class ApprovalSweeperTest {
     private static final Instant T0 = Instant.parse("2026-11-17T09:00:00Z");
     private static final String PENDING =
             "{\"step\":7,\"tool\":\"github.close_issue\",\"arguments\":{\"issue_number\":42}}";
+
+    private static final Duration TIMEOUT = Duration.ofHours(72);
 
     private final InMemoryRunStore runs = new InMemoryRunStore();
     private final InMemoryApprovalChannel channel = new InMemoryApprovalChannel();
@@ -29,7 +33,7 @@ class ApprovalSweeperTest {
     }
 
     private ApprovalSweeper sweeperAt(Instant now) {
-        return new ApprovalSweeper(runs, notifier, Clock.fixed(now, ZoneOffset.UTC));
+        return new ApprovalSweeper(runs, notifier, channel, Clock.fixed(now, ZoneOffset.UTC), TIMEOUT);
     }
 
     @Test
@@ -100,5 +104,76 @@ class ApprovalSweeperTest {
         assertThat(channel.posted()).isEmpty(); // run_b waits for the next sweep
 
         assertThat(sweeperAt(T0.plusSeconds(180)).postUnsentOnce()).isEqualTo(2);
+    }
+
+    // Expiry
+
+    @Test
+    void runsWaitingLongerThanTheTimeoutExpire() {
+        var posted = waiting("run_posted", T0);
+        notifier.post(posted);
+        waiting("run_unsent", T0.plusSeconds(1));
+        waiting("run_recent", T0.plusSeconds(3600));
+
+        assertThat(sweeperAt(T0.plus(TIMEOUT).plusSeconds(2)).expireOnce()).isEqualTo(2);
+
+        for (var id : new String[] {"run_posted", "run_unsent"}) {
+            var run = runs.find(id).orElseThrow();
+            assertThat(run.status()).isEqualTo(RunStatus.FAILED);
+            assertThat(run.failure().reason()).isEqualTo(ApprovalDecision.EXPIRED_REASON);
+            assertThat(run.failure().message())
+                    .isEqualTo("Call to github.close_issue at step 7 got no decision within 72 h");
+        }
+        assertThat(runs.find("run_recent").orElseThrow().status()).isEqualTo(RunStatus.WAITING_APPROVAL);
+        assertThat(sweeperAt(T0.plus(TIMEOUT).plusSeconds(2)).expireOnce()).isZero();
+    }
+
+    @Test
+    void exactlyTheTimeoutDoesNotExpire() {
+        waiting("run_a", T0);
+
+        assertThat(sweeperAt(T0.plus(TIMEOUT)).expireOnce()).isZero();
+        assertThat(sweeperAt(T0.plus(TIMEOUT).plusMillis(1)).expireOnce()).isEqualTo(1);
+    }
+
+    @Test
+    void expiryIsShownOnlyOnPostedMessages() {
+        var posted = waiting("run_posted", T0);
+        notifier.post(posted);
+        waiting("run_unsent", T0.plusSeconds(1));
+
+        sweeperAt(T0.plus(TIMEOUT).plusSeconds(2)).expireOnce();
+
+        assertThat(channel.shown()).hasSize(1);
+        var shown = channel.shown().getFirst();
+        assertThat(shown.message()).isEqualTo(new ApprovalMessage(InMemoryApprovalChannel.CHANNEL, "1"));
+        assertThat(shown.request()).isEqualTo(ApprovalRequest.of(posted)); // the call, with its arguments
+        assertThat(shown.outcome().isDecision()).isFalse();
+        assertThat(shown.outcome().note())
+                .isEqualTo("Expired: Call to github.close_issue at step 7 got no decision within 72 h");
+    }
+
+    @Test
+    void failedMessageUpdateKeepsTheExpiryAndSkipsSlackForTheRestOfTheSweep() {
+        for (var id : new String[] {"run_a", "run_b"}) {
+            notifier.post(waiting(id, T0));
+        }
+        channel.failNext(1);
+
+        assertThat(sweeperAt(T0.plus(TIMEOUT).plusSeconds(1)).expireOnce()).isEqualTo(2);
+
+        assertThat(runs.find("run_a").orElseThrow().status()).isEqualTo(RunStatus.FAILED);
+        assertThat(runs.find("run_b").orElseThrow().status()).isEqualTo(RunStatus.FAILED);
+        assertThat(channel.shown()).isEmpty();
+    }
+
+    @Test
+    void decidedRunsDoNotExpire() {
+        waiting("run_a", T0);
+        runs.decideApproval("run_a", PENDING,
+                ApprovalDecision.of(PENDING, ApprovalDecision.Decision.rejected, "api:t1", T0), T0);
+
+        assertThat(sweeperAt(T0.plus(TIMEOUT).plusSeconds(1)).expireOnce()).isZero();
+        assertThat(runs.find("run_a").orElseThrow().failure().reason()).isEqualTo(ApprovalDecision.REJECTED_REASON);
     }
 }

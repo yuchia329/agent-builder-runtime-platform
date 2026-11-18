@@ -7,7 +7,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Runs the sweeps (re-enqueue, then approval posts) every {@code SWEEP_INTERVAL_SECONDS} while the app runs as a server. Off when the
+ * Runs the sweeps (re-enqueue, approval posts, approval expiry) every {@code SWEEP_INTERVAL_SECONDS} while the app runs as a server. Off when the
  * interval is 0 (tests, Lambda: a function between requests is frozen, so EventBridge Scheduler
  * calls the sweep there instead, M6).
  */
@@ -30,5 +30,6 @@ class RunSweepSchedule {
     void sweep() {
         sweeper.sweepOnce();
         approvals.postUnsentOnce();
+        approvals.expireOnce();
     }
 }

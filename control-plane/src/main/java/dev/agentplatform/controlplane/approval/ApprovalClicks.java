@@ -79,6 +79,9 @@ public class ApprovalClicks {
         if (callAt(run.pendingApprovalJson(), step) != null) {
             return ApprovalOutcome.noLongerApplies("Still waiting; the decision was not recorded, try again");
         }
+        if (run.failure() != null && ApprovalDecision.EXPIRED_REASON.equals(run.failure().reason())) {
+            return ApprovalOutcome.expired(run.failure().message());
+        }
         return ApprovalOutcome.noLongerApplies("No longer waiting for this call (run is %s)".formatted(run.status()));
     }
 

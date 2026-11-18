@@ -20,7 +20,8 @@ import java.util.Optional;
  *       {@link #touchQueued}. Runs in other statuses are never listed as queued.
  *   <li>A pending call is decided at most once ({@link #decideApproval}).
  *   <li>A WAITING_APPROVAL run has a waiting-since time (its last move to WAITING_APPROVAL) and is
- *       listed as unsent until {@link #markApprovalSent} records where its call was posted.
+ *       listed as unsent until {@link #markApprovalSent} records where its call was posted. Posted
+ *       or not, it is listed by {@link #findWaitingApprovalsBefore} until it leaves WAITING_APPROVAL.
  * </ul>
  */
 public interface RunStore {
@@ -78,4 +79,21 @@ public interface RunStore {
      * @return false if the run is missing, no longer waits on that call, or was already posted
      */
     boolean markApprovalSent(String runId, String pendingApprovalJson, ApprovalMessage message);
+
+    /**
+     * WAITING_APPROVAL runs, posted or not, that started waiting before {@code cutoff}, oldest
+     * first, at most {@code limit}. May lag a just-made change (DynamoDB index);
+     * {@link #expireApproval} confirms.
+     */
+    List<Run> findWaitingApprovalsBefore(Instant cutoff, int limit);
+
+    /**
+     * Fails the run with {@code failure}, atomically and only if it is still WAITING_APPROVAL on
+     * exactly {@code pendingApprovalJson}: clears the pending call, keeps the latest approval and
+     * the approval message.
+     *
+     * @return the failed run, or empty if the run is missing or no longer waits on that call (a
+     *     decision won)
+     */
+    Optional<Run> expireApproval(String runId, String pendingApprovalJson, Run.Failure failure, Instant now);
 }

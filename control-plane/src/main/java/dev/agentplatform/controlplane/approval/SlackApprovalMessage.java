@@ -82,7 +82,7 @@ final class SlackApprovalMessage {
 
     private static String summary(ApprovalOutcome outcome) {
         if (!outcome.isDecision()) {
-            return "No longer waiting";
+            return outcome.note().startsWith("Expired") ? "Expired" : "No longer waiting";
         }
         return (outcome.decision() == Decision.approved ? "Approved" : "Rejected") + " by " + outcome.decidedBy();
     }

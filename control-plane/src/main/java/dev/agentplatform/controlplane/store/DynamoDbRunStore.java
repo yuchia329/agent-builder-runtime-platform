@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunStatus;
 import dev.agentplatform.controlplane.run.RunUpdate;
@@ -23,7 +24,7 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionChe
  * <pre>
  * Run  PK = RUN#&lt;id&gt;  SK = META
  *      runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId,
- *      pendingApproval (JSON), failureReason, failureMessage, output, input (JSON),
+ *      pendingApproval (JSON), approval (JSON), failureReason, failureMessage, output, input (JSON),
  *      createdAt, updatedAt
  *      GSI2PK = TENANT#&lt;t&gt;#AGENT#&lt;name&gt;  GSI2SK = &lt;createdAt&gt;#&lt;runId&gt;  (runs of an agent by time)
  *      GSI1PK = RUNS#QUEUED  GSI1SK = &lt;queued-at epoch millis, 13 digits&gt;#&lt;runId&gt;
@@ -34,7 +35,8 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionChe
  * collides with them. Queued-at is zero-padded epoch millis so text order is time order.
  *
  * A status change is one conditional update: it applies only if the item exists and its status is
- * one of {@link RunStatus#allowedFrom()}.
+ * one of {@link RunStatus#allowedFrom()}. A decision is one conditional update on status
+ * WAITING_APPROVAL and the exact pending call text.
  */
 public class DynamoDbRunStore implements RunStore {
 
@@ -182,6 +184,47 @@ public class DynamoDbRunStore implements RunStore {
         }
     }
 
+    @Override
+    public Run decideApproval(String runId, String pendingApprovalJson, ApprovalDecision decision, Instant now) {
+        var sets = new ArrayList<String>(List.of("#status = :to", "updatedAt = :now", "approval = :approval"));
+        var values = new HashMap<String, AttributeValue>();
+        values.put(":to", s(decision.nextStatus().name()));
+        values.put(":now", s(now.toString()));
+        values.put(":approval", s(decision.toJson()));
+        values.put(":waiting", s(RunStatus.WAITING_APPROVAL.name()));
+        values.put(":pending", s(pendingApprovalJson));
+        if (decision.approved()) {
+            sets.add("GSI1PK = :queuedPk");
+            sets.add("GSI1SK = :queuedSk");
+            values.put(":queuedPk", s(QUEUED_PK));
+            values.put(":queuedSk", s(queuedSk(now, runId)));
+        } else {
+            sets.add("failureReason = :reason");
+            sets.add("failureMessage = :message");
+            values.put(":reason", s(decision.failure().reason()));
+            values.put(":message", s(decision.failure().message()));
+        }
+        try {
+            var result = dynamo.updateItem(r -> r.tableName(table).key(key(runId))
+                    .updateExpression("SET " + String.join(", ", sets) + " REMOVE pendingApproval")
+                    .conditionExpression("attribute_exists(PK) AND #status = :waiting AND pendingApproval = :pending")
+                    .expressionAttributeNames(Map.of("#status", "status"))
+                    .expressionAttributeValues(values)
+                    .returnValues(ReturnValue.ALL_NEW)
+                    .returnValuesOnConditionCheckFailure(ReturnValuesOnConditionCheckFailure.ALL_OLD));
+            return toRun(result.attributes());
+        } catch (ConditionalCheckFailedException e) {
+            if (!e.hasItem() || e.item().isEmpty()) {
+                throw new RunNotFoundException(runId);
+            }
+            var current = RunStatus.valueOf(e.item().get("status").s());
+            if (current != RunStatus.WAITING_APPROVAL) {
+                throw new IllegalTransitionException(runId, current, decision.nextStatus());
+            }
+            throw new ApprovalConflictException("Run '%s' is waiting on a different call".formatted(runId));
+        }
+    }
+
     private static final String QUEUED_PK = "RUNS#QUEUED";
 
     static String queuedSk(Instant queuedAt, String runId) {
@@ -204,6 +247,7 @@ public class DynamoDbRunStore implements RunStore {
                 new BigDecimal(item.get("costUsd").n()),
                 str(item, "traceId"),
                 str(item, "pendingApproval"),
+                str(item, "approval"),
                 failureReason == null ? null : new Run.Failure(failureReason, str(item, "failureMessage")),
                 str(item, "output"),
                 item.get("input").s(),

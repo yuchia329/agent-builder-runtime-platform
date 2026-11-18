@@ -1,9 +1,12 @@
 package dev.agentplatform.controlplane.run;
 
 import dev.agentplatform.controlplane.queue.RunMessage;
+import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.queue.RunQueuePublisher;
 import dev.agentplatform.controlplane.store.AgentNotFoundException;
 import dev.agentplatform.controlplane.store.AgentStore;
+import dev.agentplatform.controlplane.store.ApprovalConflictException;
+import dev.agentplatform.controlplane.store.IllegalTransitionException;
 import dev.agentplatform.controlplane.store.RunNotFoundException;
 import dev.agentplatform.controlplane.store.RunStore;
 import dev.agentplatform.controlplane.agent.Agent;
@@ -12,12 +15,17 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.HexFormat;
 import java.security.SecureRandom;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.json.JsonMapper;
 
 @Service
 public class RunService {
 
+    private static final Logger log = LoggerFactory.getLogger(RunService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final AgentStore agents;
     private final RunStore runs;
@@ -82,6 +90,42 @@ public class RunService {
 
     public Run update(String runId, RunUpdate update) {
         return runs.update(runId, update, clock.instant());
+    }
+
+    /**
+     * Records a person's decision on the run's pending call (ADR 0002). {@code step} must be the
+     * pending call's step, so a stale or repeated request cannot decide a later pause. Approved:
+     * the run becomes QUEUED and is enqueued; if enqueueing fails the decision still stands and
+     * the re-enqueue sweep sends the run. Rejected: the run fails with {@code approval_rejected}.
+     *
+     * @throws RunNotFoundException if the tenant has no such run
+     * @throws IllegalTransitionException if the run is not waiting for approval (or was decided)
+     * @throws ApprovalConflictException if the run waits on a different step
+     */
+    public Run decideApproval(String tenantId, String runId, int step, ApprovalDecision.Decision decision,
+                              String decidedBy) {
+        var run = get(tenantId, runId);
+        var pendingJson = run.pendingApprovalJson();
+        if (run.status() != RunStatus.WAITING_APPROVAL || pendingJson == null) {
+            throw new IllegalTransitionException(runId, run.status(),
+                    decision == ApprovalDecision.Decision.approved ? RunStatus.QUEUED : RunStatus.FAILED);
+        }
+        var pendingStep = JSON.readTree(pendingJson).get("step").asInt();
+        if (pendingStep != step) {
+            throw new ApprovalConflictException(
+                    "Run '%s' is waiting on step %d, not step %d".formatted(runId, pendingStep, step));
+        }
+        var now = clock.instant();
+        var decided = runs.decideApproval(runId, pendingJson,
+                ApprovalDecision.of(pendingJson, decision, decidedBy, now), now);
+        if (decided.status() == RunStatus.QUEUED) {
+            try {
+                queue.publish(new RunMessage(runId, decided.tenantId()));
+            } catch (RunQueueException e) {
+                log.warn("Run {} approved and QUEUED but not enqueued; the sweep will send it", runId, e);
+            }
+        }
+        return decided;
     }
 
     static String newRunId() {

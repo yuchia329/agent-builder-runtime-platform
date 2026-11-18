@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunUpdate;
 import dev.agentplatform.controlplane.run.RunStatus;
@@ -7,6 +8,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /** {@link RunStore} for tests and local runs without DynamoDB. Thread-safe; data is lost on exit. */
@@ -66,5 +68,26 @@ public class InMemoryRunStore implements RunStore {
         }
         queuedAt.put(runId, now);
         return true;
+    }
+
+    @Override
+    public synchronized Run decideApproval(String runId, String pendingApprovalJson, ApprovalDecision decision,
+                                           Instant now) {
+        var current = runs.get(runId);
+        if (current == null) {
+            throw new RunNotFoundException(runId);
+        }
+        if (current.status() != RunStatus.WAITING_APPROVAL) {
+            throw new IllegalTransitionException(runId, current.status(), decision.nextStatus());
+        }
+        if (!Objects.equals(current.pendingApprovalJson(), pendingApprovalJson)) {
+            throw new ApprovalConflictException("Run '%s' is waiting on a different call".formatted(runId));
+        }
+        var updated = current.decided(decision, now);
+        runs.put(runId, updated);
+        if (updated.status() == RunStatus.QUEUED) {
+            queuedAt.put(runId, now);
+        }
+        return updated;
     }
 }

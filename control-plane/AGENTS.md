@@ -50,7 +50,8 @@ Keep Gradle on 8.14.x while machines may only have Java 11 (Gradle 9 needs Java 
 
 If a build fails with `Could not open cache executionHistory.bin` (`EOFException`), a crashed
 daemon left the cache cut short: `./gradlew --stop && rm -rf .gradle/*/executionHistory`, then
-build again.
+build again. Same fix for `Could not open cache resourceHashesCache.bin`: stop the daemon and
+remove `.gradle/*/fileHashes` (and `executionHistory`).
 
 ## Conventions
 
@@ -69,7 +70,9 @@ build again.
   DynamoDB tests share one container through `DynamoDbLocal`.
 - Shapes from `contracts/` are checked with `ContractValidator` against the bundled files, never
   re-typed in Java. Integration tests validate responses against the contract too.
-- Run status rules live only in `RunStatus.allowedFrom()`, mirroring the contract's table.
+- Run status rules live only in `RunStatus.allowedFrom()`, mirroring the contract's table (worker
+  changes). Control-plane moves out of `WAITING_APPROVAL` go only through
+  `RunStore.decideApproval` (conditional on status and the exact pending call).
 - JSON is snake_case with nulls omitted (global Jackson setting in `application.yml`).
 - DynamoDB adapters use the plain `DynamoDbClient` (not the Enhanced Client). Key helpers and the
   item layout are documented at the top of each adapter.

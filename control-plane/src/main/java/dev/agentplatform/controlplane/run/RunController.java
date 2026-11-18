@@ -2,7 +2,9 @@ package dev.agentplatform.controlplane.run;
 
 import dev.agentplatform.controlplane.tenant.ApiKeyAuthFilter;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import java.net.URI;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -16,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** Public run endpoints: start a run by hand, read its status. */
+/** Public run endpoints: start a run by hand, read its status, decide a pending approval. */
 @RestController
 @RequestMapping("/runs")
 public class RunController {
@@ -49,5 +51,21 @@ public class RunController {
             @RequestAttribute(ApiKeyAuthFilter.TENANT_ATTRIBUTE) String tenantId,
             @PathVariable String runId) {
         return RunViews.summary(service.get(tenantId, runId));
+    }
+
+    /** {@code step} is the pending call's step (from {@code pending_approval}). */
+    public record ApprovalRequest(@NotNull ApprovalDecision.Decision decision, @NotNull @Min(1) Integer step) {}
+
+    /**
+     * Web approval (development and tests; Slack uses the same service path). The API key names a
+     * tenant, not a person, so the decision is recorded as made by {@code api:<tenant>}.
+     */
+    @PostMapping(path = "/{runId}/approval", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public RunViews.Summary decideApproval(
+            @RequestAttribute(ApiKeyAuthFilter.TENANT_ATTRIBUTE) String tenantId,
+            @PathVariable String runId,
+            @Valid @RequestBody ApprovalRequest request) {
+        return RunViews.summary(service.decideApproval(tenantId, runId, request.step(), request.decision(),
+                "api:" + tenantId));
     }
 }

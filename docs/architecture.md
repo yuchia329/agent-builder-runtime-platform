@@ -146,7 +146,14 @@ Public endpoints, all tenant-scoped, authenticated by per-tenant API key:
 - `POST /runs`: start a run manually (development and testing). Body `{agent, input}`; the run is
   pinned to the agent's active version, saved `QUEUED`, then enqueued. If enqueueing fails the
   response is 503 and the run stays `QUEUED` for the re-enqueue sweep.
-- `GET /runs/{id}`: status, steps, cost, trace id, pending approval, failure, output.
+- `GET /runs/{id}`: status, steps, cost, trace id, pending approval, approval, failure, output.
+- `POST /runs/{id}/approval`: decide the pending call (web approval for development and tests;
+  Slack uses the same path). Body `{decision: approved|rejected, step}`; `step` must be the
+  pending call's step, so a stale or repeated request cannot decide a later pause (409). The
+  decision copies step, tool and arguments from the stored pending call; `decided_by` is
+  `api:<tenant>` (an API key names a tenant, not a person). Approved: the run becomes `QUEUED` and
+  is enqueued; a failed enqueue still answers 200 and the sweep sends it. Rejected: `FAILED`
+  `approval_rejected`. A call is decided once; later requests get 409.
 
 Public and internal JSON use snake_case field names and leave out empty fields.
 - `POST /triggers/github`: GitHub webhook, no API key. Verifies `X-Hub-Signature-256` (HMAC-SHA256
@@ -194,13 +201,15 @@ the table from that file.
 | Agent, its versions            | `PK=TENANT#<t>#AGENT#<a>`, `SK=META` or `VERSION#<10-digit n>`               | Built    |
 | Agents by trigger (webhooks)   | `GSI1PK=TRIGGER#<event>`, `GSI1SK=TENANT#<t>#AGENT#<a>` on the agent item    | Built    |
 | Tenant by API key              | `PK=APIKEY#<hash>`                                                           | Planned  |
-| Run, its steps and approvals   | `PK=RUN#<id>`, `SK=META`; later `STEP#<n>`, `APPROVAL#<n>`                   | Run built |
+| Run and its approval           | `PK=RUN#<id>`, `SK=META` (`pendingApproval`, latest `approval` as JSON attributes) | Built |
 | Runs of an agent, newest first | `GSI2PK=TENANT#<t>#AGENT#<a>`, `GSI2SK=<created time>#<run id>` on the run item | Keys written, no query yet |
 
 - Publishing reads the agent's `latestVersion` n, then in one transaction sets it to n+1 (only if
   it is still n), sets the active version and trigger index, and writes version n+1 (only if it
   does not exist). A lost race retries, so numbers have no gaps or repeats.
-- Every run status change is a conditional update on the expected current status.
+- Every run status change is a conditional update on the expected current status. A decision is
+  one conditional update on `WAITING_APPROVAL` and the exact pending call text: it sets
+  `approval`, removes `pendingApproval` and sets the new status, so two clicks cannot both win.
 - A scheduled sweep re-enqueues runs left `QUEUED` too long (status written, enqueue failed):
   while `QUEUED`, a run item carries `GSI1PK = RUNS#QUEUED`, `GSI1SK = <queued-at, 13-digit epoch
   millis>#<runId>` (a sparse index: removed on any other status), so the sweep reads only queued

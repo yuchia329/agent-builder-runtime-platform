@@ -20,23 +20,23 @@ public final class RunViews {
 
     public record Summary(String runId, String tenantId, String agentName, int agentVersion, RunStatus status,
                           int steps, BigDecimal costUsd, String traceId, JsonNode pendingApproval,
-                          FailureView failure, String output, Instant createdAt, Instant updatedAt) {}
+                          JsonNode approval, FailureView failure, String output, Instant createdAt, Instant updatedAt) {}
 
     public record Internal(String runId, String tenantId, String agentName, int agentVersion, RunStatus status,
                            int steps, BigDecimal costUsd, String traceId, JsonNode pendingApproval,
-                           FailureView failure, String output, Instant createdAt, Instant updatedAt,
+                           JsonNode approval, FailureView failure, String output, Instant createdAt, Instant updatedAt,
                            JsonNode spec, JsonNode input) {}
 
     public static Summary summary(Run run) {
         return new Summary(run.runId(), run.tenantId(), run.agentName(), run.agentVersion(), run.status(),
-                run.steps(), run.costUsd(), run.traceId(), parse(run.pendingApprovalJson()), failure(run),
+                run.steps(), run.costUsd(), run.traceId(), parse(run.pendingApprovalJson()), parse(run.approvalJson()), failure(run),
                 run.output(), run.createdAt(), run.updatedAt());
     }
 
     public static Internal internal(RunService.RunWithSpec loaded) {
         var run = loaded.run();
         return new Internal(run.runId(), run.tenantId(), run.agentName(), run.agentVersion(), run.status(),
-                run.steps(), run.costUsd(), run.traceId(), parse(run.pendingApprovalJson()), failure(run),
+                run.steps(), run.costUsd(), run.traceId(), parse(run.pendingApprovalJson()), parse(run.approvalJson()), failure(run),
                 run.output(), run.createdAt(), run.updatedAt(), parse(loaded.specJson()), parse(run.inputJson()));
     }
 

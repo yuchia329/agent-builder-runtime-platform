@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunUpdate;
 import java.time.Instant;
@@ -16,6 +17,7 @@ import java.util.Optional;
  *       atomically, so two concurrent changes cannot both succeed.
  *   <li>A QUEUED run has a queued-at time: its creation, its last return to QUEUED, or its last
  *       {@link #touchQueued}. Runs in other statuses are never listed as queued.
+ *   <li>A pending call is decided at most once ({@link #decideApproval}).
  * </ul>
  */
 public interface RunStore {
@@ -46,4 +48,16 @@ public interface RunStore {
      * @return false if the run is missing or no longer QUEUED
      */
     boolean touchQueued(String runId, Instant now);
+
+    /**
+     * Records a decision on the run's pending call, atomically and only if the run is still
+     * WAITING_APPROVAL on exactly {@code pendingApprovalJson}: sets the approval, clears the
+     * pending call, and moves the run to {@link ApprovalDecision#nextStatus()} (with the rejection
+     * failure if rejected). An approved run becomes QUEUED with queued-at {@code now}.
+     *
+     * @throws RunNotFoundException if no run has this id
+     * @throws IllegalTransitionException if the run is not WAITING_APPROVAL (for example, decided)
+     * @throws ApprovalConflictException if the run waits on a different pending call
+     */
+    Run decideApproval(String runId, String pendingApprovalJson, ApprovalDecision decision, Instant now);
 }

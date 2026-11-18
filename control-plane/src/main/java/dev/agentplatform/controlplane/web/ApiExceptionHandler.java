@@ -5,6 +5,7 @@ import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.run.AgentNotPublishedException;
 import dev.agentplatform.controlplane.run.InvalidRequestException;
 import dev.agentplatform.controlplane.store.AgentAlreadyExistsException;
+import dev.agentplatform.controlplane.store.ApprovalConflictException;
 import dev.agentplatform.controlplane.store.AgentNotFoundException;
 import dev.agentplatform.controlplane.store.IllegalTransitionException;
 import dev.agentplatform.controlplane.store.RunNotFoundException;
@@ -40,7 +41,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @ExceptionHandler({AgentAlreadyExistsException.class, AgentNotPublishedException.class,
-            IllegalTransitionException.class})
+            IllegalTransitionException.class, ApprovalConflictException.class})
     ProblemDetail conflict(RuntimeException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }

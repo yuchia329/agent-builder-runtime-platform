@@ -206,7 +206,7 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   pending call was decided; failure reason `approval_expired`. Check: contracts tests pass;
   listed under "Cross-service changes" for control-plane and worker.
   ```
-- [ ] `[control-plane]` approval decisions: store the pending call when a run reports
+- [x] `[control-plane]` approval decisions: store the pending call when a run reports
   ```
   `WAITING_APPROVAL`; `POST /runs/{id}/approval` (API key; web approval for development and
   tests) records the decision once (conditional), approved moves the run to `QUEUED` and
@@ -281,8 +281,8 @@ service has followed.
 
 - **Approval decision in the internal API** (`approval` / `ApprovalDecision` on the run,
   failure reason `approval_expired`). Declared in `contracts/internal-api.openapi.yaml`. Must
-  follow: `control-plane` (on a decision, clear `pending_approval` and set `approval`; set
-  `approval_rejected` / `approval_expired` itself), `worker` (on resume, make the paused call
+  follow: `control-plane` (`approval_expired` in the expiry task; decisions and
+  `approval_rejected` done), `worker` (on resume, make the paused call
   only if `approval.decision` is `approved` and step, tool and arguments equal the pending call;
   never send `approval` in a PATCH).
 
@@ -299,6 +299,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-17 · control-plane** — Approval decisions: `POST /runs/{id}/approval` (API key, body
+  `{decision, step}`; `step` must equal the pending call's step, else 409). One conditional
+  write (`RunStore.decideApproval`, on status `WAITING_APPROVAL` and the exact pending call
+  text) sets `approval` (copied from the pending call; `decided_by` = `api:<tenant>`), clears
+  `pending_approval`, and moves the run to `QUEUED` (enqueued; a failed enqueue still answers
+  200, the sweep sends it) or `FAILED` `approval_rejected`. Second decision, run not waiting:
+  409. Both run views return `approval`. 145 tests pass (8 store contract tests on both
+  adapters, `ApprovalApiIntegrationTest`). Next: `[worker]` resume after approval. Gotchas:
+  `RunStatus.allowedFrom()` is still the worker's table only; control-plane moves out of
+  `WAITING_APPROVAL` go through `decideApproval`. Gradle cache `resourceHashesCache.bin` can
+  break like `executionHistory.bin` (fix in `control-plane/AGENTS.md`).
 
 - **2026-11-17 · contracts** — M3 planned (task list above). Internal API gains `approval`
   (`ApprovalDecision`: `step`, `tool`, `arguments`, `decision` approved|rejected, `decided_by`,

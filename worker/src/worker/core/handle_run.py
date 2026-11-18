@@ -9,7 +9,9 @@ Every model reply passes through this loop before anything acts on it:
 
 - a tool the spec does not list is never called; the model gets an error result instead;
 - tool arguments are checked against the tool's schema before the call;
-- a tool in ``require_approval`` stops the run in WAITING_APPROVAL without being called;
+- a tool in ``require_approval`` stops the run in WAITING_APPROVAL without being called, unless
+  the run's approval decision is ``approved`` for this exact call (same step, tool and arguments
+  as canonical JSON); then it is called like any other tool. Anything else pauses again;
 - a cut-off or refused reply ends the run as FAILED, never as a final answer;
 - the budget (steps, dollars, working seconds) is checked before every step;
 - a worker that lost the run's lease (``attempt.cancelled()`` turns true, or a checkpoint write
@@ -45,6 +47,7 @@ from worker.core.errors import LeaseLost, RunConflict, StateError, ToolError
 from worker.core.models import MODELS, ModelInfo, UnknownModel, model_info
 from worker.core.trim import ContextTooLarge, fit_context, message_chars
 from worker.core.types import (
+    Decision,
     Failure,
     FailureReason,
     Message,
@@ -265,7 +268,7 @@ class _AgentLoop:
                 log.warning("run %s: rejected %s: %s", self._run.run_id, call.name, rejection)
                 # Not a step: saved with the next checkpoint, or decided again on resume.
                 self._add(Message.tool(ToolResult(call.id, rejection, is_error=True)))
-            elif call.name in self._spec.require_approval:
+            elif call.name in self._spec.require_approval and not self._approved(call):
                 return self._pause_for_approval(call)
             else:
                 self._add(Message.tool(self._execute(call)))
@@ -377,6 +380,28 @@ class _AgentLoop:
             return f"Invalid arguments for '{call.name}': {details}"
         return None
 
+    def _approved(self, call: ToolCall) -> bool:
+        """True if the run's decision approves exactly this call at this step."""
+        approval = self._run.approval
+        if approval is None:
+            return False
+        matches = (
+            approval.step == self._budget.steps + 1
+            and approval.tool == call.name
+            and _canonical(approval.arguments) == _canonical(call.arguments)
+        )
+        if not matches:
+            return False  # a decision on an earlier pause
+        if approval.decision is not Decision.APPROVED:
+            log.warning(
+                "run %s: %s was rejected but the run was queued; pausing again",
+                self._run.run_id,
+                call.name,
+            )
+            return False
+        log.info("run %s: %s approved by %s", self._run.run_id, call.name, approval.decided_by)
+        return True
+
     def _pause_for_approval(self, call: ToolCall) -> RunUpdate:
         return RunUpdate(
             RunStatus.WAITING_APPROVAL,
@@ -389,6 +414,11 @@ class _AgentLoop:
 
     def _fail(self, message: str) -> RunUpdate:
         return _failed(self._budget, FailureReason.ERROR, message)
+
+
+def _canonical(value: Any) -> str:
+    """JSON text that is equal only for equal JSON values (``true`` is not ``1``)."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _initial_prompt(run_input: dict[str, Any]) -> str:

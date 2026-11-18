@@ -13,6 +13,7 @@ Run from `worker/`.
 | Install | `uv sync` |
 | Test | `uv run pytest` (Docker must run: SQS and DynamoDB tests start ElasticMQ and DynamoDB Local with Testcontainers) |
 | Test, no Docker | `uv run pytest -m "not docker"` |
+| Tests hang at 0% CPU | iCloud evicted `.venv` files (repo under `~/Desktop`): `find .venv -flags +dataless \| wc -l`; if not 0, `rm -rf .venv && uv sync` |
 | Run against the local stack | `set -a && . ../.env && set +a && uv run worker` (needs `make stack` and the control plane on the host) |
 | Real GitHub tools locally | In `../.env`: `TOOLS_PROVIDER=local`, `GITHUB_TOKEN` (fine-grained, sandbox repo only, Issues read/write), `GITHUB_REPOS=owner/repo` |
 | Real model locally | In `../.env`: `MODEL_PROVIDERS=minimax` and the `MODEL_MINIMAX_*` lines from `../.env.example` with your key; publish a spec with `model: minimax/MiniMax-M3` |
@@ -101,6 +102,9 @@ Run from `worker/`.
 - Tests that need Docker get `@pytest.mark.docker` (or `marks=` on a `pytest.param`).
 - `ScriptedModel` (tests: one script, records calls) vs `StubModel` (running worker: stateless,
   picks the turn by how many assistant replies the conversation has, safe across concurrent runs).
+- A `require_approval` call runs only on a matching approved `RunRecord.approval` (step, tool,
+  canonical-JSON arguments); otherwise the loop pauses again. Tests decide with
+  `InMemoryControlPlane.decide()`, never by editing the run by hand, except to test mismatches.
 - Every tool declares `read_only` / `idempotent` in its `ToolSpec` (ADR 0013). Set them only if
   true: a repeat after a crash relies on them. No flag means a crash mid-call fails the run.
 - `tools_local.py` holds a real token until the M4 gateway: keep its guardrails (repo

@@ -59,6 +59,34 @@ class AgentSpec:
         )
 
 
+class Decision(StrEnum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+@dataclass(frozen=True)
+class ApprovalDecision:
+    """The latest human decision on a pending call. Set by the control plane only."""
+
+    step: int
+    tool: str
+    arguments: dict[str, Any]
+    decision: Decision
+    decided_by: str
+    decided_at: str
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ApprovalDecision:
+        return cls(
+            step=d["step"],
+            tool=d["tool"],
+            arguments=d["arguments"],
+            decision=Decision(d["decision"]),
+            decided_by=d["decided_by"],
+            decided_at=d["decided_at"],
+        )
+
+
 @dataclass(frozen=True)
 class RunRecord:
     """A run as returned by GET /internal/runs/{run_id}."""
@@ -72,9 +100,11 @@ class RunRecord:
     cost_usd: float
     spec: AgentSpec
     input: dict[str, Any]
+    approval: ApprovalDecision | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RunRecord:
+        approval = d.get("approval")
         return cls(
             run_id=d["run_id"],
             tenant_id=d["tenant_id"],
@@ -85,6 +115,7 @@ class RunRecord:
             cost_usd=d["cost_usd"],
             spec=AgentSpec.from_dict(d["spec"]),
             input=d["input"],
+            approval=None if approval is None else ApprovalDecision.from_dict(approval),
         )
 
 

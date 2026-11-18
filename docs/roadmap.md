@@ -214,7 +214,7 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   `approval_rejected`; the internal GET returns the decision. Check: integration tests,
   responses validated against the contract.
   ```
-- [ ] `[worker]` resume after approval: a resumed run whose pending `require_approval` call
+- [x] `[worker]` resume after approval: a resumed run whose pending `require_approval` call
   ```
   matches an approved decision (step, tool, arguments) makes the call (idempotency key as
   usual) and continues; no or non-matching decision pauses again. Check: integration test
@@ -282,9 +282,7 @@ service has followed.
 - **Approval decision in the internal API** (`approval` / `ApprovalDecision` on the run,
   failure reason `approval_expired`). Declared in `contracts/internal-api.openapi.yaml`. Must
   follow: `control-plane` (`approval_expired` in the expiry task; decisions and
-  `approval_rejected` done), `worker` (on resume, make the paused call
-  only if `approval.decision` is `approved` and step, tool and arguments equal the pending call;
-  never send `approval` in a PATCH).
+  `approval_rejected` done). `worker` done.
 
 - **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
   Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `infra` (M6;
@@ -299,6 +297,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-17 · worker** — Resume after approval: `RunRecord.approval` (`ApprovalDecision`); in
+  `_after_turn` a `require_approval` call runs (through `_execute`, idempotency key as usual)
+  only if the decision is `approved` and step (steps + 1), tool and arguments (canonical JSON:
+  `42` != `42.0`, `true` != `1`) match; anything else pauses again with the same pending call.
+  `InMemoryControlPlane.decide()` mimics the control plane for tests. 274 tests pass (pause,
+  approve, resume once; crash after the approved call reuses its result; no or mismatched
+  decision pauses again). Next: `[worker]` `github.close_issue`. Gotchas: the repo is in
+  iCloud-synced `~/Desktop` with "Optimize Mac Storage": macOS evicts `.venv` and cache files
+  (2,406 in `worker/.venv`), and reads then block on download, so tests hang at 0% CPU (stack
+  in `read()` of a `.pyc`). Check with `find .venv -flags +dataless | wc -l`; fix by
+  `rm -rf .venv && uv sync`, or move the repo out of iCloud.
 
 - **2026-11-17 · control-plane** — Approval decisions: `POST /runs/{id}/approval` (API key, body
   `{decision, step}`; `step` must equal the pending call's step, else 409). One conditional

@@ -378,3 +378,101 @@ def test_without_an_attempt_nothing_is_saved(clock):
 
     assert handle_run(RUN_ID, deps) is RunStatus.SUCCEEDED
     assert platform.state.load_checkpoints(RUN_ID) == []
+
+
+# --- Resume after approval (ADR 0002) -------------------------------------------------------
+
+CLOSE = ("github.close_issue", {"repo": REPO, "issue_number": 42, "reason": "duplicate"})
+CLOSING = [tool_turn(SEARCH), tool_turn(CLOSE), final_turn("Closed as a duplicate of #7.")]
+
+
+def _paused(clock):
+    """A run paused at step 4 on github.close_issue (model turn, search, model turn)."""
+    platform = Platform(clock)
+    outcome, _, tools = platform.attempt(CLOSING)
+    assert outcome is RunStatus.WAITING_APPROVAL
+    assert platform.stored["pending_approval"] == {
+        "step": 4,
+        "tool": "github.close_issue",
+        "arguments": CLOSE[1],
+    }
+    assert [n for n, _ in tools.calls] == ["github.search_issues"]
+    return platform
+
+
+def test_approved_call_runs_once_after_resume(clock):
+    platform = _paused(clock)
+    platform.control_plane.decide(RUN_ID, "approved")
+
+    outcome, model, tools = platform.attempt(CLOSING[2:])
+
+    assert outcome is RunStatus.SUCCEEDED
+    assert tools.calls == [CLOSE]
+    assert len(model.calls) == 1  # the paused turn was saved: the model is not asked again
+    [*_, close_result] = [m.tool_result for m in model.calls[0].messages if m.tool_result]
+    assert close_result.content == {"ok": True}
+    assert platform.stored["steps"] == 5
+    assert platform.stored["cost_usd"] == pytest.approx(3 * TURN_COST)
+    assert platform.statuses() == ["RUNNING", "WAITING_APPROVAL", "RUNNING", "SUCCEEDED"]
+    for _, body in platform.control_plane.updates:
+        assert contract_errors("RunUpdate", body) == [], body
+
+
+def test_approved_call_is_not_repeated_by_a_later_resume(clock):
+    platform = _paused(clock)
+    platform.control_plane.decide(RUN_ID, "approved")
+    platform.state.die_at = 4  # close ran and its result was stored; the step was not saved
+
+    first, _, tools_1 = platform.attempt(CLOSING[2:])
+    platform.state.die_at = None
+    second, _, tools_2 = platform.attempt(CLOSING[2:])
+
+    assert isinstance(first, Killed)
+    assert second is RunStatus.SUCCEEDED
+    assert tools_1.calls == [CLOSE]
+    assert tools_2.calls == []  # stored result reused: the issue is closed once
+    assert platform.stored["steps"] == 5
+
+
+def test_queued_without_a_decision_pauses_again(clock):
+    platform = _paused(clock)
+    cp = platform.control_plane
+    cp.add_run(
+        {k: v for k, v in cp.run_json(RUN_ID).items() if k != "pending_approval"}
+        | {"status": "QUEUED"}
+    )
+
+    outcome, model, tools = platform.attempt([])
+
+    assert outcome is RunStatus.WAITING_APPROVAL
+    assert tools.calls == [] and model.calls == []
+    assert platform.stored["pending_approval"]["step"] == 4
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"step": 2},  # a decision on an earlier pause
+        {"tool": "github.add_label"},
+        {"arguments": CLOSE[1] | {"issue_number": 43}},
+        {"arguments": CLOSE[1] | {"issue_number": 42.0}},  # equal in Python, not as JSON
+        {"decision": "rejected"},  # never happens (rejected runs fail); still never called
+    ],
+    ids=["step", "tool", "arguments", "number-type", "rejected"],
+)
+def test_decision_that_does_not_approve_this_call_pauses_again(clock, change):
+    platform = _paused(clock)
+    cp = platform.control_plane
+    cp.decide(RUN_ID, "approved")
+    run = cp.run_json(RUN_ID)
+    cp.add_run(run | {"approval": run["approval"] | change})
+
+    outcome, _, tools = platform.attempt([])
+
+    assert outcome is RunStatus.WAITING_APPROVAL
+    assert tools.calls == []
+    assert platform.stored["pending_approval"] == {
+        "step": 4,
+        "tool": "github.close_issue",
+        "arguments": CLOSE[1],
+    }

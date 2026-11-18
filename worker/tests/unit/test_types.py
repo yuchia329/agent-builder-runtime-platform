@@ -1,8 +1,11 @@
 """Core types round-trip the contract shapes."""
 
+import pytest
 from contracts import contract_errors, example_run
 
+from worker.adapters.control_plane_memory import InMemoryControlPlane
 from worker.core.types import (
+    Decision,
     Failure,
     FailureReason,
     PendingApproval,
@@ -19,6 +22,31 @@ def test_run_record_parses_contract_example():
     assert run.spec.budget.max_steps == 20
     assert run.spec.require_approval == frozenset({"github.close_issue"})
     assert run.input["issue"]["number"] == 42
+
+
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+def test_decided_run_matches_contract_and_parses(decision):
+    cp = InMemoryControlPlane()
+    paused = example_run() | {
+        "status": "WAITING_APPROVAL",
+        "steps": 3,
+        "pending_approval": {"step": 4, "tool": "github.close_issue", "arguments": {"n": 1}},
+    }
+    cp.add_run(paused)
+
+    cp.decide(paused["run_id"], decision)  # the shape the control plane returns
+    stored = cp.run_json(paused["run_id"])
+
+    assert contract_errors("InternalRun", stored) == []
+    assert "pending_approval" not in stored
+    approval = RunRecord.from_dict(stored).approval
+    assert approval is not None
+    assert (approval.step, approval.tool, approval.arguments) == (4, "github.close_issue", {"n": 1})
+    assert approval.decision is Decision(decision)
+
+
+def test_run_without_a_decision_has_no_approval():
+    assert RunRecord.from_dict(example_run()).approval is None
 
 
 def test_every_update_shape_matches_contract():

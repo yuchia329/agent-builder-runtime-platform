@@ -56,3 +56,26 @@ class InMemoryControlPlane:
                 raise RunConflict(run_id, requested, f"run is {current}")
             run.update(copy.deepcopy(body))
             self.updates.append((run_id, copy.deepcopy(body)))
+
+    def decide(self, run_id: str, decision: str, decided_by: str = "api:tenant-demo") -> None:
+        """Test helper doing what the control plane does on a decision (POST
+        /runs/{id}/approval): copy the pending call into `approval`, clear `pending_approval`,
+        and queue the run (approved) or fail it with approval_rejected (rejected)."""
+        with self._lock:
+            run = self._runs[run_id]
+            if run["status"] != RunStatus.WAITING_APPROVAL:
+                raise RunConflict(run_id, RunStatus.QUEUED, f"run is {run['status']}")
+            pending = run.pop("pending_approval")
+            run["approval"] = pending | {
+                "decision": decision,
+                "decided_by": decided_by,
+                "decided_at": "2026-11-17T12:00:00Z",
+            }
+            if decision == "approved":
+                run["status"] = RunStatus.QUEUED.value
+            else:
+                run["status"] = RunStatus.FAILED.value
+                run["failure"] = {
+                    "reason": "approval_rejected",
+                    "message": f"rejected by {decided_by}",
+                }

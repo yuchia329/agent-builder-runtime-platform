@@ -255,7 +255,11 @@ The worker core is one function, `handle_run(run_id)`, called from an entrypoint
    attempts ([ADR 0012](adr/0012-time-budget-counts-working-time.md); time waiting between
    attempts does not count). Over budget means `FAILED` with a reason.
 6. A tool in `require_approval`: save the pending call, report `WAITING_APPROVAL`, delete the SQS
-   message, exit. The approval re-enqueues the run.
+   message, exit. The approval re-enqueues the run. On resume the paused call (from the saved
+   model turn) runs only if the run's `approval` is `approved` and its step, tool and arguments
+   (canonical JSON) equal the call; it then goes through the usual idempotency key, so a later
+   resume reuses its result. No or another decision pauses again; the worker never calls a
+   rejected call and never sets `approval_*` reasons.
 
 The message is deleted once `handle_run` returns, whatever status the run ended in. It is kept,
 so SQS delivers it again and after 5 receives moves it to the DLQ, when the body does not match

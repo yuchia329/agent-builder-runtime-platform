@@ -11,7 +11,9 @@ webhook delivered locally through smee.io). Bedrock also works (`bedrock/amazon.
 through the Converse adapter), though Nova Lite triages worse than MiniMax. **M2 done (crash
 safety):** lease, per-step checkpoints, idempotent tool calls (ADR 0011-0013), re-enqueue sweep,
 webhook dedupe; `make chaos` kills the worker mid-run with SIGKILL and the run resumes and adds
-its label exactly once. Next: M3 (approvals and Slack), tasks below.
+its label exactly once. **M3 done (approvals):** issue-triage closes a high-confidence duplicate
+only after Approve in Slack (Reject fails the run with `approval_rejected`, no decision in 72 h
+with `approval_expired`); checked live in the sandbox. Next: plan M4 (tool gateway) tasks.
 
 ## Approach
 
@@ -48,7 +50,7 @@ can run alongside 2 to 5. Start a session with
 | M0  | Local skeleton | `docker compose up`; publish a spec; one run completes end to end with the stub model                                                                         | Done        |
 | M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Done        |
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Done        |
-| M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | In progress |
+| M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Not started |
 | M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
@@ -243,7 +245,7 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   `APPROVAL_TIMEOUT_HOURS` (default 72; must stay under the worker's 15-day run-state retention,
   ADR 0011) with `approval_expired`. Check: unit tests.
   ```
-- [ ] `[specs]` issue-triage closes confirmed duplicates with `github.close_issue` under
+- [x] `[specs]` issue-triage closes confirmed duplicates with `github.close_issue` under
   ```
   `require_approval`. Check: a planted duplicate in the sandbox pauses the run, Approve in Slack
   closes it as duplicate, Reject leaves it open and fails the run. **M3 done.**
@@ -292,6 +294,19 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · specs** — `issue-triage.yaml` (version 4 in the local stack) adds
+  `github.close_issue` under `require_approval`: after labeling, only a high-confidence duplicate,
+  only the new issue, `reason: duplicate` with `duplicate_of`; summary gains `Closed: yes | no`;
+  `max_steps` 20. Live in the sandbox: #8 (duplicate of #5) paused, Approve in Slack closed it as
+  duplicate, run `SUCCEEDED` (13 steps, $0.0048); #9 (duplicate of #2) paused, Reject left it open,
+  run `FAILED` `approval_rejected`. **M3 done.** Next: plan M4 (tool gateway) tasks. Gotchas:
+  GitHub search has no stemming ("crash" misses "crashes"; the first run missed #5), so the
+  instructions ask for short queries or `OR`. Some networks block Cloudflare quick tunnels by DNS
+  (`api.trycloudflare.com` resolves to a block page; `cloudflared` times out); clicks came through ngrok with a
+  traffic policy allowing only `POST /approvals/slack` (a tunnel exposes every route, and
+  `/internal/*` has no auth locally; policy in `specs/README.md`). The Slack Request URL now
+  points at a dead ngrok URL. `make up` rebuilt images; the old stack predated the Slack code.
 
 - **2026-11-18 · control-plane** — Approval expiry: `ApprovalSweeper.expireOnce()` (same sweep
   schedule) fails runs left `WAITING_APPROVAL` longer than `APPROVAL_TIMEOUT_HOURS` (default 72,

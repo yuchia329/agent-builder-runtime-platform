@@ -6,7 +6,7 @@ Example agent specs, run against the real model and tools. Each file follows
 
 | Spec | What it does | Tools |
 | --- | --- | --- |
-| `issue-triage.yaml` | Labels a new GitHub issue (`bug`, `enhancement`, ...) and adds `duplicate` when an existing issue reports the same problem | `github.search_issues`, `github.add_label` |
+| `issue-triage.yaml` | Labels a new GitHub issue (`bug`, `enhancement`, ...), adds `duplicate` when an existing issue reports the same problem, and closes a high-confidence duplicate once a person approves in Slack | `github.search_issues`, `github.add_label`, `github.close_issue` (approval) |
 
 ## Run issue-triage for real
 
@@ -43,17 +43,47 @@ Costs about $0.01 of MiniMax credit per run and writes labels to a real GitHub r
                 "body":"Refund failed: currency not supported. USD refunds work."}}}'
    ```
 
-5. Poll until `status` is `SUCCEEDED` (or `FAILED`); `output` has the summary, `cost_usd` the
-   spend. Then check the issue's labels on GitHub.
+5. Poll until `status` is `SUCCEEDED`, `FAILED` or `WAITING_APPROVAL`; `output` has the summary,
+   `cost_usd` the spend. Then check the issue's labels on GitHub.
 
    ```sh
    curl -s localhost:8080/runs/<run_id> -H "X-Api-Key: $TENANT_API_KEY"
    ```
 
+## Approve a duplicate close in Slack
+
+When the run finds a duplicate with high confidence, it pauses in `WAITING_APPROVAL` before
+`github.close_issue` and posts Approve / Reject buttons to `SLACK_APPROVAL_CHANNEL`. Approve closes
+the new issue as a duplicate (linked to the original) and the run ends `SUCCEEDED`; Reject leaves
+it open, keeps its labels, and the run ends `FAILED` with `approval_rejected`. Nobody deciding
+within `APPROVAL_TIMEOUT_HOURS` (72) ends it with `approval_expired`.
+
+1. In `.env`: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APPROVAL_CHANNEL` (Slack app setup:
+   `control-plane/AGENTS.md`). Posting works without anything else.
+2. Clicks need a public URL for the control plane on port 8080, through a tunnel:
+   `cloudflared tunnel --url http://127.0.0.1:8080` (no account) or, where quick tunnels are
+   blocked, `ngrok http 8080 --traffic-policy-file <policy>` with a policy that answers 403 to
+   everything except `POST /approvals/slack` (a tunnel exposes every route, and `/internal/*`
+   has no auth locally):
+
+   ```yaml
+   on_http_request:
+     - expressions: ["!(req.method == 'POST' && req.url.path == '/approvals/slack')"]
+       actions: [{type: custom-response, config: {status_code: 403, body: "forbidden"}}]
+   ```
+
+3. Paste `<tunnel URL>/approvals/slack` into the Slack app's Interactivity & Shortcuts → Request
+   URL (new URL on every tunnel start). Messages posted before the tunnel was up still work.
+4. To test, plant a duplicate: open an issue restating an existing one in other words, wait a few
+   seconds for search to index it, start a run (step 4 above), click in Slack, and check the issue
+   on GitHub (`gh issue view <n> --json state,stateReason`).
+
 ## Gotchas
 
 - `make demo` republishes `issue-triage` with the stub spec; publish this one again afterwards.
 - With `TOOLS_PROVIDER=local`, `make demo` fails at run start: its spec lists
-  `github.close_issue` and `slack.post_message`, which the local tools do not have (M3).
+  `slack.post_message`, which the local tools do not have.
+- GitHub search matches exact words, not stems ("crash" misses "crashes"): the instructions tell
+  the model to use short queries or `OR`. A run that misses a duplicate is usually a query issue.
 - A new issue takes a few seconds to appear in GitHub search.
 - `docker compose logs -f worker` shows each model call and tool call.

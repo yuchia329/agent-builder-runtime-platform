@@ -2,7 +2,11 @@
 
 Routes are registered with `on(method, path, body, status, headers)`; unregistered ones answer 404
 like GitHub. `fail_next` queues error statuses (retries, rate limits). Every request is kept.
-Deterministic, shared test infrastructure.
+
+The GitHub App token exchange (POST /app/installations/{INSTALLATION_ID}/access_tokens) is answered
+apart: it is kept in `token_requests`, not `requests`, and answers `app_token` (or the statuses
+queued with `fail_token_next`). `app_store()` holds the matching App credential. Deterministic,
+shared test infrastructure.
 """
 
 import json
@@ -14,8 +18,34 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from gateway.adapters.token_store_memory import MemoryTokenStore
+from gateway.ports.token_store import CredentialKey
+
 FIXTURES = Path(__file__).parent / "fixtures" / "github"
 REPO = "octocat/Hello-World"
+APP_ID = "1001"
+INSTALLATION_ID = "2002"
+APP_TOKEN = "ghs_test_secret_value"
+TOKEN_PATH = f"/app/installations/{INSTALLATION_ID}/access_tokens"
+APP_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+APP_PEM = APP_KEY.private_bytes(
+    serialization.Encoding.PEM,
+    serialization.PrivateFormat.TraditionalOpenSSL,
+    serialization.NoEncryption(),
+).decode()
+
+
+def app_credential() -> dict[str, str]:
+    return {"app_id": APP_ID, "private_key": APP_PEM, "installation_id": INSTALLATION_ID}
+
+
+def app_store(tenant: str = "tenant-test") -> MemoryTokenStore:
+    store = MemoryTokenStore()
+    store.put(CredentialKey(tenant, "team-bot", "github"), app_credential())
+    return store
 
 
 def fixture(name: str) -> Any:
@@ -36,6 +66,10 @@ class FakeGitHub:
         self.routes: dict[tuple[str, str], tuple[int, Any, dict[str, str]]] = {}
         self.failures: deque[tuple[int, dict[str, str]]] = deque()
         self.requests: list[Request] = []
+        self.token_requests: list[Request] = []
+        self.token_failures: deque[int] = deque()
+        self.app_token = APP_TOKEN
+        self.app_token_expires_at = "2099-01-01T00:00:00Z"
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -46,15 +80,20 @@ class FakeGitHub:
                 url = urlsplit(self.path)
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length) if length else b""
-                fake.requests.append(
-                    Request(
-                        self.command,
-                        url.path,
-                        parse_qs(url.query),
-                        {k: v for k, v in self.headers.items()},
-                        json.loads(raw) if raw else None,
-                    )
+                request = Request(
+                    self.command,
+                    url.path,
+                    parse_qs(url.query),
+                    {k: v for k, v in self.headers.items()},
+                    json.loads(raw) if raw else None,
                 )
+                if (self.command, url.path) == ("POST", TOKEN_PATH):
+                    fake.token_requests.append(request)
+                    if fake.token_failures:
+                        return self._send(fake.token_failures.popleft(), {"message": "no"}, {})
+                    token = {"token": fake.app_token, "expires_at": fake.app_token_expires_at}
+                    return self._send(201, token, {})
+                fake.requests.append(request)
                 if fake.failures:
                     status, headers = fake.failures.popleft()
                     return self._send(status, {"message": "failure"}, headers)
@@ -86,6 +125,9 @@ class FakeGitHub:
 
     def fail_next(self, status: int, times: int = 1, headers: dict[str, str] | None = None) -> None:
         self.failures.extend([(status, headers or {})] * times)
+
+    def fail_token_next(self, status: int, times: int = 1) -> None:
+        self.token_failures.extend([status] * times)
 
     def __enter__(self) -> "FakeGitHub":
         self._thread.start()

@@ -4,14 +4,12 @@ import shutil
 
 import pytest
 import yaml
-from fake_github import REPO, FakeGitHub, fixture
+from fake_github import REPO, FakeGitHub, app_store, fixture
 from gateway_testing import CONTRACTS, claims
 
-from gateway.adapters.token_store_memory import MemoryTokenStore
 from gateway.auth.run_token import RunClaims
 from gateway.config import CONNECTORS_FOLDER
 from gateway.credentials import Credentials
-from gateway.ports.token_store import CredentialKey
 from gateway.tools.executor import ConnectorClient
 from gateway.tools.openapi_to_mcp import load_connector
 from gateway.tools.registry import CallContext, ToolFailure
@@ -60,8 +58,7 @@ def github():
 
 
 def run(connector, server, tool, arguments):
-    store = MemoryTokenStore()
-    store.put(CredentialKey("tenant-test", "team-bot", "github"), {"token": "t"})
+    store = app_store()
     c = ConnectorClient(connector, Credentials(store), base_url=server.url, sleep=lambda _: None)
     context = CallContext(RunClaims.from_payload(claims()), 3, "a" * 64)
     return c.call(connector.tools[tool], arguments, context)

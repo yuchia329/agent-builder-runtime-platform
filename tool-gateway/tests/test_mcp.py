@@ -136,7 +136,7 @@ async def test_owner_runs_log_the_owner_as_identity(gateway, keys, caplog):
 
 
 async def test_generated_github_tools_work_through_mcp(keys):
-    from fake_github import REPO, FakeGitHub, fixture
+    from fake_github import REPO, FakeGitHub, app_credential, fixture
     from gateway_testing import CONTRACTS, LiveGateway
 
     from gateway.adapters.token_store_memory import MemoryTokenStore
@@ -147,7 +147,7 @@ async def test_generated_github_tools_work_through_mcp(keys):
     from gateway.tools.openapi_to_mcp import load_connector
 
     store = MemoryTokenStore()
-    store.put(CredentialKey("tenant-test", "team-bot", "github"), {"token": "ghs_secret"})
+    store.put(CredentialKey("tenant-test", "team-bot", "github"), app_credential())
     definition = load_connector(CONNECTORS_FOLDER / "github", CONTRACTS, {"GITHUB_REPOS": REPO})
     with FakeGitHub() as github:
         github.on("GET", "/search/issues", fixture("search_issues"))
@@ -172,7 +172,7 @@ async def test_generated_github_tools_work_through_mcp(keys):
 
 
 async def test_listing_keeps_plain_descriptions_when_github_fails(keys):
-    from fake_github import REPO, FakeGitHub
+    from fake_github import REPO, FakeGitHub, app_credential
     from gateway_testing import CONTRACTS, LiveGateway
 
     from gateway.adapters.token_store_memory import MemoryTokenStore
@@ -183,7 +183,7 @@ async def test_listing_keeps_plain_descriptions_when_github_fails(keys):
     from gateway.tools.openapi_to_mcp import load_connector
 
     store = MemoryTokenStore()
-    store.put(CredentialKey("tenant-test", "team-bot", "github"), {"token": "t"})
+    store.put(CredentialKey("tenant-test", "team-bot", "github"), app_credential())
     definition = load_connector(CONNECTORS_FOLDER / "github", CONTRACTS, {"GITHUB_REPOS": REPO})
     with FakeGitHub() as github:  # no labels route: the listing call gets 404
         connector = ConnectorClient(definition, Credentials(store), base_url=github.url)

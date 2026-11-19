@@ -1,19 +1,20 @@
 """The generated GitHub tools against a fake GitHub serving recorded responses."""
 
 import pytest
-from fake_github import REPO, FakeGitHub, fixture
+from fake_github import APP_TOKEN, REPO, FakeGitHub, app_store, fixture
 from gateway_testing import CONTRACTS, claims
 
 from gateway.adapters.token_store_memory import MemoryTokenStore
 from gateway.auth.run_token import RunClaims
 from gateway.config import CONNECTORS_FOLDER
 from gateway.credentials import Credentials
+from gateway.github_app import GitHubAppTokens
 from gateway.ports.token_store import CredentialKey
 from gateway.tools.executor import ConnectorClient
 from gateway.tools.openapi_to_mcp import load_connector
 from gateway.tools.registry import CallContext, ToolFailure
 
-TOKEN = "ghs_test_secret_value"
+TOKEN = APP_TOKEN
 OWNER, NAME = REPO.split("/")
 LABELS = f"/repos/{REPO}/issues/1/labels"
 ISSUE = f"/repos/{REPO}/issues/7"
@@ -39,10 +40,8 @@ def client(server, store=None, env=ENV):
     )
 
 
-def bot_store(token=TOKEN):
-    store = MemoryTokenStore()
-    store.put(CredentialKey("tenant-test", "team-bot", "github"), {"token": token})
-    return store
+def bot_store():
+    return app_store()
 
 
 def call(server, tool, arguments, store=None, run=None):
@@ -197,7 +196,9 @@ def test_unreachable_api_is_a_tool_failure():
     with FakeGitHub() as server:
         url = server.url
     definition = load_connector(CONNECTORS_FOLDER / "github", CONTRACTS, ENV)
-    dead = ConnectorClient(definition, Credentials(bot_store()), base_url=url, sleep=lambda _: None)
+    no_sleep = GitHubAppTokens(sleep=lambda _: None)
+    credentials = Credentials(bot_store(), no_sleep)
+    dead = ConnectorClient(definition, credentials, base_url=url, sleep=lambda _: None)
     context = CallContext(RunClaims.from_payload(claims()), 3, "a" * 64)
 
     with pytest.raises(ToolFailure, match="unreachable"):

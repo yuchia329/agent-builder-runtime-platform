@@ -14,7 +14,7 @@ from typing import Any
 import httpx2
 
 from gateway.auth.run_token import RunClaims
-from gateway.credentials import Credentials
+from gateway.credentials import Auth, Credentials
 from gateway.tools import rules
 from gateway.tools.openapi_to_mcp import ConnectorDefinition, Operation, ToolDefinition
 from gateway.tools.registry import ApiError, CallContext, Tool, ToolFailure
@@ -82,20 +82,23 @@ class ConnectorClient:
             return None
 
         def run(claims: RunClaims) -> str | None:
-            headers = self._credentials.headers(
-                self.connector.name, self.connector.credentials, claims
-            )
+            auth = self._auth(claims)
             return describe(
-                DescribeCall(claims, self._hook_operation(headers), self.connector.settings)
+                DescribeCall(claims, self._hook_operation(auth), self.connector.settings)
             )
 
         return run
 
-    def _hook_operation(self, headers: dict[str, str]) -> Callable[[str, dict[str, Any]], Any]:
+    def _auth(self, claims: RunClaims) -> Auth:
+        return self._credentials.auth(
+            self.connector.name, self.connector.credentials, claims, self._base_url
+        )
+
+    def _hook_operation(self, auth: Auth) -> Callable[[str, dict[str, Any]], Any]:
         def operation(operation_id: str, values: dict[str, Any]) -> Any:
             if operation_id not in self.connector.hook_operations:
                 raise ToolFailure(f"Operation {operation_id} is not allowed for hooks")
-            return self._request(self.connector.operations[operation_id], values, headers)
+            return self._request(self.connector.operations[operation_id], values, auth)
 
         return operation
 
@@ -115,23 +118,21 @@ class ConnectorClient:
         hook_args = {k: v for k, v in arguments.items() if k in tool.hook_arguments}
         rules.check_values(tool.checks, {**tool.fixed, **api_args}, settings)
         api_args = rules.apply_argument_rules(api_args, tool.argument_rules, settings)
-        headers = self._credentials.headers(
-            self.connector.name, self.connector.credentials, context.claims
-        )
+        auth = self._auth(context.claims)
 
         def send(values: dict[str, Any]) -> Any:
-            return self._request(tool.operation, {**tool.fixed, **values}, headers)
+            return self._request(tool.operation, {**tool.fixed, **values}, auth)
 
         if tool.hook is not None:
             call = HookCall(
-                api_args, hook_args, context, send, self._hook_operation(headers), settings
+                api_args, hook_args, context, send, self._hook_operation(auth), settings
             )
             response = tool.hook(call)
         else:
             response = send(api_args)
         return rules.shape_result(response, tool.result)
 
-    def _request(self, op: Operation, values: dict[str, Any], auth: dict[str, str]) -> Any:
+    def _request(self, op: Operation, values: dict[str, Any], auth: Auth) -> Any:
         path = op.path
         query: dict[str, Any] = {}
         body: dict[str, Any] = {}
@@ -150,12 +151,15 @@ class ConnectorClient:
             "url": self._base_url + path,
             "params": query or None,
             "json": body if (body or op.method in ("POST", "PATCH", "PUT")) and op.body else None,
-            "headers": {**self.connector.headers, **auth},
         }
         name = self.connector.name
-        for attempt in range(1, ATTEMPTS + 1):
+        renewed = False
+        attempt = 0
+        while attempt < ATTEMPTS:
+            attempt += 1
+            headers = {**self.connector.headers, **auth.headers}
             try:
-                response = self._http.request(**request)
+                response = self._http.request(**request, headers=headers)
             except httpx2.TransportError:
                 if attempt == ATTEMPTS:
                     raise ToolFailure(f"{name} is unreachable; try again later") from None
@@ -170,6 +174,10 @@ class ConnectorClient:
                 response.status_code == 403 and response.headers.get("x-ratelimit-remaining") == "0"
             ):
                 raise ToolFailure(f"{name} rate limit reached; try again later")
+            if response.status_code == 401 and not renewed and auth.renew():
+                renewed = True  # a cached credential revoked early: once, not counted
+                attempt -= 1
+                continue
             if response.status_code >= 400:
                 status = response.status_code
                 raise ApiError(f"{name} answered {status}: {_message(response)}", status)

@@ -12,6 +12,7 @@ from gateway.connectors.fake import FakeConnector
 from gateway.contracts import Contracts
 from gateway.credentials import Credentials
 from gateway.ports.token_store import TokenStore
+from gateway.seed import seed_from_env
 from gateway.tools.executor import ConnectorClient
 from gateway.tools.openapi_to_mcp import ConnectorError, load_connector
 from gateway.tools.registry import Registry
@@ -21,6 +22,7 @@ log = logging.getLogger("gateway")
 
 def connectors(settings: Settings, contracts: Contracts, store: TokenStore) -> list:
     loaded = []
+    credentials = Credentials(store)  # one installation-token cache for all connectors
     for name in settings.connectors:
         if name == "fake":
             loaded.append(FakeConnector())
@@ -29,13 +31,16 @@ def connectors(settings: Settings, contracts: Contracts, store: TokenStore) -> l
         if not (folder / "allowlist.yaml").is_file():
             raise ConnectorError(f"Unknown connector in CONNECTORS: {name} (no {folder})")
         definition = load_connector(folder, contracts, dict(settings.env))
-        loaded.append(ConnectorClient(definition, Credentials(store)))
+        loaded.append(ConnectorClient(definition, credentials))
     return loaded
 
 
 def build(settings: Settings, store: TokenStore | None = None):
     contracts = Contracts(settings.contracts_dir)
-    store = store or MemoryTokenStore()
+    if store is None:
+        store = MemoryTokenStore()
+        for seeded in seed_from_env(store, dict(settings.env)):
+            log.info("Credential from the environment: %s", seeded)
     registry = Registry(connectors(settings, contracts, store))
     verifier = RunTokenVerifier(settings.run_token_public_key, contracts)
     log.info(

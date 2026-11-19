@@ -31,20 +31,18 @@ test_close_result_has_no_body_or_token -> here
 """
 
 import pytest
-from fake_github import REPO, FakeGitHub, fixture
+from fake_github import APP_TOKEN, REPO, FakeGitHub, app_store, fixture
 from gateway_testing import CONTRACTS, claims
 from jsonschema import Draft202012Validator
 
-from gateway.adapters.token_store_memory import MemoryTokenStore
 from gateway.auth.run_token import RunClaims
 from gateway.config import CONNECTORS_FOLDER
 from gateway.credentials import Credentials
-from gateway.ports.token_store import CredentialKey
 from gateway.tools.executor import ConnectorClient
 from gateway.tools.openapi_to_mcp import load_connector
 from gateway.tools.registry import CallContext, ToolFailure
 
-TOKEN = "ghs_parity_secret"
+TOKEN = APP_TOKEN
 OWNER, NAME = REPO.split("/")
 LABELS_PATH = f"/repos/{REPO}/issues/1/labels"
 ISSUE_PATH = f"/repos/{REPO}/issues/7"  # recorded: an open issue, closed as duplicate of #1
@@ -69,8 +67,7 @@ def connector():
 
 
 def client(server):
-    store = MemoryTokenStore()
-    store.put(CredentialKey("tenant-test", "team-bot", "github"), {"token": TOKEN})
+    store = app_store()
     return ConnectorClient(
         connector(), Credentials(store), base_url=server.url, sleep=lambda _: None
     )

@@ -395,8 +395,11 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   then the result shape (`fields`; with `list`, `{"items": [...]}`). 5xx and network errors are
   retried 3 times; rate limits are reported, not retried; 4xx answers reach the model as
   "<connector> answered <status>: <message>". Calls run in a worker thread.
-- Identity: `acts_as: team-bot` uses the tenant's bot (GitHub App installation token, cached for
-  its hour); `acts_as: owner` uses the publisher's OAuth token, stored after a one-time login
+- Identity: `acts_as: team-bot` uses the tenant's bot: a GitHub App (app id, private key,
+  installation id in the `TokenStore`); the gateway signs a 10-minute app JWT, exchanges it for the
+  installation token, caches that until 5 minutes before its hour ends, and renews once if GitHub
+  answers 401. The App's installation (only the allowed repos, Issues and Metadata) is a second
+  limit beside `GITHUB_REPOS`; `acts_as: owner` uses the publisher's OAuth token, stored after a one-time login
   (`/oauth/<provider>/start`, `/callback`).
 - Every call writes an access log line: run, tenant, agent and version, `started_by`, the identity
   acted as, tool, argument hash, outcome. Never a token or argument values.
@@ -474,6 +477,7 @@ definition environment, with secrets from Secrets Manager.
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL` |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`, `KMS_KEY_ID`                 |
+| GitHub App (local)  | gateway                                | With `TOKEN_STORE=memory`, all or none: `TENANT_ID`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_FILE` (path to the `.pem`, kept outside the repo); stored as the tenant's team-bot at startup. On AWS the `TokenStore` is written by an operator |
 | Gateway             | gateway                                | `CONNECTORS` (comma list: `fake`, `github` from M4), `GATEWAY_HOST` (default 127.0.0.1), `GATEWAY_PORT` (default 8090), `CONTRACTS_DIR` (default `../contracts`) |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY` (secret, control plane), `RUN_TOKEN_PUBLIC_KEY` (control plane checks the pair and derives `kid`; gateway verifies); P-256 PEM or one-line base64 body; both unset = no tokens |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |

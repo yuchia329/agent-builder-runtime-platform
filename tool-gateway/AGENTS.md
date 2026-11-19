@@ -14,6 +14,8 @@ Run from `tool-gateway/`.
 | Install | `uv sync` |
 | Test | `uv run pytest` (no Docker) |
 | Run locally | `RUN_TOKEN_PUBLIC_KEY=<public half of the control plane's pair> CONNECTORS=fake uv run gateway` (port 8090; `GATEWAY_PORT` to change) |
+| Run with GitHub | `set -a && . ../.env && set +a && CONNECTORS=github uv run gateway` (needs `RUN_TOKEN_PUBLIC_KEY`, `GITHUB_REPOS`, `TENANT_ID` and the `GITHUB_APP_*` settings; startup logs "Credential from the environment") |
+| Stop a background gateway | `kill $(lsof -ti :8090)` (not `pkill -f gateway`: it matches the shell too) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
 | Re-cut a connector's openapi.yaml | see the docstring of `scripts/cut_openapi.py` (download to its own folder, run with `python -I`) |
@@ -30,13 +32,17 @@ Run from `tool-gateway/`.
 - `tools/registry.py`: `Tool`, `Connector`, `Registry`, `ToolFailure`; `tools/access_log.py`.
 - `tools/openapi_to_mcp.py` (generator and load-time checks), `tools/rules.py` (pure rule
   functions), `tools/executor.py` (`ConnectorClient`: one per generated connector, `HookCall`),
-  `credentials.py` (which stored credential a call uses).
+  `credentials.py` (which stored credential a call uses; returns an `Auth` the executor renews
+  once on a 401), `github_app.py` (app JWT, installation token exchange and cache), `seed.py`
+  (local credentials from the environment into the memory `TokenStore`).
 - `../connectors/<name>/`: `openapi.yaml` (cut, never edited by hand), `allowlist.yaml`, optional
   `hooks.py` with a `HOOKS` dict (loaded by `openapi_to_mcp.load_hooks`).
 - `ports/` (`Protocol` only) and `adapters/`; `src/gateway/connectors/fake.py` (in code, a test
   double).
 - `tests/fake_github.py` + `tests/fixtures/github/`: recorded GitHub bodies copied from the
-  worker's fixtures (see its README); routes with `on`, `fail_next` for retries.
+  worker's fixtures (see its README); routes with `on`, `fail_next` for retries. It answers the
+  App token exchange itself (`token_requests`, `fail_token_next`, `app_token`), so `requests` holds
+  only API calls; `app_store()` / `app_credential()` give the matching App credential.
 - `contracts.py` loads every `../contracts/*.schema.json` together (`CONTRACTS_DIR` to move).
 - `tests/gateway_testing.py`: keys, signed tokens, `LiveGateway` (the real app on a free port in a
   thread), `mcp_client` (the SDK's client with a bearer header). `tests/contract/`: one suite per
@@ -72,6 +78,8 @@ Run from `tool-gateway/`.
   `app.py` logs and lists the plain description.
 - `tests/test_github_parity.py` maps every test in `worker/tests/unit/test_tools_local.py` to a
   gateway test; a new worker test needs a map entry and a gateway equivalent.
+- A credential kind's errors name what is wrong (missing field, rejected with status), never a
+  key, JWT or token; `AppCredential`'s repr hides the key.
 - Recorded fixtures are cleaned like the worker's (owner/repo `octocat/Hello-World`, no users,
   avatars, node ids or bodies); check with `grep -ri <your-login> tests/fixtures` before
   committing a new recording.

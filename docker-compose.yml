@@ -110,7 +110,8 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    env_file: .env
+    # Only the worker's own settings (make worker-env), never the whole .env (ADR 0006).
+    env_file: .worker.env
     environment:
       AWS_ENDPOINT_URL_DYNAMODB: http://dynamodb:8000
       AWS_ENDPOINT_URL_SQS: http://elasticmq:9324

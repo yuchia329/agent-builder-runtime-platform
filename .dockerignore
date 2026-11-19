@@ -3,6 +3,8 @@
 notes/
 .env
 .run-token-*.env
+.worker.env
+.worker.env.tmp
 .git/
 **/.venv/
 **/build/

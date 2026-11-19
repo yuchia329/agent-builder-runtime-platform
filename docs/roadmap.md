@@ -322,10 +322,14 @@ Work in this order:
   and `/oauth/github/callback` (state and PKCE), token stored per tenant, user and provider; an
   owner run without a stored token fails naming the login URL. Check: tests with a fake GitHub
   OAuth server; a real login through the browser to localhost; an owner run labels as the user.
-- [ ] `[local-stack]` the Docker worker gets named settings instead of `env_file: .env` (today its
+- [x] `[local-stack]` the Docker worker gets named settings instead of `env_file: .env` (today its
   container holds every secret in `.env`, including `GITHUB_TOKEN` and the gateway's OAuth
   secrets, though it uses none of them; ADR 0006). Check: `docker compose config` shows no secret
   in the worker; `make demo` and `make chaos` pass.
+- [ ] `[local-stack]` the Docker control plane gets only its own settings instead of
+  `env_file: .env` (today it also holds `GITHUB_TOKEN`, the model key and the gateway's OAuth
+  secrets); list them from `control-plane/`'s configuration, then filter like `worker-env.sh`.
+  Check: no other service's secret value in the container; `make demo` passes.
 - [ ] `[specs]` issue-triage through the gateway: `TOOLS_PROVIDER=mcp`, no `GITHUB_TOKEN` in the
   worker's environment. Check: a planted duplicate is labeled and, after Approve in Slack, closed
   by `<app>[bot]`; the gateway access log shows both identities. **M4 done.**
@@ -410,6 +414,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · local-stack** — The Docker worker no longer gets all of `.env`:
+  `local-stack/worker-env.sh` (run by `make worker-env`, a prerequisite of every compose target)
+  copies only the lines it reads (`ALLOWED`: `MODEL_*`, dummy AWS keys and region, `STATE_*`,
+  `QUEUE_BACKEND`, `WORKER_CONCURRENCY`, `LOG_LEVEL`, `RUN_VISIBILITY_SECONDS`) into `.worker.env`
+  (git- and docker-ignored, mode 600); compose uses `env_file: .worker.env`. Checked: the running
+  worker's environment holds only those names plus compose's own (`GITHUB_TOKEN` empty), none of
+  the gateway's, Slack's or the webhook's secret values (compared by value, not printed);
+  `make demo` and `make chaos` pass. Next: `[specs]` M4 task 11 (its "no `GITHUB_TOKEN` in the
+  worker" now holds), or the new `[local-stack]` control-plane task. Gotchas: a bare
+  `docker compose up` after editing `.env` uses the old `.worker.env`; a new worker setting must be
+  added to `ALLOWED`.
 
 - **2026-11-18 · local-stack** — Follow-up to M4 task 10 (cross-service entry removed): the
   `tool-gateway` service gets `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`,

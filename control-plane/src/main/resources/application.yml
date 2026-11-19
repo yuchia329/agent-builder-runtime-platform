@@ -3,6 +3,10 @@ spring:
     name: control-plane
   main:
     banner-mode: off
+  autoconfigure:
+    # aws-serverless-java-container brings this; it would replace Tomcat everywhere. On Lambda the
+    # handler registers its own server factory (ADR 0017), so it is never needed.
+    exclude: org.springframework.cloud.function.serverless.web.ServerlessAutoConfiguration
   jackson:
     # One JSON style across the platform (contracts use snake_case); absent beats null.
     property-naming-strategy: SNAKE_CASE

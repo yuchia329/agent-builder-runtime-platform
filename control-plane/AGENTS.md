@@ -12,6 +12,8 @@ Run from `control-plane/`.
 | Test without Docker | `./gradlew test --tests '*InMemory*' --tests '*Validator*' --tests '*Api*' --tests '*ServiceTest'` |
 | Run locally | `./gradlew bootRun` (profile `local`, in-memory store, API key `local-dev-key`, port 8080) |
 | Build jar | `./gradlew bootJar` |
+| Lambda zip | `./gradlew lambdaZip` (`build/distributions/control-plane-lambda.zip`, ADR 0017) |
+| Lambda trial (AWS, about 5 min per memory size, ~$0) | `uv run --with boto3 python scripts/lambda_trial.py --configs 1769:on` (makes and deletes its own function, table, role; profile `default`) |
 | Image (from repo root) | `docker build -f control-plane/Dockerfile .` (or `make up`) |
 
 Try it:
@@ -114,6 +116,15 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
   `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`, `SLACK_SIGNING_SECRET`, `APPROVAL_TIMEOUT_HOURS`, `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`,
   `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
+- Lambda (ADR 0017): `lambda/LambdaHandler` is the entry; Spring starts in its static
+  initializer, before the SnapStart snapshot, and `lambda/Priming` sends network-free requests
+  before it. A snapshot is shared by every restored environment: make ids, secrets and seeds only
+  with `SecureRandom`, never in static or startup code with `Random`. Scheduled work for Lambda
+  goes into `run/Sweeps.runOnce()` (the `{"sweep": "all"}` event); a new priming request must end
+  before any store, queue or Slack call. Keep the `ServerlessAutoConfiguration` exclusion in
+  `application.yml` (without it Tomcat is replaced and local runs and integration tests fail).
+  Trial results land in `build/lambda-trial/`; Lambda redelivers late log lines, so a log group
+  deleted right after its function can come back.
 - Errors: throw domain exceptions; `web/ApiExceptionHandler` maps them to problem+json.
 - Scheduled work is a plain class with a `...Once()` method (`RunSweeper.sweepOnce`) plus a thin
   `@Scheduled` trigger that is off when its interval is 0. Tests run with

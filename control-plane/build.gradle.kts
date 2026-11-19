@@ -31,6 +31,9 @@ dependencies {
     implementation("com.nimbusds:nimbus-jose-jwt:10.3")
     implementation("software.amazon.awssdk:dynamodb")
     implementation("software.amazon.awssdk:sqs")
+    // Lambda entry (ADR 0017): API Gateway HTTP API events into the same Spring MVC app.
+    implementation("com.amazonaws.serverless:aws-serverless-java-container-springboot4:3.0.5")
+    implementation("org.crac:crac:1.5.0")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.testcontainers:testcontainers")
@@ -60,4 +63,18 @@ tasks.test {
 // `./gradlew bootRun` uses the local profile unless SPRING_PROFILES_ACTIVE says otherwise.
 tasks.bootRun {
     environment("SPRING_PROFILES_ACTIVE", System.getenv("SPRING_PROFILES_ACTIVE") ?: "local")
+}
+
+// Lambda package (ADR 0017): classes and resources at the root, every runtime jar in lib/. Lambda
+// cannot read Spring Boot's nested-jar layout, and a plain zip starts faster than a shaded jar.
+// Handler: dev.agentplatform.controlplane.lambda.LambdaHandler::handleRequest
+val lambdaZip by tasks.registering(Zip::class) {
+    group = "build"
+    description = "Builds the AWS Lambda package in build/distributions."
+    archiveFileName = "control-plane-lambda.zip"
+    from(tasks.compileJava)
+    from(tasks.processResources)
+    into("lib") {
+        from(configurations.runtimeClasspath)
+    }
 }

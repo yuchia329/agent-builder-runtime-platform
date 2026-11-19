@@ -257,8 +257,17 @@ the table from that file.
   unsent partition; the expiry sweep reads both (oldest 20 of each, merged by sort key), then
   expires up to 20.
 
-The same Spring Boot app runs as a normal server locally and behind a Lambda handler in AWS. Keep
-startup light for SnapStart: no eager network calls or connections at startup.
+The same Spring Boot app runs as a normal server locally and behind a Lambda handler in AWS
+([ADR 0017](adr/0017-control-plane-on-lambda-snapstart.md)). `lambda/LambdaHandler` passes API
+Gateway HTTP API events (payload 2.0) to the Spring MVC app through aws-serverless-java-container,
+and runs `Sweeps.runOnce()` for a direct invoke of `{"sweep": "all"}` (EventBridge Scheduler; HTTP
+events always carry `routeKey`, so API Gateway cannot trigger it). Spring starts in the handler's
+static initializer, before the SnapStart snapshot; a `beforeCheckpoint` hook then sends four
+requests that end before any store, queue or Slack call (`lambda/Priming`), so their classes are
+in the snapshot. Keep startup light: no eager network calls or connections at startup, and no ids,
+secrets or seeds made at startup except with `SecureRandom` (a snapshot is shared by every
+restored environment). Measured: a cold Slack click answers in about 2.2 s at 1769 MB (arm64), a
+warm one in about 40 ms.
 
 ## Worker
 
@@ -568,8 +577,10 @@ AWS (one region)                                idle cost
   `api.<your-domain>`). The ACM certificate is validated with a DNS record in Cloudflare, and a
   Cloudflare CNAME points at the API Gateway domain target (DNS only, or proxied with SSL mode
   Full (strict)). The default `execute-api` endpoint is disabled. Route throttling is on.
-- **Control plane:** Lambda, Java 21 with SnapStart, invoked through a published version or alias
-  (SnapStart only applies to those). Not in a VPC.
+- **Control plane:** Lambda, Java 21 with SnapStart, 1769 MB, arm64, invoked through an alias of a
+  published version (SnapStart only applies to those; each publish waits about 85 s for the
+  snapshot). Code: the `lambdaZip` zip, handler `LambdaHandler::handleRequest`. EventBridge
+  Scheduler invokes the same function with `{"sweep": "all"}` every 5 minutes. Not in a VPC.
 - **Tool gateway:** Lambda, Python, behind the same HTTP API. Not in a VPC.
 - **Workers:** one ECS Fargate service, scaled on SQS queue depth, 0 tasks when idle. Public
   subnets with a public IP, no NAT gateway. Scaling from 0 takes a minute or more; a Lambda
@@ -601,7 +612,7 @@ control-plane/                  Java 21, Spring Boot 4, Gradle (see control-plan
   dynamodb/                     control-plane table definition
   src/main/java/dev/agentplatform/controlplane/
                                 one package per area: agent, run, trigger, internal, store,
-                                queue, contract, tenant, config, web, approval; later lambda
+                                queue, contract, tenant, config, web, approval, token, lambda
 
 worker/                         Python 3.12, uv, own agent loop (see worker/AGENTS.md)
   src/worker/                   core/ (no vendor imports), ports/, adapters/, entrypoints/,

@@ -29,6 +29,7 @@ Rules:
 | [0014](0014-connector-rules-and-hooks.md)         | Connectors: declarative rules plus named hooks       | Accepted |
 | [0015](0015-owner-login-through-the-github-app.md) | Owner login through the GitHub App, stateless signed links | Accepted |
 | [0016](0016-agent-evals-run-worker-code-in-process.md) | Agent evals run the worker's code in process, against simulated services | Proposed |
+| [0017](0017-control-plane-on-lambda-snapstart.md) | Control plane on Lambda: serverless-java-container, SnapStart with priming, 1769 MB arm64 | Proposed |
 
 ## Template
 

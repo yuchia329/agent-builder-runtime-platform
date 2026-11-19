@@ -22,7 +22,8 @@ tasks in `evals/tasks/` on its real model against a simulated GitHub through the
 0016), 3 runs per task, compared with a committed baseline; an LLM judge (trusted at 99-100%
 agreement with 75 labels) grades issue-triage's answers. Baselines: issue-triage 29/30 tasks,
 needs-info 8/8. **M6 (AWS deploy) in progress:** Terraform bootstrap applied (state bucket, two
-budgets); next `[control-plane]` Lambda packaging trial.
+budgets); control plane packaged for Lambda (ADR 0017: SnapStart with priming, 1769 MB arm64, a
+cold Slack click in about 2.2 s); next `[infra]` data.
 
 ## Approach
 
@@ -368,7 +369,7 @@ Work in this order:
   blocked) and `infra/envs/dev/` (provider with profile `default`, `us-east-1`, `default_tags`);
   the two budgets with email alerts; `infra/AGENTS.md`, `CLAUDE.md` and the Commands table.
   Check: `terraform plan` clean after apply; both budgets visible; the user has activated the tag.
-- [ ] `[control-plane]` Lambda packaging trial: run the control plane on Lambda (Java 21,
+- [x] `[control-plane]` Lambda packaging trial: run the control plane on Lambda (Java 21,
   SnapStart through a published version or alias) with the adapter the trial picks for Spring Boot
   4.1; measure cold and warm response times; an entry the scheduler calls for the sweeps
   (`@Scheduled` stays for local runs). ADR 0017 records the choice. Check: numbers in the ADR;
@@ -464,6 +465,22 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-19 · control-plane** — M6 task 2. Lambda entry `lambda/LambdaHandler` (aws-serverless-
+  java-container-springboot4 3.0.5; API Gateway HTTP API payload 2.0) plus a direct-invoke
+  `{"sweep": "all"}` event running the new `run/Sweeps.runOnce()` (re-enqueue, post, expire; the
+  local `@Scheduled` uses it too, always off on Lambda). SnapStart priming (`lambda/Priming`, CRaC
+  `beforeCheckpoint`): four network-free requests, `LAMBDA_PRIMING=off` skips them.
+  `./gradlew lambdaZip` (40 MB, classes at root, `lib/`). Measured on AWS with
+  `scripts/lambda_trial.py` (throwaway function, table, role; all deleted): cold signed Slack click
+  3.1 s at 1024 MB, 2.6 s at 1536, 2.2 s (max 2.4) at 1769, 1.8 s at 2048; warm about 40 ms;
+  priming saves 150-190 ms; each publish waits about 85 s for the snapshot. Chosen 1769 MB arm64
+  (smallest with the slowest cold click under 2.5 s). ADR 0017 drafted (Proposed). 261 tests pass.
+  Gotchas: the library's `ServerlessAutoConfiguration` replaces Tomcat everywhere (52 integration
+  tests broke), so `application.yml` excludes it; Lambda redelivers late log lines, so a log group
+  deleted right after its function comes back (the script waits, then deletes). For `[infra]`
+  compute: handler `dev.agentplatform.controlplane.lambda.LambdaHandler::handleRequest`, runtime
+  java21, arm64, 1769 MB, SnapStart `PublishedVersions`, API and scheduler point at an alias,
+  scheduler payload `{"sweep": "all"}`. Next: `[infra]` data.
 - **2026-11-19 · infra** — M6 task 1. `infra/bootstrap/` applied (local state, git-ignored): state
   bucket `agent-platform-tfstate-<random suffix>` (versioned, SSE-S3, public access blocked,
   TLS-only policy, old versions expire after 90 days, `prevent_destroy`) and two budgets,

@@ -450,8 +450,9 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
 
 ## Security
 
-- **Credentials live only in the gateway.** OAuth refresh tokens and bot tokens are encrypted with
-  KMS; only the gateway's IAM role can decrypt them. Workers and the model never see a token.
+- **Credentials live only in the gateway.** OAuth refresh tokens and bot tokens are SSM
+  SecureString parameters (encrypted with KMS) under the gateway's path; only the gateway's IAM
+  role can read them (ADR 0018). Workers and the model never see a token.
 - **Run identity.** Each agent declares `acts_as`. Issue triage uses a team bot (GitHub App, Slack
   bot), because a webhook-triggered run has no calling user.
 - **Signed run token.** The control plane issues a short-lived JWT per run with `run_id`,
@@ -492,7 +493,11 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 No shared runtime config folder. Terraform creates resources and outputs their names. Each service
 declares config only for what it touches (`application.yml` in Java, `config.py` in Python) and
 reads values from environment variables: `.env` locally; in AWS, the Lambda function or ECS task
-definition environment, with secrets from SSM Parameter Store (SecureString).
+definition environment, with secrets from SSM Parameter Store (SecureString,
+[ADR 0018](adr/0018-secrets-in-ssm-signing-in-kms.md)) at `/agent-platform/dev/<service>/<name>`:
+`control-plane/` `tenant-api-key`, `github-webhook-secret`, `slack-bot-token`,
+`slack-signing-secret`; `worker/model/<provider>/api-key`; `gateway/` `github-oauth-client-secret`,
+`oauth-state-secret`. The run-token private key is a KMS key on AWS (`alias/agent-platform-dev-run-token`).
 
 | Resource            | Used by                                | Env vars                                                |
 | ------------------- | -------------------------------------- | ------------------------------------------------------- |
@@ -585,7 +590,16 @@ AWS (one region)                                idle cost
 - **Workers:** one ECS Fargate service, scaled on SQS queue depth, 0 tasks when idle. Public
   subnets with a public IP, no NAT gateway. Scaling from 0 takes a minute or more; a Lambda
   entrypoint can be added later if that is too slow.
-- **Data:** two DynamoDB tables (control plane, run state), on-demand capacity.
+- **Data:** two DynamoDB tables (control plane, run state), on-demand capacity, built from the
+  services' JSON definitions (`control-plane/dynamodb/`, `worker/dynamodb/`), names
+  `agent-platform-dev-<table>`. The control-plane table has deletion protection and
+  point-in-time restore (specs and versions); the run-state table neither (15-day TTL). SQS
+  `agent-platform-dev-runs` (dead-letter queue after 5 receives, kept 14 days), SSE-SQS. ECR
+  `agent-platform-dev-worker` (immutable tags, last 10 images).
+- **Secrets and keys** ([ADR 0018](adr/0018-secrets-in-ssm-signing-in-kms.md)): SSM SecureString
+  parameters with the `aws/ssm` key, readable per service path through IAM; Terraform makes them
+  with a write-only random placeholder and never holds a value; the user puts values with
+  `infra/scripts/put_secrets.py`. Run tokens are signed by a KMS `ECC_NIST_P256` key.
 - **Terraform:** applied from the laptop with the AWS profile `default`. `infra/bootstrap/` (made
   once, local state) holds the state bucket and the budgets ($10 a month on the `project` tag, $90
   for the account), so destroying an environment leaves the alerts on; `infra/envs/dev/` keeps its

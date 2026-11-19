@@ -22,7 +22,7 @@ Rules:
 | [0007](0007-serverless-scale-to-zero-deployment.md) | Serverless, scale-to-zero deployment                 | Accepted |
 | [0008](0008-control-plane-data-in-dynamodb.md)      | Control-plane data in DynamoDB                       | Accepted |
 | [0009](0009-worker-owns-agent-loop.md)              | The worker owns the agent loop                       | Accepted, Bedrock-only adapter plan superseded by 0010 |
-| [0010](0010-provider-neutral-model-layer.md)        | Provider-neutral model layer                         | Accepted |
+| [0010](0010-provider-neutral-model-layer.md)        | Provider-neutral model layer                         | Accepted, secret storage superseded by 0018 |
 | [0011](0011-run-state-per-step-fenced.md)          | Run state: one item per step, fenced writes, 15-day TTL | Accepted |
 | [0012](0012-time-budget-counts-working-time.md)    | The time budget counts working time across attempts | Accepted |
 | [0013](0013-unknown-tool-outcome.md)              | Unknown tool outcome: repeat only safe-to-repeat tools | Accepted |
@@ -30,6 +30,7 @@ Rules:
 | [0015](0015-owner-login-through-the-github-app.md) | Owner login through the GitHub App, stateless signed links | Accepted |
 | [0016](0016-agent-evals-run-worker-code-in-process.md) | Agent evals run the worker's code in process, against simulated services | Proposed |
 | [0017](0017-control-plane-on-lambda-snapstart.md) | Control plane on Lambda: serverless-java-container, SnapStart with priming, 1769 MB arm64 | Proposed |
+| [0018](0018-secrets-in-ssm-signing-in-kms.md) | Secrets in SSM Parameter Store, run-token signing in KMS, values outside Terraform | Proposed |
 
 ## Template
 

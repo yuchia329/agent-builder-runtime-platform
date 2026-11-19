@@ -23,7 +23,8 @@ tasks in `evals/tasks/` on its real model against a simulated GitHub through the
 agreement with 75 labels) grades issue-triage's answers. Baselines: issue-triage 29/30 tasks,
 needs-info 8/8. **M6 (AWS deploy) in progress:** Terraform bootstrap applied (state bucket, two
 budgets); control plane packaged for Lambda (ADR 0017: SnapStart with priming, 1769 MB arm64, a
-cold Slack click in about 2.2 s); next `[infra]` data.
+cold Slack click in about 2.2 s); dev data applied (tables, run queue, worker ECR, KMS signing key,
+SSM secret parameters; ADR 0018); next `[control-plane]` AWS adapters.
 
 ## Approach
 
@@ -374,7 +375,7 @@ Work in this order:
   4.1; measure cold and warm response times; an entry the scheduler calls for the sweeps
   (`@Scheduled` stays for local runs). ADR 0017 records the choice. Check: numbers in the ADR;
   a cold Slack callback answers within 3 s, or the ADR says what is done instead.
-- [ ] `[infra]` data: both DynamoDB tables from their JSON definitions (with TTL), SQS run queue
+- [x] `[infra]` data: both DynamoDB tables from their JSON definitions (with TTL), SQS run queue
   and dead-letter queue, ECR repositories, the KMS signing key (ECC_NIST_P256), SSM parameters
   (values put by the user, never in Terraform files). Check: apply; tables match the local ones.
 - [ ] `[control-plane]` AWS adapters: run tokens signed with KMS (ES256, JOSE signature from
@@ -465,6 +466,26 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-19 · infra** — M6 task 3. `infra/envs/dev/` applied, 16 resources: DynamoDB
+  `agent-platform-dev-control-plane` (from `control-plane/dynamodb/*.json`, GSI1/GSI2, TTL,
+  deletion protection, point-in-time restore) and `agent-platform-dev-run-state` (TTL); SQS
+  `agent-platform-dev-runs` (DLQ `-runs-dlq` after 5 receives, 14 days); ECR
+  `agent-platform-dev-worker` (immutable tags, last 10 images); KMS `ECC_NIST_P256` sign key
+  `alias/agent-platform-dev-run-token`; 7 SSM SecureString parameters under
+  `/agent-platform/dev/<service>/` (`aws/ssm` key). Checked: tables match the JSON
+  (describe-table), plan clean, no secret value in state. ADR 0018 drafted (Proposed): SSM over
+  Secrets Manager (supersedes that line of ADR 0010), KMS signing, values outside Terraform.
+  `infra/scripts/put_secrets.py` puts values from `.env` (`--status`, `--generate`). Open: the
+  user puts the secrets (all 7 still placeholders at wrap-up), with `--generate TENANT_API_KEY`
+  (the `.env` key is the public local one; the script refuses keys under 32 characters).
+  Gotchas: `value` + `ignore_changes` still copies the decrypted value into state on refresh
+  (provider source), so parameters use write-only `value_wo` from an ephemeral random
+  placeholder; never change `value_wo_version`. GSI `hash_key` is deprecated in provider 6
+  (`key_schema` blocks). For the services: Lambda cannot inject SecureString into env vars, so
+  control plane and gateway read their parameters through the SDK on first use (not at startup,
+  SnapStart); ECS task `secrets` for the worker. Outputs: `tables`, `run_queue_url`,
+  `worker_repository_url`, `run_token_key_alias`, `secret_parameters`. Next: `[control-plane]`
+  AWS adapters (KMS signer, secrets from SSM).
 - **2026-11-19 · control-plane** — M6 task 2. Lambda entry `lambda/LambdaHandler` (aws-serverless-
   java-container-springboot4 3.0.5; API Gateway HTTP API payload 2.0) plus a direct-invoke
   `{"sweep": "all"}` event running the new `run/Sweeps.runOnce()` (re-enqueue, post, expire; the

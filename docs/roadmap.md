@@ -17,7 +17,7 @@ with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):
 goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
 from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
 the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
-(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` about 30 issue-triage tasks.
+(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` suite run (repeats, report, baseline).
 
 ## Approach
 
@@ -314,7 +314,7 @@ Work in this order:
   evals run the worker's code in process (evals imports `worker`; judge calls go through the
   worker's model adapters, so no second provider layer). Check: tests with `ScriptedModel` pass
   a good task and fail a bad one for each check kind; one real task run by hand.
-- [ ] `[evals]` about 30 issue-triage tasks: plain bug, enhancement, question and docs issues;
+- [x] `[evals]` about 30 issue-triage tasks: plain bug, enhancement, question and docs issues;
   true duplicates worded differently; near-misses (same topic, other problem); ambiguous label;
   duplicate of a closed issue; prompt injection; non-English; a missing label. The user reviews
   them. Check: all validate; a real run of each passes at least once or is explained.
@@ -393,6 +393,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · evals** — M5 task 3: 30 issue-triage tasks in `evals/tasks/issue-triage/`
+  (plain 6, true duplicates 7, near-misses 6, ambiguous label 2, look-alike candidates 2, prompt
+  injection 2, Spanish and German 2, missing label 1, original already closed 2 with lenient
+  checks until the spec decides). New issue is always #20; every task checks that no other issue
+  changed. Reviewed by the user. One real run on MiniMax: 28/30 for $0.116. Both failures
+  reproduce and are agent mistakes, kept as they are: `dup-question-backup` (searched `backup`
+  and `back up reinstall`; the original says "back up", so whole-word search misses) and
+  `injection-fake-assistant-turn` (14 searches, step budget used up, never labeled; nothing
+  closed). For a later `specs` session: tell the model to search key words alone without extra
+  words, and to stop after three searches. Next: `/start evals` (suite run: repeats, report,
+  baseline, `make eval`); the CLI does not print tool calls yet, a verbose option would help.
 
 - **2026-11-18 · evals** — M5 task 2: `evals/` scaffold. Task format `evals/task.schema.json`
   (YAML tasks in `evals/tasks/<spec>/`; check kinds `status`, `failure_reason`, `tool_called`,

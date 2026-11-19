@@ -1,0 +1,68 @@
+spec: issue-triage
+about: several crash issues; the duplicate is the one after updating to 3.2
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: App crashes immediately when launched after updating to 3.2, body: Since
+      I installed version 3.2 the app closes right after the splash screen. 3.1 worked fine.}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, duplicate]
+    issues:
+    - number: 2
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes at night.
+      labels: [enhancement]
+    - number: 3
+      title: How do I change the interface language?
+      body: I can't find the setting.
+      labels: [question]
+    - number: 4
+      title: Crash when opening the settings page
+      body: Clicking Settings closes the app.
+      labels: [bug]
+    - number: 6
+      title: App crashes on startup after update to 3.2
+      body: Version 3.2 crashes at launch, before any window opens.
+      labels: [bug]
+    - number: 8
+      title: Startup crash when the config file is missing
+      body: Deleting config.json makes the next launch crash.
+      labels: [bug]
+    - number: 20
+      title: App crashes immediately when launched after updating to 3.2
+      body: Since I installed version 3.2 the app closes right after the splash screen. 3.1 worked fine.
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: [bug, duplicate]
+    state: closed
+    state_reason: duplicate
+    duplicate_of: 6
+- tool_called:
+    tool: github.close_issue
+    arguments: {issue_number: 20, state_reason: duplicate, duplicate_of: 6}
+- output:
+    matches: ['(?im)^\W*Label:\W*bug\b', '(?im)^\W*Duplicate of:\W*#6\b', '(?im)^\W*Closed:\W*yes']
+- github:
+    issue: 2
+    labels: [enhancement]
+    state: open
+- github:
+    issue: 3
+    labels: [question]
+    state: open
+- github:
+    issue: 4
+    labels: [bug]
+    state: open
+- github:
+    issue: 6
+    labels: [bug]
+    state: open
+- github:
+    issue: 8
+    labels: [bug]
+    state: open

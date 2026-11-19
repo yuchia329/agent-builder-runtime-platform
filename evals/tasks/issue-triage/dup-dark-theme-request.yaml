@@ -1,0 +1,69 @@
+spec: issue-triage
+about: 'true duplicate of a feature request: dark theme'
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: Please add a dark theme for night use, body: 'Working late, the white background
+      is too bright. A dark mode option like other apps have would be great.'}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, duplicate]
+    issues:
+    - number: 2
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes at night.
+      labels: [enhancement]
+    - number: 3
+      title: How do I change the interface language?
+      body: I can't find the setting.
+      labels: [question]
+    - number: 4
+      title: Typo in the installation guide
+      body: Step 3 says 'instal' instead of 'install'.
+      labels: [documentation]
+    - number: 5
+      title: Login button is misaligned on small screens
+      body: On a 360 px wide phone the button overlaps the logo.
+      labels: [bug]
+    - number: 6
+      title: PDF export shows blank pages
+      body: Every page of the exported PDF is white although the document has content.
+      labels: [bug]
+    - number: 20
+      title: Please add a dark theme for night use
+      body: Working late, the white background is too bright. A dark mode option like other apps have
+        would be great.
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: [enhancement, duplicate]
+    state: closed
+    state_reason: duplicate
+    duplicate_of: 2
+- tool_called:
+    tool: github.close_issue
+    arguments: {issue_number: 20, state_reason: duplicate, duplicate_of: 2}
+- output:
+    matches: ['(?im)^\W*Label:\W*enhancement\b', '(?im)^\W*Duplicate of:\W*#2\b', '(?im)^\W*Closed:\W*yes']
+- github:
+    issue: 2
+    labels: [enhancement]
+    state: open
+- github:
+    issue: 3
+    labels: [question]
+    state: open
+- github:
+    issue: 4
+    labels: [documentation]
+    state: open
+- github:
+    issue: 5
+    labels: [bug]
+    state: open
+- github:
+    issue: 6
+    labels: [bug]
+    state: open

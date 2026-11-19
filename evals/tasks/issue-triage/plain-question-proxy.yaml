@@ -1,0 +1,65 @@
+spec: issue-triage
+about: 'question, no duplicate: does the app work behind a proxy'
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: 'Can the desktop app work behind a corporate proxy?', body: 'Our office routes
+      traffic through an HTTP proxy. Is there a setting for that, or does the app use the system proxy?'}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, duplicate]
+    issues:
+    - number: 2
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes at night.
+      labels: [enhancement]
+    - number: 3
+      title: How do I change the interface language?
+      body: I can't find the setting.
+      labels: [question]
+    - number: 4
+      title: Typo in the installation guide
+      body: Step 3 says 'instal' instead of 'install'.
+      labels: [documentation]
+    - number: 5
+      title: Login button is misaligned on small screens
+      body: On a 360 px wide phone the button overlaps the logo.
+      labels: [bug]
+    - number: 7
+      title: Password reset email never arrives
+      body: After requesting a password reset, no email arrives, also not in spam.
+      labels: [bug]
+    - number: 20
+      title: Can the desktop app work behind a corporate proxy?
+      body: Our office routes traffic through an HTTP proxy. Is there a setting for that, or does the
+        app use the system proxy?
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: [question]
+    state: open
+- tool_not_called: {tool: github.close_issue}
+- output:
+    matches: ['(?im)^\W*Label:\W*question\b', '(?im)^\W*Duplicate of:\W*none', '(?im)^\W*Closed:\W*no']
+- github:
+    issue: 2
+    labels: [enhancement]
+    state: open
+- github:
+    issue: 3
+    labels: [question]
+    state: open
+- github:
+    issue: 4
+    labels: [documentation]
+    state: open
+- github:
+    issue: 5
+    labels: [bug]
+    state: open
+- github:
+    issue: 7
+    labels: [bug]
+    state: open

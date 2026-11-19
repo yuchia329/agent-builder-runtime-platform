@@ -1,0 +1,68 @@
+spec: issue-triage
+about: several PNG export issues; the duplicate is the cropped right edge
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: 'PNG export is cropped: the right side of the image is missing', body: 'Exported
+      PNG files are cut off: roughly the right 10% of the canvas is not in the file.'}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, duplicate]
+    issues:
+    - number: 2
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes at night.
+      labels: [enhancement]
+    - number: 3
+      title: How do I change the interface language?
+      body: I can't find the setting.
+      labels: [question]
+    - number: 4
+      title: Export to PNG cuts off the right edge
+      body: The exported PNG misses the right part of the drawing.
+      labels: [bug]
+    - number: 6
+      title: Export to JPG ignores the quality setting
+      body: Any quality value gives the same JPG size.
+      labels: [bug]
+    - number: 8
+      title: Option for a transparent background when exporting PNG
+      body: I'd like PNG exports without the white background.
+      labels: [enhancement]
+    - number: 20
+      title: 'PNG export is cropped: the right side of the image is missing'
+      body: 'Exported PNG files are cut off: roughly the right 10% of the canvas is not in the file.'
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: [bug, duplicate]
+    state: closed
+    state_reason: duplicate
+    duplicate_of: 4
+- tool_called:
+    tool: github.close_issue
+    arguments: {issue_number: 20, state_reason: duplicate, duplicate_of: 4}
+- output:
+    matches: ['(?im)^\W*Label:\W*bug\b', '(?im)^\W*Duplicate of:\W*#4\b', '(?im)^\W*Closed:\W*yes']
+- github:
+    issue: 2
+    labels: [enhancement]
+    state: open
+- github:
+    issue: 3
+    labels: [question]
+    state: open
+- github:
+    issue: 4
+    labels: [bug]
+    state: open
+- github:
+    issue: 6
+    labels: [bug]
+    state: open
+- github:
+    issue: 8
+    labels: [enhancement]
+    state: open

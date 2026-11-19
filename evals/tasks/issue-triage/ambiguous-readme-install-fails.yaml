@@ -1,0 +1,67 @@
+spec: issue-triage
+about: 'ambiguous: README install command fails (documentation or bug)'
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: Install command in the README fails with 'package not found', body: 'Running
+      the command from the README, `pip install hello-world-cli`, prints ''package not found''.'}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, duplicate]
+    issues:
+    - number: 2
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes at night.
+      labels: [enhancement]
+    - number: 3
+      title: How do I change the interface language?
+      body: I can't find the setting.
+      labels: [question]
+    - number: 4
+      title: Typo in the installation guide
+      body: Step 3 says 'instal' instead of 'install'.
+      labels: [documentation]
+    - number: 5
+      title: Login button is misaligned on small screens
+      body: On a 360 px wide phone the button overlaps the logo.
+      labels: [bug]
+    - number: 7
+      title: Password reset email never arrives
+      body: After requesting a password reset, no email arrives, also not in spam.
+      labels: [bug]
+    - number: 20
+      title: Install command in the README fails with 'package not found'
+      body: Running the command from the README, `pip install hello-world-cli`, prints 'package not found'.
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- tool_called:
+    tool: github.add_label
+    arguments: {issue_number: 20}
+- github:
+    issue: 20
+    labels_exclude: [duplicate, enhancement, question]
+    state: open
+- tool_not_called: {tool: github.close_issue}
+- output:
+    matches: ['(?im)^\W*Closed:\W*no']
+- github:
+    issue: 2
+    labels: [enhancement]
+    state: open
+- github:
+    issue: 3
+    labels: [question]
+    state: open
+- github:
+    issue: 4
+    labels: [documentation]
+    state: open
+- github:
+    issue: 5
+    labels: [bug]
+    state: open
+- github:
+    issue: 7
+    labels: [bug]
+    state: open

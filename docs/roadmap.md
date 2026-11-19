@@ -17,7 +17,7 @@ with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):
 goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
 from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
 the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
-(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` scaffold.
+(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` about 30 issue-triage tasks.
 
 ## Approach
 
@@ -308,7 +308,7 @@ Work in this order:
   evals and tests can point a real connector at a simulator. Startup logs the override; the
   docs warn that real credentials would be sent there. Check: unit tests (override used, unset
   keeps the allowlist's `base_url`).
-- [ ] `[evals]` scaffold: uv project (`AGENTS.md`, `CLAUDE.md`), task format as a JSON Schema in
+- [x] `[evals]` scaffold: uv project (`AGENTS.md`, `CLAUDE.md`), task format as a JSON Schema in
   `evals/` with valid and invalid examples, GitHub simulator (also answers the App token exchange
   with throwaway credentials), runner for one task, deterministic checks. Draft an ADR: agent
   evals run the worker's code in process (evals imports `worker`; judge calls go through the
@@ -393,6 +393,21 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · evals** — M5 task 2: `evals/` scaffold. Task format `evals/task.schema.json`
+  (YAML tasks in `evals/tasks/<spec>/`; check kinds `status`, `failure_reason`, `tool_called`,
+  `tool_not_called`, `github`, `output`); GitHub simulator (`octocat/Hello-World`, whole-word
+  search with `OR`, phrases, `-word`, `repo:`/`is:`/`state:`/`label:`); runner = worker
+  `handle_run` under a lease with in-memory checkpoints (a run continues after its approval, not
+  from step 0), real gateway subprocess with a from-scratch environment, `InternalRunServer` for
+  its approval check, every approval approved (`eval:auto`). ADR 0016 drafted (Proposed). 49
+  tests, no Docker, no model calls. Real run of `tasks/issue-triage/dup-png-upload-crash.yaml`
+  on MiniMax: PASS, 12 steps, $0.0043. Next: `/start evals` (30 tasks; the user reviews them).
+  Gotchas: the budget failure reason is `budget_steps` (not `budget_exceeded`); simulator search
+  is whole words, so tasks must not rely on stemming. For the next `worker` session: add to
+  `worker/AGENTS.md` that `evals/` imports `handle_run`, `Deps`, `InMemoryControlPlane`,
+  `InMemoryRunStateStore`, `Config` and `wiring.build`, so worker changes should also run
+  `cd evals && uv run pytest`.
 
 - **2026-11-18 · tool-gateway** — M5 task 1: `CONNECTOR_<NAME>_BASE_URL` replaces a connector's
   `base_url` at startup (`config.connector_base_url`, used in `__main__.connectors`). Loopback only

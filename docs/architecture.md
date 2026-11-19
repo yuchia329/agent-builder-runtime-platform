@@ -523,7 +523,8 @@ the spec as `<provider>/<model id>`; config only defines the providers
 - **Smoke test:** `make up && make demo` runs the whole platform in Docker (control plane, tool
   gateway with the fake connector, worker) and one run of the example spec to `SUCCEEDED` with
   the stub model, its tool calls through the gateway with a locally generated run-token key pair.
-- **Evals** (`evals/`): measure an agent's decisions, not the platform. One harness serves every
+- **Evals** (`evals/`, [ADR 0016](adr/0016-agent-evals-run-worker-code-in-process.md)): measure an
+  agent's decisions, not the platform. One harness serves every
   spec: an agent's tasks (`tasks/<spec name>/`) give the trigger event, the starting state of the
   outside world, and checks (tools called or not, end state, output, budget, an LLM judge on free
   text against the author's rubric, checked against about 50 hand labels). `make eval` runs on the

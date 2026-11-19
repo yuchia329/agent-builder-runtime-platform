@@ -28,6 +28,7 @@ Rules:
 | [0013](0013-unknown-tool-outcome.md)              | Unknown tool outcome: repeat only safe-to-repeat tools | Accepted |
 | [0014](0014-connector-rules-and-hooks.md)         | Connectors: declarative rules plus named hooks       | Accepted |
 | [0015](0015-owner-login-through-the-github-app.md) | Owner login through the GitHub App, stateless signed links | Accepted |
+| [0016](0016-agent-evals-run-worker-code-in-process.md) | Agent evals run the worker's code in process, against simulated services | Proposed |
 
 ## Template
 

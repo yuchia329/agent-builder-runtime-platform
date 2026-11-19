@@ -1,0 +1,7 @@
+# Smallest valid task: one check, an empty world.
+spec: issue-triage
+about: a question gets the question label
+input: { action: opened, repository: { full_name: octocat/Hello-World }, issue: { number: 1, title: "How do I export?" } }
+world: {}
+checks:
+  - status: SUCCEEDED

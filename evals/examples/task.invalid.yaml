@@ -1,0 +1,19 @@
+# One document per case: each must fail the schema (tests/test_task.py).
+- case: no checks
+  task: { spec: issue-triage, about: x, input: {}, world: {}, checks: [] }
+- case: two kinds in one check
+  task: { spec: issue-triage, about: x, input: {}, world: {}, checks: [{ status: SUCCEEDED, output: { matches: [x] } }] }
+- case: unknown check kind
+  task: { spec: issue-triage, about: x, input: {}, world: {}, checks: [{ judge: good }] }
+- case: unknown simulated connector
+  task: { spec: issue-triage, about: x, input: {}, world: { slack: {} }, checks: [{ status: SUCCEEDED }] }
+- case: status the run cannot end in
+  task: { spec: issue-triage, about: x, input: {}, world: {}, checks: [{ status: RUNNING }] }
+- case: issue without a title
+  task: { spec: issue-triage, about: x, input: {}, world: { github: { labels: [], issues: [{ number: 1 }] } }, checks: [{ status: SUCCEEDED }] }
+- case: spec name with a path
+  task: { spec: ../secrets, about: x, input: {}, world: {}, checks: [{ status: SUCCEEDED }] }
+- case: tool check without a tool
+  task: { spec: issue-triage, about: x, input: {}, world: {}, checks: [{ tool_called: { arguments: {} } }] }
+- case: unknown top-level field
+  task: { spec: issue-triage, about: x, input: {}, world: {}, checks: [{ status: SUCCEEDED }], model: x }

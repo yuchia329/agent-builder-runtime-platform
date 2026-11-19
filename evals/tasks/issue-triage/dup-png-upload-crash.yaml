@@ -1,0 +1,40 @@
+spec: issue-triage
+about: true duplicate worded differently (large PNG upload crash) is labeled, flagged and closed
+input:
+  action: opened
+  repository: { full_name: octocat/Hello-World }
+  issue:
+    number: 10
+    title: App closes itself when I upload a 6 MB PNG image
+    body: |
+      Steps: open the editor, choose Upload, pick a 6 MB PNG file. The app window disappears
+      without any message. Smaller JPG files work fine.
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, duplicate]
+    issues:
+      - number: 3
+        title: Add dark mode to the settings page
+        body: It would be nice to have a dark theme option.
+        labels: [enhancement]
+      - number: 5
+        title: Crash when uploading a large PNG
+        body: Uploading a PNG bigger than 5 MB makes the app crash immediately.
+        labels: [bug]
+      - number: 7
+        title: PNG export colors look washed out
+        body: Exported PNG files have lighter colors than the canvas.
+        labels: [bug]
+      - number: 10
+        title: App closes itself when I upload a 6 MB PNG image
+        body: |
+          Steps: open the editor, choose Upload, pick a 6 MB PNG file. The app window disappears
+          without any message. Smaller JPG files work fine.
+checks:
+  - status: SUCCEEDED
+  - github: { issue: 10, labels: [bug, duplicate], state: closed, state_reason: duplicate, duplicate_of: 5 }
+  - tool_called: { tool: github.close_issue, arguments: { issue_number: 10, state_reason: duplicate, duplicate_of: 5 } }
+  - tool_not_called: { tool: github.close_issue, arguments: { issue_number: 5 } }
+  - tool_not_called: { tool: github.add_label, arguments: { issue_number: 5 } }
+  - github: { issue: 5, labels: [bug], state: open }
+  - output: { matches: ['(?im)^\W*Label:\W*bug', '(?im)^\W*Duplicate of:\W*#5\b', '(?im)^\W*Closed:\W*yes'] }

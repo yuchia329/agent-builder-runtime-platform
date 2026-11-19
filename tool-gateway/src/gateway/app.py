@@ -178,10 +178,10 @@ class RunTokenAuth:
         if scope["path"].startswith("/oauth/"):
             return await self._oauth(scope, receive, send)
         if scope["path"].rstrip("/") == "/mcp":
-            token = _bearer(scope)
+            token = _run_token(scope)
             try:
                 if token is None:
-                    raise TokenRejected("no bearer token")
+                    raise TokenRejected("no run token")
                 claims = self._verifier.verify(token)
             except TokenRejected as e:
                 log.info("Refused /mcp request: %s", e)
@@ -199,12 +199,15 @@ class RunTokenAuth:
         return await self._app(scope, receive, send)
 
 
-def _bearer(scope) -> str | None:
-    for name, value in scope.get("headers", []):
-        if name == b"authorization":
-            scheme, _, token = value.decode("latin-1").partition(" ")
-            return token.strip() or None if scheme.lower() == "bearer" else None
-    return None
+def _run_token(scope) -> str | None:
+    """The run token (ADR 0020): `X-Run-Token` when present, and then alone (on AWS
+    `Authorization` holds the caller's SigV4 signature); otherwise `Authorization: Bearer`, the
+    old place, accepted until every worker sends `X-Run-Token` only. Empty means none."""
+    headers = dict(scope.get("headers", []))
+    if b"x-run-token" in headers:
+        return headers[b"x-run-token"].decode("latin-1").strip() or None
+    scheme, _, token = headers.get(b"authorization", b"").decode("latin-1").partition(" ")
+    return token.strip() or None if scheme.lower() == "bearer" else None
 
 
 async def _respond(send, status: int, body: dict, headers: list | None = None) -> None:

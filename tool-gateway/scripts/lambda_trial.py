@@ -274,7 +274,7 @@ def main() -> int:
                 {
                     "content-type": "application/json",
                     "accept": "application/json, text/event-stream",
-                    "authorization": f"Bearer {trial.run_token()}",
+                    "x-run-token": trial.run_token(),
                 },
                 json.dumps(initialize),
             )

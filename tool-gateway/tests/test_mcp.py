@@ -13,15 +13,45 @@ pytestmark = pytest.mark.anyio
 ARGS = {"repo": "octocat/Hello-World", "issue_number": 8, "label": "bug"}
 
 
+SIGV4 = "AWS4-HMAC-SHA256 Credential=AKID/20261119/us-east-1/execute-api/aws4_request, x"
+
+
 async def test_no_or_bad_token_is_401_with_a_json_rpc_error(gateway, keys):
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    refused = (
+        {},
+        {"Authorization": "Bearer nope"},
+        {"Authorization": "Basic x"},
+        {"Authorization": SIGV4},  # a signature is not a run token
+        {"X-Run-Token": ""},
+        {"X-Run-Token": "nope"},
+        # X-Run-Token decides alone: a valid Bearer beside a bad X-Run-Token does not help.
+        {"X-Run-Token": "nope", "Authorization": f"Bearer {token(keys)}"},
+    )
     async with httpx2.AsyncClient() as http:
-        for headers in ({}, {"Authorization": "Bearer nope"}, {"Authorization": "Basic x"}):
+        for headers in refused:
             response = await http.post(f"{gateway.url}/mcp", json=body, headers=headers)
 
-            assert response.status_code == 401
+            assert response.status_code == 401, headers
             assert response.headers["www-authenticate"] == "Bearer"
             assert response.json()["error"] == {"code": -32001, "message": "Unauthorized"}
+
+
+async def test_the_run_token_header_works_beside_a_sigv4_signature(gateway, keys):
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    headers = {"X-Run-Token": token(keys), "Authorization": SIGV4, "Accept": "application/json"}
+    async with httpx2.AsyncClient() as http:
+        response = await http.post(f"{gateway.url}/mcp", json=body, headers=headers)
+
+    assert response.status_code == 200
+    assert "github.add_label" in {t["name"] for t in response.json()["result"]["tools"]}
+
+
+async def test_bearer_is_still_accepted_without_the_run_token_header(gateway, keys):
+    async with mcp_client(gateway, token(keys), as_bearer=True) as client:
+        tools = (await client.list_tools()).tools
+
+    assert "github.add_label" in {t.name for t in tools}
 
 
 async def test_health_needs_no_token(gateway):

@@ -27,8 +27,7 @@ cold Slack click in about 2.2 s); dev data applied (tables, run queue, worker EC
 SSM secret parameters; ADR 0018); control plane signs run tokens with KMS and reads secrets from SSM
 (`SECRETS_SOURCE=ssm`); gateway runs on Lambda with the Web Adapter (ADR 0019), SSM `TokenStore`,
 KMS public key, SigV4 to the control plane; worker signs gateway calls (run token moved to
-`X-Run-Token`), arm64 Fargate image; next `[tool-gateway]` reads `X-Run-Token`, then `[infra]`
-compute.
+`X-Run-Token`, which the gateway reads; ADR 0020), arm64 Fargate image; next `[infra]` compute.
 
 ## Approach
 
@@ -390,7 +389,7 @@ Work in this order:
   gateway answers `/health` on Lambda.
 - [x] `[worker]` SigV4 `auth` for `GatewayTools` (like `sigv4_signer`); image for Fargate; the
   model key from SSM through the ECS task definition. Check: tests; image runs locally.
-- [ ] `[tool-gateway]` read the run token from `X-Run-Token` (contract change, see Cross-service
+- [x] `[tool-gateway]` read the run token from `X-Run-Token` (contract change, see Cross-service
   changes), `Authorization: Bearer` as a fallback while unsigned workers send both. Check: tests
   with both headers; `make demo`.
 - [ ] `[infra]` compute: Lambdas (control plane alias with SnapStart, gateway), one HTTP API
@@ -472,15 +471,23 @@ service has followed.
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
   `contracts/mcp-tool-call.schema.json` and `internal-api.openapi.yaml` (`run_token`). `worker`
-  done: always sends `X-Run-Token`, and `Authorization: Bearer` too when unsigned. Must follow:
-  `tool-gateway` (`RunTokenAuth` reads `X-Run-Token`, Bearer as a fallback). Then `worker` drops
-  the Bearer copy and the gateway its fallback, and this entry goes.
+  done: always sends `X-Run-Token`, and `Authorization: Bearer` too when unsigned. `tool-gateway`
+  done: reads `X-Run-Token` (alone when present), Bearer only as a fallback. Must follow, in any
+  later session: `worker` drops the Bearer copy (`tools_mcp._run`), then `tool-gateway` drops the
+  fallback (`app._run_token`) and its test; then this entry goes.
 
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-19 · tool-gateway** — Follow-up to the worker's header change (ADR 0020).
+  `app._run_token`: `X-Run-Token` decides alone when present (an empty or bad one is 401 even
+  beside a valid Bearer; a SigV4 `Authorization` next to it is ignored); without it,
+  `Authorization: Bearer` still works. `mcp_client` sends `X-Run-Token` (`as_bearer=True` for the
+  fallback); the trial script too. 251 tests pass; `make up && make demo` passed with the rebuilt
+  gateway and worker. Cross-service entry updated: the Bearer copy and fallback can go in later
+  worker and gateway sessions. Next: `[infra]` compute.
 - **2026-11-19 · worker** — M6 task 6. The run token moved to `X-Run-Token` (user chose this over
   dropping IAM on `/mcp` or SigV4 in the query string): SigV4 and the token both used
   `Authorization`, so ADR 0007's "IAM and run token on `/mcp`" could not work. Contracts edited

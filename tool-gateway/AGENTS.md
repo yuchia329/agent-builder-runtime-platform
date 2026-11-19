@@ -70,6 +70,10 @@ Run from `tool-gateway/`.
 
 ## Conventions
 
+- The run token comes in `X-Run-Token` (ADR 0020; `app._run_token`): when present it decides
+  alone, since on AWS `Authorization` holds the SigV4 signature; `Authorization: Bearer` is a
+  fallback only without it. Tests send `X-Run-Token` (`mcp_client`; `as_bearer=True` for the
+  fallback).
 - Every `/mcp` request needs a run token. Never log a token, a key, or argument values; the
   access log (`gateway.access`, one JSON line per call) has a SHA-256 of the arguments instead.
 - A refused token is HTTP 401 with no reason for the caller; the reason goes to the log.

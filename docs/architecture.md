@@ -446,8 +446,9 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   `scripts/put_app_credential.py`.
 - The run token travels in the `X-Run-Token` header, because on AWS `Authorization` carries the
   caller's SigV4 signature, which API Gateway checks on `/mcp` first (contract
-  `mcp-tool-call.schema.json`, [ADR 0020](adr/0020-run-token-in-its-own-header.md)). Gateways before this change read `Authorization: Bearer`; unsigned
-  workers send both until every gateway reads `X-Run-Token`.
+  `mcp-tool-call.schema.json`, [ADR 0020](adr/0020-run-token-in-its-own-header.md)). When
+  `X-Run-Token` is present it decides alone; without it the gateway still accepts
+  `Authorization: Bearer`, which unsigned workers also send, until both copies are dropped.
 - Every `/mcp` request (`initialize` and `tools/list` too) needs a valid run token: ES256, `kid`
   equal to the configured public key's thumbprint, issuer, audience, expiry and issue time within
   30 s, claims valid against the contract. Otherwise HTTP 401 with a JSON-RPC error and no detail.

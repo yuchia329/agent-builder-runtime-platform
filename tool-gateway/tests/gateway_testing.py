@@ -103,8 +103,15 @@ class LiveGateway:
 
 
 @contextlib.asynccontextmanager
-async def mcp_client(gateway: LiveGateway, bearer: str | None):
-    headers = {} if bearer is None else {"Authorization": f"Bearer {bearer}"}
+async def mcp_client(gateway: LiveGateway, run_token: str | None, *, as_bearer: bool = False):
+    """The SDK's client sending the run token in X-Run-Token (contract), or as `Authorization:
+    Bearer` (the old place, still accepted) with `as_bearer`."""
+    if run_token is None:
+        headers = {}
+    elif as_bearer:
+        headers = {"Authorization": f"Bearer {run_token}"}
+    else:
+        headers = {"X-Run-Token": run_token}
     async with (
         httpx2.AsyncClient(headers=headers, timeout=httpx2.Timeout(10)) as http,
         Client(

@@ -7,6 +7,9 @@ Shared shapes between services. Language-neutral: JSON Schema (draft 2020-12) an
 - Test: `uv run pytest` (from `contracts/`). Checks each schema is valid, valid examples pass,
   invalid examples fail.
 
+- Tests hang at 0% CPU: iCloud evicted `.venv` files (repo under `~/Desktop`). Check
+  `find .venv -flags +dataless | wc -l`; if not 0, `rm -rf .venv && uv sync`.
+
 - Optional extra lint for OpenAPI files: `npx -y @redocly/cli@1.34.5 lint internal-api.openapi.yaml`
   (expect one `info-license` warning until the repo's license is decided).
 

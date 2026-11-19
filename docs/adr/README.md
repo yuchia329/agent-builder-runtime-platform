@@ -18,7 +18,7 @@ Rules:
 | [0003](0003-run-identity-and-run-token.md)          | Run identity via `acts_as` and a signed run token    | Accepted |
 | [0004](0004-ports-and-adapters.md)                  | Swappable backends behind ports with contract tests  | Accepted, partly superseded by 0008, 0009 |
 | [0005](0005-compute-agnostic-worker-core.md)        | Compute-agnostic worker core                         | Accepted |
-| [0006](0006-separate-tool-gateway.md)               | Tool gateway as a separate service, built in stages  | Accepted |
+| [0006](0006-separate-tool-gateway.md)               | Tool gateway as a separate service, built in stages  | Accepted, "a connector is data" narrowed by 0014 |
 | [0007](0007-serverless-scale-to-zero-deployment.md) | Serverless, scale-to-zero deployment                 | Accepted |
 | [0008](0008-control-plane-data-in-dynamodb.md)      | Control-plane data in DynamoDB                       | Accepted |
 | [0009](0009-worker-owns-agent-loop.md)              | The worker owns the agent loop                       | Accepted, Bedrock-only adapter plan superseded by 0010 |
@@ -26,6 +26,7 @@ Rules:
 | [0011](0011-run-state-per-step-fenced.md)          | Run state: one item per step, fenced writes, 15-day TTL | Accepted |
 | [0012](0012-time-budget-counts-working-time.md)    | The time budget counts working time across attempts | Accepted |
 | [0013](0013-unknown-tool-outcome.md)              | Unknown tool outcome: repeat only safe-to-repeat tools | Accepted |
+| [0014](0014-connector-rules-and-hooks.md)         | Connectors: declarative rules plus named hooks       | Accepted |
 
 ## Template
 

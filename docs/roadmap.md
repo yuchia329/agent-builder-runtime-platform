@@ -13,7 +13,7 @@ safety):** lease, per-step checkpoints, idempotent tool calls (ADR 0011-0013), r
 webhook dedupe; `make chaos` kills the worker mid-run with SIGKILL and the run resumes and adds
 its label exactly once. **M3 done (approvals):** issue-triage closes a high-confidence duplicate
 only after Approve in Slack (Reject fails the run with `approval_rejected`, no decision in 72 h
-with `approval_expired`); checked live in the sandbox. Next: plan M4 (tool gateway) tasks.
+with `approval_expired`); checked live in the sandbox. Next: M4 (tool gateway), tasks below.
 
 ## Approach
 
@@ -51,7 +51,7 @@ can run alongside 2 to 5. Start a session with
 | M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Done        |
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Done        |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
-| M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Not started |
+| M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Planned     |
 | M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model; chaos test report in `loadtest/report.md`                                                                            | Not started |
@@ -251,6 +251,103 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
   closes it as duplicate, Reject leaves it open and fails the run. **M3 done.**
   ```
 
+## M4 tasks: tool gateway
+
+Tool calls move out of the worker into `tool-gateway/` (ADR 0006): the worker holds no
+credential, every call carries a signed run token (ADR 0003), and connectors are an OpenAPI file
+plus an allowlist with rules and named hooks (ADR 0014). Decided when planning (2026-11-18):
+
+- Team bot (`acts_as: team-bot`) is a GitHub App (installation tokens, actions show as
+  `<app>[bot]`); `acts_as: owner` uses per-user OAuth, also in M4. No personal token in the
+  gateway.
+- Run token: ES256 JWT, a new one on each `GET /internal/runs/{id}` (each attempt), valid for the
+  run's `max_seconds` from issue; keys from env locally, KMS signing in M6.
+- Second approval check reads the existing `GET /internal/runs/{id}`; no new endpoint.
+- GitHub is the only connector in M4; tool names stay (`github.search_issues`, ...).
+- `TokenStore` on AWS is SSM Parameter Store SecureString (free tier), built in M6; M4 uses the
+  in-memory adapter.
+- Every gateway call writes an access log line: run, tenant, agent and version, who started the
+  run (`started_by`), the identity it acts as, tool, argument hash, outcome; never a secret.
+
+Work in this order:
+
+- [ ] `[contracts]` `run-token.schema.json` (claims `iss`, `aud`, `sub` = run id, `tenant`,
+  `agent`, `agent_version`, `acts_as`, `owner`, `started_by`, `tools`, `require_approval`,
+  `iat`, `exp`; ES256), `connector-allowlist.schema.json` (tool name to `operationId`, argument
+  rules, result fields kept, hook name, annotations), and the MCP call conventions: run token as
+  `Authorization: Bearer`, `step` and idempotency key in the call's `_meta`, `readOnlyHint` /
+  `idempotentHint` as the tool's `read_only` / `idempotent`, tool failures as MCP tool errors
+  (`isError`). Check: contracts tests (valid and invalid examples); cross-service entries for
+  control-plane, tool-gateway and worker.
+- [ ] `[control-plane]` record who published each version (`owner`) and who started each run
+  (`started_by`: `webhook:github` or `api:<key>`); sign a run token on every
+  `GET /internal/runs/{id}` (`RUN_TOKEN_PRIVATE_KEY`). Tokens are never logged. Check:
+  integration test verifies the token with the public key and validates its claims against the
+  contract.
+- [ ] `[tool-gateway]` scaffold: uv project, FastAPI plus the MCP Python SDK, stateless
+  Streamable HTTP with JSON responses at `/mcp`; run token checked on every request (signature,
+  audience, expiry); `tools/list` shows only the token's tools, `tools/call` refuses others;
+  access log; `TokenStore` port with an in-memory adapter and contract suite; a fake connector.
+  `AGENTS.md` and the Commands table. Check: tests including a forged token, an expired one, and
+  a tool not in the token.
+- [ ] `[tool-gateway]` OpenAPI-to-MCP generator: `connectors/github/` (`openapi.yaml` trimmed
+  from GitHub's official description, `allowlist.yaml`) becomes MCP tools (name, description,
+  input schema from parameters and body, annotations); the executor builds and sends requests;
+  declarative rules: allowed repos, search scope (`repo:` added, `repo:`/`org:`/`user:` refused),
+  enum limits, result fields kept (no issue bodies). Check: unit tests with recorded GitHub
+  responses for each rule.
+- [ ] `[tool-gateway]` GitHub hooks (ADR 0014): existing labels only (listed in the tool
+  description, checked on the call), `close_issue` reads first (pull requests refused, an
+  already closed issue not closed again), `duplicate_of` looked up to the issue id (same repo,
+  not itself); retries, rate limits and error messages without the token, as in `tools_local.py`.
+  Check: every case in `worker/tests/unit/test_tools_local.py` has a passing gateway equivalent.
+- [ ] `[tool-gateway]` team bot: GitHub App credentials (app id and private key in `TokenStore`;
+  app JWT exchanged for an installation token, cached until 5 minutes before its 1-hour expiry).
+  The user creates the App (Issues read and write, Metadata read) and installs it on the sandbox
+  repo. Check: recorded-response tests; a real call in the sandbox shows as `<app>[bot]`.
+- [ ] `[tool-gateway]` second approval check: a `require_approval` tool runs only if the run's
+  `approval` (from `GET /internal/runs/{id}`) is approved for the same step, tool and canonical
+  arguments; otherwise a tool error. Check: unit tests with a fake control plane (no approval,
+  rejected, other step, other arguments, match).
+- [ ] `[worker]` `tools_mcp.py`: MCP client with the run token, `_meta` step and idempotency key,
+  annotations to `ToolSpec` flags, tool errors to `ToolError`; `TOOLS_PROVIDER=mcp`,
+  `TOOL_GATEWAY_URL`. Check: the `ToolClient` contract suite passes against the gateway with the
+  fake connector.
+- [ ] `[local-stack]` gateway in compose; local run-token key pair generated by `make` (never
+  committed); `make demo` runs its tools through the gateway. Check: `make up && make demo` and
+  `make chaos` pass.
+- [ ] `[tool-gateway]` per-user OAuth for `acts_as: owner`: GitHub OAuth App, `/oauth/github/start`
+  and `/oauth/github/callback` (state and PKCE), token stored per tenant, user and provider; an
+  owner run without a stored token fails naming the login URL. Check: tests with a fake GitHub
+  OAuth server; a real login through the browser to localhost; an owner run labels as the user.
+- [ ] `[specs]` issue-triage through the gateway: `TOOLS_PROVIDER=mcp`, no `GITHUB_TOKEN` in the
+  worker's environment. Check: a planted duplicate is labeled and, after Approve in Slack, closed
+  by `<app>[bot]`; the gateway access log shows both identities. **M4 done.**
+
+## Later milestones (draft)
+
+Rough lists so the path is visible. Each milestone's planning session rewrites its own list.
+
+- **M5 evals:** `[contracts]` eval task schema (trigger event, recorded tool responses, checks);
+  `[evals]` runner on the local stack replaying tool responses through the gateway's fake
+  connector; about 30 issue-triage tasks with deterministic checks (labels, duplicate found,
+  nothing closed without approval); an LLM judge for the summary, checked against about 50 hand
+  labels; a GitHub Actions job on PRs that change a spec or prompt, failing on a drop of more than
+  2 points versus `main`, cheapest capable model.
+- **M6 AWS deploy:** `[infra]` Budgets alert and Terraform state first; tables, queue and DLQ;
+  ECR images; control plane on Lambda with SnapStart and the gateway on Lambda behind one API
+  Gateway HTTP API on a custom domain (Cloudflare DNS); workers on Fargate scaled on queue depth
+  from 0; IAM (SigV4) between services; SSM `TokenStore` adapter and KMS run-token signing;
+  EventBridge Scheduler for the sweeps; OpenTelemetry to X-Ray. Slack's Request URL moves to the
+  real domain (no tunnel). Check: live triage on AWS and no hourly cost while idle.
+- **M7 scale proof:** `[loadtest]` driver (k6 or Locust, open question), stub model with fixed
+  latency, 1,000 concurrent runs (queue-to-start p95, runs per minute, worker CPU and memory),
+  random worker stops counting lost runs and duplicate side effects (target 0);
+  `loadtest/report.md`.
+- **M8 open source:** needs a new goal. The worker no longer uses the Strands Agents SDK
+  (ADR 0009, ADR 0010), so "fix Strands bugs upstream" has almost nothing to rest on. Candidates:
+  libraries the platform does use (MCP Python SDK, ...). Decide when planning M8.
+
 ## Cost guardrails
 
 - Set an AWS Budgets alert before deploying anything, and a spend limit or alert on every model
@@ -266,15 +363,13 @@ make the call exactly once, rejected runs fail with `approval_rejected` (ADR 000
 ## Open questions
 
 - Will the repo be public? Affects how much personal context belongs in it.
-- GitHub App vs per-user OAuth for the first GitHub connector.
+- Users and roles (RBAC): who may publish an agent, approve a call, or publish with
+  `acts_as: owner`. Needs users in the control plane (today one tenant, one API key). After M4.
 - Is the worker's scale-from-0 delay (a minute or more) acceptable for demos, or add the Lambda
   worker entrypoint (ADR 0005) early?
 - Is Spring Boot's cold start on Lambda with SnapStart fast enough for Slack's 3-second callback
   limit, or does the control plane need a lighter framework?
 - k6 or Locust for the load driver.
-- Gateway `TokenStore`: Secrets Manager costs $0.40 per secret per month, which grows with every
-  stored OAuth token. SSM Parameter Store SecureString (standard tier, free) may be the better
-  adapter. Decide in M4.
 
 ## Cross-service changes
 
@@ -294,6 +389,17 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · contracts** — M4 planned (task list above, 11 tasks) with the user's choices: team
+  bot is a GitHub App, `acts_as: owner` uses per-user OAuth in M4, every gateway call writes an
+  access log with both identities, connector limits are allowlist rules plus named hooks (new
+  ADR 0014), `TokenStore` on AWS is SSM Parameter Store (architecture updated). Draft lists for
+  M5 to M8; M8's goal (Strands fixes upstream) no longer fits since the worker does not use
+  Strands, decide when planning M8. RBAC added to open questions. No contract changed yet; 60
+  contracts tests pass. Next: `[contracts]` run token, connector allowlist and MCP call
+  conventions (M4 task 1). Gotchas: hooks run with a real credential, so each needs
+  recorded-response tests; the parity check uses `worker/tests/unit/test_tools_local.py` cases.
+  `contracts/.venv` was evicted by iCloud (tests hung); rebuilt with `rm -rf .venv && uv sync`.
 
 - **2026-11-18 · specs** — `issue-triage.yaml` (version 4 in the local stack) adds
   `github.close_issue` under `require_approval`: after labeling, only a high-confidence duplicate,

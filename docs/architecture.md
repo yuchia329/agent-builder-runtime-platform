@@ -366,9 +366,21 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
 
 - Input: an OpenAPI 3 spec plus an allowlist of `operationId`s per connector. Output: one MCP tool
   per allowed operation, with a JSON Schema built from its parameters and request body.
-- Connectors: GitHub, Slack, Notion, Google Calendar. Adding one means adding a folder with
-  `openapi.yaml` and `allowlist.yaml`, no code.
+- Connectors: GitHub (M4), later Slack, Notion, Google Calendar. Adding one means adding a folder
+  with `openapi.yaml` and `allowlist.yaml`; code only for a named hook
+  ([ADR 0014](adr/0014-connector-rules-and-hooks.md)).
 - Operations not on the allowlist do not exist as tools.
+- The allowlist also limits each tool: argument rules (allowed values such as repos, enums, text
+  added to a query, words refused), the result fields kept (GitHub: no issue bodies), MCP
+  annotations (`readOnlyHint`, `idempotentHint`, read by the worker as `read_only` /
+  `idempotent`), and an optional `hook`: a function in `connectors/<name>/hooks.py` for checks that
+  need extra calls (GitHub: existing labels only, close reads the issue first, `duplicate_of` to
+  issue id). Rules run first; a hook cannot widen them.
+- Identity: `acts_as: team-bot` uses the tenant's bot (GitHub App installation token, cached for
+  its hour); `acts_as: owner` uses the publisher's OAuth token, stored after a one-time login
+  (`/oauth/<provider>/start`, `/callback`).
+- Every call writes an access log line: run, tenant, agent and version, `started_by`, the identity
+  acted as, tool, argument hash, outcome. Never a token or argument values.
 - Built in stages: in M1 tool calls run inside the worker; in M4 they move into this service
   ([ADR 0006](adr/0006-separate-tool-gateway.md)). The M1 adapter (`worker/.../tools_local.py`)
   already enforces what the gateway will: a repo allowlist, search kept inside the repo, short
@@ -412,7 +424,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `ToolClient`        | worker        | `describe(names)` returns tool schemas; `call(name, args)` returns a result or raises `ToolError`    | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
 | `ApprovalChannel`   | control plane | Post an approval request, return where it went; show its outcome on that message; failures raise `ApprovalChannelException` | Slack, in-memory (logs only)               |
-| `TokenStore`        | gateway       | Store and load encrypted tokens per identity and provider                                            | Secrets Manager, in-memory                 |
+| `TokenStore`        | gateway       | Store and load encrypted tokens per identity and provider                                            | SSM Parameter Store SecureString (M6), in-memory |
 
 - Each port has one contract test suite that runs against every adapter.
 - ElasticMQ and DynamoDB Local are not adapters; they test the AWS adapters locally.
@@ -434,7 +446,7 @@ definition environment, with secrets from Secrets Manager.
 | Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys) |
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL` |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
-| Token store         | gateway                                | `TOKEN_STORE=secrets_manager\|memory`, `KMS_KEY_ID`     |
+| Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`, `KMS_KEY_ID`                 |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`         |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
@@ -487,7 +499,8 @@ AWS (one region)                                idle cost
 │   └── run-state table (from M2)               ~$0   storage only
 ├── SQS run queue + dead-letter queue           $0    per request
 ├── Bedrock (if configured)                     $0    per token
-├── Secrets Manager                             $0.40 per secret per month
+├── Secrets Manager (model API keys)            $0.40 per secret per month
+├── SSM Parameter Store (gateway tokens)        $0    standard tier
 ├── KMS key                                     $1 per month
 └── ECR, CloudWatch logs and alarms, X-Ray      cents
 ```

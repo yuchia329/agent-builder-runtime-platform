@@ -9,13 +9,15 @@ Real agent specs (real model, real tools). Each must validate against
 | What | Command |
 | --- | --- |
 | Validate a spec against the schema | `cd contracts && uv run python -c "import json,yaml; from jsonschema import Draft202012Validator as V; V(json.load(open('agent-spec.schema.json'))).validate(yaml.safe_load(open('../specs/issue-triage.yaml')))"` |
-| Publish and run for real | steps in `README.md` (needs `make up`, `TOOLS_PROVIDER=local`, MiniMax and GitHub settings in `.env`) |
+| Publish and run for real | steps in `README.md` (`make up && CONNECTORS=github docker compose up -d --wait tool-gateway`; MiniMax, `GITHUB_REPOS` and `GITHUB_APP_*` in `.env`) |
 | Approve in Slack | `README.md` → Approve a duplicate close in Slack (Slack settings in `.env`, a tunnel to port 8080) |
 
 ## Conventions
 
-- List only tools the current tool provider has (`TOOLS_PROVIDER=local`: `github.search_issues`,
-  `github.add_label`, `github.close_issue`); an unknown tool fails the run at start.
+- List only tools the gateway's loaded connectors have (`CONNECTORS=github`:
+  `github.search_issues`, `github.add_label`, `github.close_issue`); an unknown tool fails the
+  run at start. Instructions use the tools' own argument names (GitHub's parameter names, see
+  `tool-gateway/connectors/github/allowlist.yaml`); never invent others.
 - A tool with an effect a person should check first (closing, deleting, posting) goes in
   `require_approval`, and the instructions say exactly when to call it (issue-triage: only a
   high-confidence duplicate, only the new issue, after labeling).

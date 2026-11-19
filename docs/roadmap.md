@@ -13,7 +13,11 @@ safety):** lease, per-step checkpoints, idempotent tool calls (ADR 0011-0013), r
 webhook dedupe; `make chaos` kills the worker mid-run with SIGKILL and the run resumes and adds
 its label exactly once. **M3 done (approvals):** issue-triage closes a high-confidence duplicate
 only after Approve in Slack (Reject fails the run with `approval_rejected`, no decision in 72 h
-with `approval_expired`); checked live in the sandbox. Next: M4 (tool gateway), tasks below.
+with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):** every tool call
+goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
+from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
+the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
+(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), to be planned.
 
 ## Approach
 
@@ -51,7 +55,7 @@ can run alongside 2 to 5. Start a session with
 | M1  | Real agent     | Issue-triage agent runs on a real model (MiniMax) and calls GitHub directly from the worker (personal token)                                                  | Done        |
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Done        |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
-| M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Planned     |
+| M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
 | M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model; chaos test report in `loadtest/report.md`                                                                            | Not started |
@@ -330,7 +334,7 @@ Work in this order:
   `env_file: .env` (today it also holds `GITHUB_TOKEN`, the model key and the gateway's OAuth
   secrets); list them from `control-plane/`'s configuration, then filter like `worker-env.sh`.
   Check: no other service's secret value in the container; `make demo` passes.
-- [ ] `[specs]` issue-triage through the gateway: `TOOLS_PROVIDER=mcp`, no `GITHUB_TOKEN` in the
+- [x] `[specs]` issue-triage through the gateway: `TOOLS_PROVIDER=mcp`, no `GITHUB_TOKEN` in the
   worker's environment. Check: a planted duplicate is labeled and, after Approve in Slack, closed
   by `<app>[bot]`; the gateway access log shows both identities. **M4 done.**
 
@@ -399,21 +403,25 @@ service has followed.
   `tools_mcp.py` takes an `auth` hook, signer in M6), `tool-gateway` (`HttpControlPlane` takes a
   `signer`, signer in M6). Nothing checks signatures locally.
 
-- **Run token, connector allowlist, MCP call conventions** (M4). Declared in
-  `contracts/run-token.schema.json`, `contracts/connector-allowlist.schema.json`,
-  `contracts/mcp-tool-call.schema.json` and `run_token` in `contracts/internal-api.openapi.yaml`.
-  `tool-gateway` and `worker` done (`tools_mcp.py` sends the token and `_meta`, reads
-  annotations and `structuredContent`). Must follow: `specs` (M4 task 11). Tool arguments become GitHub's own parameter names (`owner`,
-  `repo`, `q`, `labels`, `state_reason`; hook extra `duplicate_of`) when the worker switches to
-  the gateway; specs keep their tool names. `control-plane` done. Results: the tool's JSON in
-  `structuredContent` (also as text in `content[0]`), added to `mcp-tool-call.schema.json`'s
-  description; the worker reads `structuredContent`. Allowlist gained connector `headers` (never
-  a credential) and `{"items": [...]}` for `list` results; only `tool-gateway` reads it.
-
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · specs** — M4 task 11, **M4 done**. `specs/issue-triage.yaml` uses the gateway's
+  argument names (GitHub's own: `q`, `owner`, `repo`, `issue_number`, `labels` as a one-item list,
+  `state_reason`, hook extra `duplicate_of`); tool names, `acts_as: team-bot`, `require_approval`
+  and budget unchanged; validates against the schema. README and AGENTS.md describe the gateway
+  path (`make up && CONNECTORS=github docker compose up -d --wait tool-gateway`, no `.env` edit;
+  a plain `make up` returns to the fake connector). Checked live: planted duplicate #10 of #5 in
+  the sandbox, run `SUCCEEDED` in 12 steps for $0.0046; both labels and the close (reason
+  duplicate) by the App (`<app>[bot]`) after Approve in Slack; 7 gateway access lines, all
+  `started_by=api:tenant-demo`, `identity=team-bot`; `make demo` passes after switching back.
+  Cross-service entry "Run token, connector allowlist, MCP call conventions" removed (every
+  service followed). Next: plan M5 (evals): rewrite its draft list into tasks. Gotchas: the spec
+  no longer runs on the worker's M1 local tools (other argument names); a Slack Request URL with
+  a missing path or trailing slash gets 403 from the ngrok policy (`POST /approvals/slack` must
+  answer 401 to an unsigned curl); zsh `echo` breaks JSON with `\n` in it, use `printf '%s'`.
 
 - **2026-11-18 · local-stack** — The Docker control plane no longer gets all of `.env`.
   `local-stack/worker-env.sh` became `service-env.sh` (`make service-env`, replacing

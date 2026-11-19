@@ -411,9 +411,9 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   answers 503 and owner runs are refused. uvicorn's request log hides `/oauth/` query strings.
 - Every call writes an access log line: run, tenant, agent and version, `started_by`, the identity
   acted as, tool, argument hash, outcome. Never a token or argument values.
-- Built in stages: in M1 tool calls run inside the worker; in M4 they move into this service
-  ([ADR 0006](adr/0006-separate-tool-gateway.md)). The M1 adapter (`worker/.../tools_local.py`)
-  already enforces what the gateway will: a repo allowlist, search kept inside the repo, short
+- Built in stages: in M1 tool calls ran inside the worker; since M4 they run in this service
+  ([ADR 0006](adr/0006-separate-tool-gateway.md)), and the Docker worker always uses it. The M1
+  adapter (`worker/.../tools_local.py`, kept for host runs and tests) enforces the same rules: a repo allowlist, search kept inside the repo, short
   results without issue bodies, labels limited to existing ones, and closing only real issues
   (read first: pull requests refused, an already closed issue left as it is).
 - Runs on Lambda behind the shared API Gateway. `/mcp` requires IAM authorization (SigV4) and a

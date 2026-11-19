@@ -10,15 +10,19 @@ Example agent specs, run against the real model and tools. Each file follows
 
 ## Run issue-triage for real
 
-Costs about $0.01 of MiniMax credit per run and writes labels to a real GitHub repo.
+Costs about $0.01 of MiniMax credit per run and writes labels to a real GitHub repo. The worker
+calls the tools through the tool gateway, which acts as the GitHub App (`acts_as: team-bot`); no
+GitHub token goes to the worker (ADR 0006).
 
-1. In `.env` (repo root): the MiniMax provider lines, `TOOLS_PROVIDER=local`, `GITHUB_TOKEN` and
-   `GITHUB_REPOS=<owner>/<repo>` (see `.env.example`). The token should be fine-grained, scoped
-   to that one repo, with Issues: Read and write.
-2. Start the stack, or restart the worker after editing `.env`:
+1. In `.env` (repo root): the MiniMax provider lines, `GITHUB_REPOS=<owner>/<repo>` and the
+   `GITHUB_APP_*` settings (see `.env.example`; the App needs Issues read and write on that one
+   repo). No `GITHUB_TOKEN` is needed.
+2. Start the stack with the gateway's GitHub connector. `CONNECTORS=github` on the command line
+   overrides `.env` for that start; a plain `make up` afterwards goes back to the fake connector
+   that `make demo` needs. The gateway logs `Credential from the environment: github team-bot`.
 
    ```sh
-   make up                        # or: docker compose up -d --build worker
+   make up && CONNECTORS=github docker compose up -d --wait tool-gateway
    ```
 
 3. Create the agent (409 if it exists) and publish the spec. Every publish is a new version and
@@ -80,9 +84,13 @@ within `APPROVAL_TIMEOUT_HOURS` (72) ends it with `approval_expired`.
 
 ## Gotchas
 
-- `make demo` republishes `issue-triage` with the stub spec; publish this one again afterwards.
-- With `TOOLS_PROVIDER=local`, `make demo` fails at run start: its spec lists
-  `slack.post_message`, which the local tools do not have.
+- `make demo` republishes `issue-triage` with the stub spec and needs the fake connector; publish
+  this one again afterwards.
+- The spec uses the gateway's argument names (GitHub's own: `q`, `owner`, `repo`,
+  `issue_number`, `labels`, `state_reason`, `duplicate_of`). The worker's M1 tools
+  (`TOOLS_PROVIDER=local`, worker on the host) take other names and do not run it.
+- `docker compose logs tool-gateway | grep tool_call` shows one access line per call, with
+  `started_by` (who started the run) and `identity` (`team-bot`).
 - GitHub search matches exact words, not stems ("crash" misses "crashes"): the instructions tell
   the model to use short queries or `OR`. A run that misses a duplicate is usually a query issue.
 - A new issue takes a few seconds to appear in GitHub search.

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "examples"
@@ -17,13 +18,19 @@ def load(path: Path):
     return yaml.safe_load(text) if path.suffix in {".yaml", ".yml"} else json.loads(text)
 
 
+# Schemas $ref their siblings by file name ("agent-spec.schema.json#/$defs/toolName").
+REGISTRY = Registry().with_resources(
+    (path.name, Resource.from_contents(load(path))) for path in ROOT.glob("*.schema.json")
+)
+
+
 def validator(schema_name: str) -> Draft202012Validator:
     schema = load(ROOT / f"{schema_name}.schema.json")
     Draft202012Validator.check_schema(schema)
-    return Draft202012Validator(schema)
+    return Draft202012Validator(schema, registry=REGISTRY)
 
 
-SCHEMAS = ["agent-spec", "run-message"]
+SCHEMAS = ["agent-spec", "run-message", "run-token", "connector-allowlist", "mcp-tool-call"]
 
 
 def example(schema_name: str, kind: str) -> Path:
@@ -88,3 +95,68 @@ def test_agent_spec_model_formats(model):
     spec = copy.deepcopy(load(example("agent-spec", "valid")))
     spec["model"] = model
     assert validator("agent-spec").is_valid(spec)
+
+
+def _broken(schema_name, change):
+    document = copy.deepcopy(load(example(schema_name, "valid")))
+    change(document)
+    return document
+
+
+RUN_TOKEN_BREAKS = {
+    "other audience": _set("aud", "worker"),
+    "other issuer": _set("iss", "worker"),
+    "missing exp": _without("exp"),
+    "missing started_by": _without("started_by"),
+    "no tools": _set("tools", []),
+    "bad tool name": _set("tools", ["close_issue"]),
+    "owner without kind": _set("owner", "tenant-demo"),
+    "principal with space": _set("started_by", "api:tenant demo"),
+    "credential in token": _set("github_token", "ghs_x"),
+    "zero version": _set("agent_version", 0),
+}
+
+
+@pytest.mark.parametrize("change", RUN_TOKEN_BREAKS.values(), ids=RUN_TOKEN_BREAKS.keys())
+def test_run_token_rule(change):
+    assert not validator("run-token").is_valid(_broken("run-token", change))
+
+
+def _tool(name, change):
+    return lambda doc: change(doc["tools"][name])
+
+
+ALLOWLIST_BREAKS = {
+    "tool without annotations": _tool("github.add_label", lambda t: t.pop("annotations")),
+    "only one annotation": _tool("github.add_label", lambda t: t["annotations"].pop("idempotentHint")),
+    "unknown argument rule": _tool("github.add_label", lambda t: t["arguments"]["labels"].update(allow_any=True)),
+    "refuse_pattern without message": _tool(
+        "github.search_issues", lambda t: t["arguments"]["q"].pop("refuse_message")),
+    "hook_arguments without hook": _tool("github.close_issue", lambda t: t.pop("hook")),
+    "check without setting": _tool("github.close_issue", lambda t: t["checks"][0].pop("in_setting")),
+    "lowercase setting": _tool("github.close_issue", lambda t: t["checks"][0].update(in_setting="repos")),
+    "tool name without connector": lambda doc: doc["tools"].update(add_label=doc["tools"].pop("github.add_label")),
+    "unknown credential kind": lambda doc: doc["credentials"].update({"team-bot": "personal_token"}),
+    "http base url": _set("base_url", "http://api.github.com"),
+    "hook name with dash": _tool("github.close_issue", lambda t: t.update(hook="close-checks")),
+}
+
+
+@pytest.mark.parametrize("change", ALLOWLIST_BREAKS.values(), ids=ALLOWLIST_BREAKS.keys())
+def test_connector_allowlist_rule(change):
+    assert not validator("connector-allowlist").is_valid(_broken("connector-allowlist", change))
+
+
+MCP_CALL_BREAKS = {
+    "no _meta": _without("_meta"),
+    "no step": lambda c: c["_meta"].pop("agentplatform/step"),
+    "step 0": lambda c: c["_meta"].update({"agentplatform/step": 0}),
+    "short idempotency key": lambda c: c["_meta"].update({"agentplatform/idempotency_key": "abc"}),
+    "bad tool name": _set("name", "close_issue"),
+    "arguments not an object": _set("arguments", ["owner"]),
+}
+
+
+@pytest.mark.parametrize("change", MCP_CALL_BREAKS.values(), ids=MCP_CALL_BREAKS.keys())
+def test_mcp_tool_call_rule(change):
+    assert not validator("mcp-tool-call").is_valid(_broken("mcp-tool-call", change))

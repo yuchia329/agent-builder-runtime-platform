@@ -1,0 +1,15 @@
+{
+  "name": "github.close_issue",
+  "arguments": {
+    "owner": "octocat",
+    "repo": "Hello-World",
+    "issue_number": 8,
+    "state_reason": "duplicate",
+    "duplicate_of": 5
+  },
+  "_meta": {
+    "agentplatform/step": 12,
+    "agentplatform/idempotency_key": "3f7a1c0e9b2d4f6a8c1e3b5d7f9a0c2e4b6d8f0a1c3e5b7d9f1a3c5e7b9d0f2a",
+    "progressToken": 7
+  }
+}

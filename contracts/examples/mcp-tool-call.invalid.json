@@ -1,0 +1,5 @@
+{
+  "name": "github.close_issue",
+  "arguments": { "owner": "octocat", "repo": "Hello-World", "issue_number": 8, "state_reason": "completed" },
+  "_meta": { "agentplatform/step": 0 }
+}

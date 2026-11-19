@@ -95,7 +95,7 @@ Supporting components are not deployed as services but are built and worked on t
 
 | Component     | Folder                                                    | Purpose                                                              |
 | ------------- | --------------------------------------------------------- | -------------------------------------------------------------------- |
-| `contracts`   | `contracts/`                                              | Shared schemas: agent spec, run message, run token, internal API     |
+| `contracts`   | `contracts/`                                              | Shared schemas: agent spec, run message, run token, internal API, connector allowlist, MCP tool call |
 | `specs`       | `specs/`                                                  | Example agent specs (`issue-triage`, `meeting-prep`)                 |
 | `evals`       | `evals/`                                                  | Regression tasks, fixtures, LLM judge, CI gate                       |
 | `loadtest`    | `loadtest/`                                               | Stub model, stub tools, load driver, chaos script                    |
@@ -531,6 +531,7 @@ detail here; trim this section to folder level at that point.
 contracts/
   agent-spec.schema.json        run-message.schema.json
   run-token.schema.json         internal-api.openapi.yaml
+  connector-allowlist.schema.json  mcp-tool-call.schema.json
 
 control-plane/                  Java 21, Spring Boot 4, Gradle (see control-plane/AGENTS.md)
   dynamodb/                     control-plane table definition

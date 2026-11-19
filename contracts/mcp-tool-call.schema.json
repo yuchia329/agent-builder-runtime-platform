@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MCP tools/call params",
+  "description": "The `params` of an MCP `tools/call` request from the worker to the tool gateway (stateless Streamable HTTP, JSON responses, `/mcp`). Conventions around it: the run token (run-token.schema.json) goes in `Authorization: Bearer <token>` on every request, `tools/list` included; `tools/list` shows only the token's tools, with annotations per connector-allowlist.schema.json (the worker reads readOnlyHint as read_only and idempotentHint as idempotent). A tool that fails returns a result with `isError: true` and a text the model may read (never a credential); a refused token or unknown tool is a JSON-RPC error. Rules not expressible here: `name` is in the token's tools; for a tool in the token's require_approval, the run's approval must match `agentplatform/step`, `name` and the canonical JSON of `arguments`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "arguments", "_meta"],
+  "properties": {
+    "name": { "$ref": "agent-spec.schema.json#/$defs/toolName" },
+    "arguments": {
+      "description": "Tool arguments as the model gave them, checked by the gateway against the tool's input schema.",
+      "type": "object"
+    },
+    "_meta": {
+      "description": "MCP request metadata. Platform keys use the `agentplatform/` prefix; other MCP keys (progressToken) are allowed.",
+      "type": "object",
+      "required": ["agentplatform/step", "agentplatform/idempotency_key"],
+      "properties": {
+        "agentplatform/step": {
+          "description": "Step number of this call in the run (the approval check compares it).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "agentplatform/idempotency_key": {
+          "description": "The worker's key for this call: SHA-256 hex of run id, step, tool and canonical arguments. Logged by the gateway.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

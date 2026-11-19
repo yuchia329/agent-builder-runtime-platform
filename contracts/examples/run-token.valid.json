@@ -1,0 +1,15 @@
+{
+  "iss": "control-plane",
+  "aud": "tool-gateway",
+  "sub": "run_c51edd03fa95b249fe3bc6ab82e8576b",
+  "tenant": "tenant-demo",
+  "agent": "issue-triage",
+  "agent_version": 4,
+  "acts_as": "team-bot",
+  "owner": "api:tenant-demo",
+  "started_by": "webhook:github",
+  "tools": ["github.search_issues", "github.add_label", "github.close_issue"],
+  "require_approval": ["github.close_issue"],
+  "iat": 1795042460,
+  "exp": 1795042640
+}

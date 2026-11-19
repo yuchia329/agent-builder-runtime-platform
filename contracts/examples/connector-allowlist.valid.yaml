@@ -1,0 +1,65 @@
+# The GitHub connector as planned for M4 (tool-gateway/connectors/github/allowlist.yaml).
+connector: github
+base_url: https://api.github.com
+credentials:
+  team-bot: github_app
+  owner: oauth
+hook_operations:
+  - issues/list-labels-for-repo
+  - issues/get
+tools:
+  github.search_issues:
+    operation: search/issues-and-pull-requests
+    description: "Search issues in the allowed repositories. Search matches exact words; use OR for word forms."
+    arguments:
+      q:
+        max_length: 256
+        refuse_pattern: '(?i)\b(repo|org|user|owner):'
+        refuse_message: "Do not use repo:, org:, user: or owner:; the repositories are added for you."
+        append: " is:issue"
+        scope_qualifiers: { qualifier: repo, setting: GITHUB_REPOS }
+    fixed: { per_page: 10 }
+    result:
+      list: items
+      fields: { number: number, title: title, state: state, labels: "labels[].name", url: html_url }
+    annotations: { readOnlyHint: true, idempotentHint: true }
+    hook: search_results_in_allowed_repos
+  github.add_label:
+    operation: issues/add-labels
+    arguments:
+      owner: {}
+      repo: {}
+      issue_number: {}
+      labels: { max_items: 1 }
+    checks:
+      - value: "{owner}/{repo}"
+        in_setting: GITHUB_REPOS
+        ignore_case: true
+        message: Repository '{value}' is not allowed.
+    result:
+      list: "."
+      fields: { name: name }
+    annotations: { readOnlyHint: false, idempotentHint: true }
+    hook: existing_labels_only
+  github.close_issue:
+    operation: issues/update
+    arguments:
+      owner: {}
+      repo: {}
+      issue_number: {}
+      state_reason: { enum: [completed, not_planned, duplicate] }
+    fixed: { state: closed }
+    checks:
+      - value: "{owner}/{repo}"
+        in_setting: GITHUB_REPOS
+        ignore_case: true
+        message: Repository '{value}' is not allowed.
+    result:
+      fields: { number: number, state: state, state_reason: state_reason, url: html_url }
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true }
+    hook: close_issue_checks
+    hook_arguments:
+      duplicate_of:
+        type: integer
+        minimum: 1
+        description: Number of the original issue in the same repository (state_reason duplicate only).

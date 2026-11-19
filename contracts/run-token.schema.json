@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Run token claims",
+  "description": "Payload of the signed JWT the control plane issues for a run (ADR 0003) and the worker sends on every tool gateway call. Signed with ES256 (ECDSA P-256, SHA-256); the JWT header carries `kid`, the id of the signing key, so keys can rotate. A new token is issued on every GET /internal/runs/{id}, valid for the run's budget.max_seconds from issue. Rules not expressible here, checked by the gateway in code: the signature, `exp` > `iat`, the token not yet expired, `require_approval` a subset of `tools`. The gateway never logs the token.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["iss", "aud", "sub", "tenant", "agent", "agent_version", "acts_as", "owner",
+               "started_by", "tools", "require_approval", "iat", "exp"],
+  "properties": {
+    "iss": { "description": "Issuer.", "const": "control-plane" },
+    "aud": { "description": "Audience: only the tool gateway accepts it.", "const": "tool-gateway" },
+    "sub": {
+      "description": "Run id.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "tenant": {
+      "description": "Tenant that owns the run.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "agent": { "$ref": "agent-spec.schema.json#/properties/name" },
+    "agent_version": { "type": "integer", "minimum": 1 },
+    "acts_as": {
+      "description": "Whose credential the gateway uses: `team-bot` (the tenant's bot, for example a GitHub App installation) or `owner` (the identity in `owner`).",
+      "$ref": "agent-spec.schema.json#/properties/acts_as"
+    },
+    "owner": {
+      "description": "Who published this agent version; with acts_as owner, whose OAuth token is used.",
+      "$ref": "#/$defs/principal"
+    },
+    "started_by": {
+      "description": "What started the run, for the gateway's access log: `webhook:github`, `api:<tenant>`, later `user:<id>`.",
+      "$ref": "#/$defs/principal"
+    },
+    "tools": {
+      "description": "The spec's tools: the only ones the gateway lists or runs for this token.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "agent-spec.schema.json#/$defs/toolName" }
+    },
+    "require_approval": {
+      "description": "Tools the gateway runs only after confirming an approved decision with the control plane.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "agent-spec.schema.json#/$defs/toolName" }
+    },
+    "iat": { "description": "Issued at, epoch seconds.", "type": "integer", "minimum": 0 },
+    "exp": { "description": "Expires at, epoch seconds: iat + budget.max_seconds.", "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "principal": {
+      "description": "`<kind>:<id>`, for example `api:tenant-demo`, `webhook:github`, `user:42`.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*:[^\\s]+$",
+      "maxLength": 200
+    }
+  }
+}

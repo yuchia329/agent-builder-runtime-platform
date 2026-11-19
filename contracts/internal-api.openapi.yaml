@@ -220,8 +220,10 @@ components:
           type: object
         run_token:
           description: |
-            Signed JWT the worker attaches to tool gateway calls (ADR 0003). Issued from M4;
-            absent before then.
+            Signed JWT (ES256) the worker sends as `Authorization: Bearer` on every tool gateway
+            call (ADR 0003). Its claims follow run-token.schema.json. A new token on every GET,
+            valid for the spec's budget.max_seconds from issue. Issued from M4; absent before
+            then.
           type: string
 
     RunUpdate:

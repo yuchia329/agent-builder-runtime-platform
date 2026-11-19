@@ -17,6 +17,13 @@ Shared shapes between services. Language-neutral: JSON Schema (draft 2020-12) an
 
 - HTTP APIs are OpenAPI 3.1 (`<name>.openapi.yaml`); they `$ref` sibling schema files instead of
   copying them. Tests validate the document and check examples against its component schemas.
+- Schemas `$ref` each other by file name (`agent-spec.schema.json#/$defs/toolName`), never copy a
+  pattern; `tests/test_schemas.py` registers every `*.schema.json` so the refs resolve. A service
+  validating one of these schemas must load its siblings too.
+- MCP is not HTTP+JSON Schema end to end: `mcp-tool-call.schema.json` holds the `tools/call`
+  params, and its description holds the conventions around it (headers, annotations, errors).
+- Tests per schema: the valid and invalid example, plus a `<NAME>_BREAKS` table of single-rule
+  breaks of the valid example.
 - JSON field names are snake_case.
 
 - One schema per file: `<name>.schema.json`.

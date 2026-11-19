@@ -1,0 +1,9 @@
+# Invalid: a tool without annotations, and an argument rule that does not exist.
+connector: github
+base_url: https://api.github.com
+credentials: { team-bot: github_app }
+tools:
+  github.add_label:
+    operation: issues/add-labels
+    arguments:
+      labels: { allow_any: true }

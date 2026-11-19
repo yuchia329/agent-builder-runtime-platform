@@ -271,7 +271,7 @@ plus an allowlist with rules and named hooks (ADR 0014). Decided when planning (
 
 Work in this order:
 
-- [ ] `[contracts]` `run-token.schema.json` (claims `iss`, `aud`, `sub` = run id, `tenant`,
+- [x] `[contracts]` `run-token.schema.json` (claims `iss`, `aud`, `sub` = run id, `tenant`,
   `agent`, `agent_version`, `acts_as`, `owner`, `started_by`, `tools`, `require_approval`,
   `iat`, `exp`; ES256), `connector-allowlist.schema.json` (tool name to `operationId`, argument
   rules, result fields kept, hook name, annotations), and the MCP call conventions: run token as
@@ -385,10 +385,32 @@ service has followed.
   `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`tools_mcp.py` in M4 signs
   gateway calls; `control_plane_http.py` done), `tool-gateway` (signs calls to the control plane).
 
+- **Run token, connector allowlist, MCP call conventions** (M4). Declared in
+  `contracts/run-token.schema.json`, `contracts/connector-allowlist.schema.json`,
+  `contracts/mcp-tool-call.schema.json` and `run_token` in `contracts/internal-api.openapi.yaml`.
+  Must follow: `control-plane` (sign the token, record `owner` and `started_by`), `tool-gateway`
+  (verify the token, load allowlists, read `_meta`), `worker` (`tools_mcp.py`: send the token
+  and `_meta`, read annotations). Tool arguments become GitHub's own parameter names (`owner`,
+  `repo`, `q`, `labels`, `state_reason`; hook extra `duplicate_of`) when the worker switches to
+  the gateway; specs keep their tool names.
+
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · contracts** — M4 task 1: `run-token.schema.json` (claims; ES256 and `kid`,
+  per-GET issue, principals `kind:id`), `connector-allowlist.schema.json` (ADR 0014 format; its
+  valid example is the planned GitHub connector: search, add label, close with hooks
+  `search_results_in_allowed_repos`, `existing_labels_only`, `close_issue_checks`),
+  `mcp-tool-call.schema.json` (`tools/call` params, `_meta` keys `agentplatform/step` and
+  `agentplatform/idempotency_key`, conventions in its description); `run_token` in the internal
+  API points to the claims schema. Decided with the user: tools expose GitHub's own parameter
+  names (`owner`, `repo`, `q`, `labels`, `state_reason`), no renaming layer. 93 tests pass.
+  Next: `[control-plane]` record `owner` / `started_by` and sign the run token (M4 task 2).
+  Gotchas: schemas now `$ref` siblings by file name; a service validating them must register
+  all `*.schema.json` files (see `REGISTRY` in `contracts/tests/test_schemas.py`). YAML values
+  containing `: ` need quotes in allowlists.
 
 - **2026-11-18 · contracts** — M4 planned (task list above, 11 tasks) with the user's choices: team
   bot is a GitHub App, `acts_as: owner` uses per-user OAuth in M4, every gateway call writes an

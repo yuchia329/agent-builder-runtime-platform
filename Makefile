@@ -1,14 +1,14 @@
-.PHONY: up stack demo chaos down status logs keys worker-env
+.PHONY: up stack demo chaos down status logs keys service-env
 
 AWS = docker compose run --rm --no-deps --entrypoint aws aws-init
 STACK = dynamodb elasticmq aws-init
 
 ## up: build and start everything (AWS stand-ins, control plane, gateway, worker); returns when ready
-up: .env keys worker-env
+up: .env keys service-env
 	docker compose up -d --build --wait
 
 ## stack: start only DynamoDB Local and ElasticMQ, to run a service on your machine instead
-stack: .env keys worker-env
+stack: .env keys service-env
 	docker compose up -d $(STACK)
 	@docker compose wait aws-init >/dev/null && docker compose logs --no-log-prefix aws-init | tail -1
 
@@ -16,29 +16,29 @@ stack: .env keys worker-env
 keys:
 	@sh local-stack/run-token-keys.sh
 
-## worker-env: copy only the worker's settings from .env into .worker.env (git-ignored)
-worker-env: .env
-	@sh local-stack/worker-env.sh
+## service-env: copy each service's own settings from .env into .worker.env and .control-plane.env (git-ignored)
+service-env: .env
+	@sh local-stack/service-env.sh
 
 ## demo: publish the example spec, start a run, wait for SUCCEEDED (needs `make up`)
-demo: .env keys worker-env
+demo: .env keys service-env
 	@sh local-stack/demo.sh
 
 ## chaos: kill the worker mid-run and check the run resumes with no duplicate side effect (needs `make up`)
-chaos: .env keys worker-env
+chaos: .env keys service-env
 	@sh local-stack/chaos.sh
 
 ## down: stop everything and delete local data (keeps the run-token keys)
-down: keys worker-env
+down: keys service-env
 	docker compose --profile chaos down -v
 
 ## status: list the local tables and queues
-status: keys worker-env
+status: keys service-env
 	@echo "Tables:" && $(AWS) dynamodb list-tables --query 'TableNames' --output text
 	@echo "Queues:" && $(AWS) sqs list-queues --query 'QueueUrls' --output text
 
 ## logs: follow container logs
-logs: keys worker-env
+logs: keys service-env
 	docker compose logs -f
 
 .env:

@@ -326,7 +326,7 @@ Work in this order:
   container holds every secret in `.env`, including `GITHUB_TOKEN` and the gateway's OAuth
   secrets, though it uses none of them; ADR 0006). Check: `docker compose config` shows no secret
   in the worker; `make demo` and `make chaos` pass.
-- [ ] `[local-stack]` the Docker control plane gets only its own settings instead of
+- [x] `[local-stack]` the Docker control plane gets only its own settings instead of
   `env_file: .env` (today it also holds `GITHUB_TOKEN`, the model key and the gateway's OAuth
   secrets); list them from `control-plane/`'s configuration, then filter like `worker-env.sh`.
   Check: no other service's secret value in the container; `make demo` passes.
@@ -414,6 +414,20 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · local-stack** — The Docker control plane no longer gets all of `.env`.
+  `local-stack/worker-env.sh` became `service-env.sh` (`make service-env`, replacing
+  `make worker-env`, still a prerequisite of every compose target): one allowed-names list per
+  service, writing `.worker.env` (unchanged) and `.control-plane.env` (the `${...}` names in
+  `control-plane/src/main/resources/application.yml` plus AWS region and dummy keys; git- and
+  docker-ignored, mode 600). Compose: `env_file: [.control-plane.env, .run-token-*.env]`.
+  Checked: the running control plane holds none of `GITHUB_TOKEN`, the model key, the gateway's
+  OAuth secrets or `GITHUB_APP_*` (compared by value, not printed) and all of its own (tenant key,
+  webhook secret, `SLACK_*`, run-token keys); `make demo` and `make chaos` pass. No service gets
+  `env_file: .env` any more. Next: `[specs]` M4 task 11 (needs a new tunnel for the Slack Request
+  URL). Gotchas: a setting the control plane starts reading must be added to `CONTROL_PLANE` in
+  `service-env.sh`, or the Docker control plane silently uses the `application.yml` default (the
+  host run still reads all of `.env`).
 
 - **2026-11-18 · local-stack** — The Docker worker no longer gets all of `.env`:
   `local-stack/worker-env.sh` (run by `make worker-env`, a prerequisite of every compose target)

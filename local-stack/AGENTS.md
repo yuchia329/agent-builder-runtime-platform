@@ -17,7 +17,7 @@ Run from the repo root. Docker must be running.
 | Create the local run-token key pair (once; `make up` does it) | `make keys` (delete `.run-token-*.env` for a new pair) |
 | Crash-safety demo: kill the worker mid-run, check the run resumes and adds its label once | `make chaos` (about 1 min) |
 | Owner login (acts_as owner) in Docker | the `GITHUB_OAUTH_*` and `OAUTH_STATE_SECRET` lines in `.env` (`.env.example`), then `make up`; the gateway logs `User login: ...`. Logins live in the container's memory: `make up` (rebuild) or `make down` means logging in again |
-| Refresh the worker's settings from `.env` (every target does it) | `make worker-env` (writes `.worker.env`) |
+| Refresh each service's settings from `.env` (every target does it) | `make service-env` (writes `.worker.env`, `.control-plane.env`) |
 | Start only DynamoDB Local + ElasticMQ (to run a service on the host) | `make stack` |
 | List tables and queues | `make status` |
 | Follow logs | `make logs` |
@@ -55,14 +55,16 @@ cd control-plane && set -a && . ../.env && set +a && ./gradlew bootRun
   open 20 s queue poll can swallow a message, which then stays hidden for its visibility timeout.
 - Fake services use the standard library only and a pinned image (`python:3.12.8-slim`).
 - `.env` is git-ignored. Containers get only what they need: the tool gateway gets named
-  settings (never `env_file: .env`); the worker gets `.worker.env`, which `worker-env.sh` writes
-  on every make target with only the `.env` lines the worker reads (`MODEL_*`, the dummy AWS
-  keys and region, `STATE_*`, `QUEUE_BACKEND`, `WORKER_CONCURRENCY`, `LOG_LEVEL`,
-  `RUN_VISIBILITY_SECONDS`; git- and docker-ignored, mode 600). A new worker setting goes in its
-  `ALLOWED` list. The Docker worker always uses `TOOLS_PROVIDER=mcp` with `GITHUB_TOKEN=""` (only
-  the gateway holds credentials, ADR 0006). After editing `.env`, run a make target (or
-  `make worker-env`) before a bare `docker compose up`. The control plane still gets all of
-  `.env` (roadmap task).
+  settings (never `env_file: .env`); the worker and the control plane get `.worker.env` and
+  `.control-plane.env`, which `service-env.sh` writes on every make target with only the `.env`
+  lines each reads (git- and docker-ignored, mode 600). Worker: `MODEL_*`, the dummy AWS keys and
+  region, `STATE_*`, `QUEUE_BACKEND`, `WORKER_CONCURRENCY`, `LOG_LEVEL`, `RUN_VISIBILITY_SECONDS`.
+  Control plane: the `${...}` names in its `application.yml` (store, queue, tenant, webhook secret,
+  `SLACK_*`, sweep and approval timings) plus the AWS region and dummy keys. A new setting a
+  service reads goes in its list in `service-env.sh`, or the container never sees it. The Docker
+  worker always uses `TOOLS_PROVIDER=mcp` with `GITHUB_TOKEN=""` (only the gateway holds
+  credentials, ADR 0006). After editing `.env`, run a make target (or `make service-env`) before a
+  bare `docker compose up`.
 - Run-token keys live in `.run-token-private.env` (control plane only) and
   `.run-token-public.env` (control plane and gateway) at the repo root, written by
   `run-token-keys.sh`; git- and docker-ignored, and never under `local-stack/`, which is mounted

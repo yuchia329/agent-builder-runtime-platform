@@ -5,6 +5,8 @@ notes/
 .run-token-*.env
 .worker.env
 .worker.env.tmp
+.control-plane.env
+.control-plane.env.tmp
 .git/
 **/.venv/
 **/build/

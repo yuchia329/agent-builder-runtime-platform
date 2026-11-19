@@ -89,6 +89,6 @@ Filled in as each component is scaffolded.
 | contracts     | —     | `cd contracts && uv run pytest` | — |
 | control-plane | `cd control-plane && ./gradlew bootJar` | `cd control-plane && ./gradlew test` (needs Docker) | `cd control-plane && ./gradlew bootRun` |
 | worker        | `cd worker && uv sync` | `cd worker && uv run pytest` (needs Docker; `-m "not docker"` without) | `cd worker && set -a && . ../.env && set +a && uv run worker` |
-| tool-gateway  | TBD   | TBD  | TBD         |
+| tool-gateway  | `cd tool-gateway && uv sync` | `cd tool-gateway && uv run pytest` | `cd tool-gateway && RUN_TOKEN_PUBLIC_KEY=... CONNECTORS=fake uv run gateway` (port 8090) |
 | specs         | — | validate: see `specs/AGENTS.md` | real run: `specs/README.md` |
 | local-stack   | `make up` (builds both images) | `make up && make demo`; crash safety: `make chaos` | `make up` / `make stack` / `make down` (repo root; see `local-stack/AGENTS.md`) |

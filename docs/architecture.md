@@ -393,6 +393,14 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
 - Runs on Lambda behind the shared API Gateway. `/mcp` requires IAM authorization (SigV4) and a
   valid run token. MCP uses stateless Streamable HTTP with JSON responses, so nothing depends on a
   warm instance. OAuth callback routes are public.
+- Every `/mcp` request (`initialize` and `tools/list` too) needs a valid run token: ES256, `kid`
+  equal to the configured public key's thumbprint, issuer, audience, expiry and issue time within
+  30 s, claims valid against the contract. Otherwise HTTP 401 with a JSON-RPC error and no detail.
+  `tools/list` shows the tools in both the token and the loaded connectors; `tools/call` refuses
+  others and calls without the `agentplatform/` `_meta` keys (JSON-RPC errors), checks arguments
+  against the tool's schema (a tool error the model can read), and returns the tool's JSON in
+  `structuredContent` and as text. A `require_approval` tool is refused until the second approval
+  check (M4) exists. `GET /health` needs no token.
 
 ## Security
 
@@ -451,6 +459,7 @@ definition environment, with secrets from Secrets Manager.
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL` |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`, `KMS_KEY_ID`                 |
+| Gateway             | gateway                                | `CONNECTORS` (comma list: `fake`, `github` from M4), `GATEWAY_HOST` (default 127.0.0.1), `GATEWAY_PORT` (default 8090), `CONTRACTS_DIR` (default `../contracts`) |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY` (secret, control plane), `RUN_TOKEN_PUBLIC_KEY` (control plane checks the pair and derives `kid`; gateway verifies); P-256 PEM or one-line base64 body; both unset = no tokens |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
@@ -548,15 +557,16 @@ worker/                         Python 3.12, uv, own agent loop (see worker/AGEN
                                 config.py, wiring.py
   tests/                        contract/, unit/, integration/
 
-tool-gateway/                   Python, FastAPI + MCP
+tool-gateway/                   Python, MCP SDK (Starlette) + uvicorn (see tool-gateway/AGENTS.md)
   src/gateway/
-    config.py  app.py  lambda_handler.py
+    config.py  contracts.py  app.py  __main__.py  (lambda_handler.py in M6)
     auth/       run_token
-    tools/      openapi_to_mcp, registry, executor
-    oauth/      routes, providers
+    tools/      registry, access_log (openapi_to_mcp, executor: M4)
+    oauth/      routes, providers (M4)
     ports/      token_store
-    adapters/   token_store_secrets_manager, token_store_memory
-  connectors/   github/ slack/ notion/ gcal/   (openapi.yaml + allowlist.yaml each)
+    adapters/   token_store_memory (token_store_ssm in M6)
+    connectors/ fake (in code, a test double)
+  connectors/   github/ (M4), later slack/ notion/ gcal/   (openapi.yaml + allowlist.yaml each)
   tests/
 
 specs/          issue-triage.yaml, meeting-prep.yaml

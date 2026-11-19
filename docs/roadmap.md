@@ -284,7 +284,7 @@ Work in this order:
   `GET /internal/runs/{id}` (`RUN_TOKEN_PRIVATE_KEY`). Tokens are never logged. Check:
   integration test verifies the token with the public key and validates its claims against the
   contract.
-- [ ] `[tool-gateway]` scaffold: uv project, FastAPI plus the MCP Python SDK, stateless
+- [x] `[tool-gateway]` scaffold: uv project, FastAPI plus the MCP Python SDK, stateless
   Streamable HTTP with JSON responses at `/mcp`; run token checked on every request (signature,
   audience, expiry); `tools/list` shows only the token's tools, `tools/call` refuses others;
   access log; `TokenStore` port with an in-memory adapter and contract suite; a fake connector.
@@ -389,15 +389,33 @@ service has followed.
   `contracts/run-token.schema.json`, `contracts/connector-allowlist.schema.json`,
   `contracts/mcp-tool-call.schema.json` and `run_token` in `contracts/internal-api.openapi.yaml`.
   Must follow: `tool-gateway`
-  (verify the token, load allowlists, read `_meta`), `worker` (`tools_mcp.py`: send the token
+  (load allowlists, M4 task 4; token and `_meta` done), `worker` (`tools_mcp.py`: send the token
   and `_meta`, read annotations). Tool arguments become GitHub's own parameter names (`owner`,
   `repo`, `q`, `labels`, `state_reason`; hook extra `duplicate_of`) when the worker switches to
-  the gateway; specs keep their tool names. `control-plane` done.
+  the gateway; specs keep their tool names. `control-plane` done. Results: the tool's JSON in
+  `structuredContent` (also as text in `content[0]`), added to `mcp-tool-call.schema.json`'s
+  description; the worker reads `structuredContent`.
 
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · tool-gateway** — M4 task 3: `tool-gateway/` scaffold. MCP SDK 2.3 low-level
+  `Server` (handlers as `on_*` constructor arguments), Streamable HTTP stateless with JSON
+  responses at `/mcp` behind `RunTokenAuth` (ASGI wrapper: token checked on every request, claims
+  in the scope's `state`, 401 with a JSON-RPC error otherwise), `GET /health`. `tools/list` and
+  `tools/call` limited to the token's tools; params checked against `mcp-tool-call.schema.json`,
+  arguments against the tool's schema (SDK 2.x validates nothing); `require_approval` tools
+  refused until task 7. Access log `gateway.access` (JSON per call, argument hash only).
+  `TokenStore` port, memory adapter and contract suite; fake connector mirroring the worker's
+  fakes. Starlette, not FastAPI (the SDK builds the app). Result convention (`structuredContent`)
+  added to the MCP contract's description. 43 tests pass, lint clean; `uv run gateway` smoke
+  checked; the Python `kid` thumbprint equals Nimbus's for the same key. Next: `[tool-gateway]`
+  OpenAPI-to-MCP generator and the GitHub connector (M4 task 4). Gotchas: SDK 2.x renamed nearly
+  everything (snake_case fields, `httpx2` client, `MCPError`); unexpected handler exceptions
+  become a sanitized -32603, so model-readable failures must be `isError` results. macOS has no
+  `timeout` command; start the server in the background and kill it.
 
 - **2026-11-18 · control-plane** — M4 task 2: versions record `owner` and runs `started_by`
   (`tenant/Principals`: `api:<tenant>`, `webhook:github`; DynamoDB rows from before read as

@@ -291,10 +291,10 @@ def test_lost_lease_stops_the_run_before_its_next_step_and_keeps_the_message():
         def __init__(self, inner, state):
             self._inner, self._state, self.calls = inner, state, []
 
-        def describe(self, names):
+        def describe(self, names, context=None):
             return self._inner.describe(names)
 
-        def call(self, name, arguments):
+        def call(self, name, arguments, context=None):
             self.calls.append(name)
             self._state.release_lease(RUN_ID, self._state.holder)
             self._state.take_lease(RUN_ID, "thief/1", 30)

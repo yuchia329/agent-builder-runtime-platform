@@ -57,6 +57,7 @@ from worker.core.types import (
     RunUpdate,
     StopReason,
     ToolCall,
+    ToolContext,
     ToolResult,
     ToolSpec,
 )
@@ -205,7 +206,9 @@ class _AgentLoop:
         self._budget = budget
         self._price = info.price
         self._context_limit = int(info.context_tokens * TRIM_AT)
-        self._tools: list[ToolSpec] = deps.tools.describe(run.spec.tools)
+        self._tools: list[ToolSpec] = deps.tools.describe(
+            run.spec.tools, ToolContext(run.run_id, run.run_token)
+        )
         self._validators = {t.name: Draft202012Validator(t.input_schema) for t in self._tools}
         self._specs = {t.name: t for t in self._tools}
         # Full history (what checkpoints hold); a trimmed copy is what the model sees.
@@ -331,8 +334,15 @@ class _AgentLoop:
         if isinstance(key, ToolResult):
             self._budget.record_step()
             return key
+        step = self._budget.steps + 1
+        context = ToolContext(
+            self._run.run_id,
+            self._run.run_token,
+            step,
+            tool_call_key(self._run.run_id, step, call),
+        )
         try:
-            content = self._deps.tools.call(call.name, call.arguments)
+            content = self._deps.tools.call(call.name, call.arguments, context)
             result = ToolResult(call.id, content)
         except ToolError as e:
             result = ToolResult(call.id, f"Tool failed: {e}", is_error=True)

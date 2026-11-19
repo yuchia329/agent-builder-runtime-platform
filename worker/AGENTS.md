@@ -12,10 +12,11 @@ Run from `worker/`.
 | --- | --- |
 | Install | `uv sync` |
 | Test | `uv run pytest` (Docker must run: SQS and DynamoDB tests start ElasticMQ and DynamoDB Local with Testcontainers) |
-| Test, no Docker | `uv run pytest -m "not docker"` |
+| Test, no Docker | `uv run pytest -m "not docker"` (MCP tests start the real gateway: needs `cd ../tool-gateway && uv sync` once) |
 | Tests hang at 0% CPU | iCloud evicted `.venv` files (repo under `~/Desktop`): `find .venv -flags +dataless \| wc -l`; if not 0, `rm -rf .venv && uv sync` |
 | Run against the local stack | `set -a && . ../.env && set +a && uv run worker` (needs `make stack` and the control plane on the host) |
 | Real GitHub tools locally | In `../.env`: `TOOLS_PROVIDER=local`, `GITHUB_TOKEN` (fine-grained, sandbox repo only, Issues read/write), `GITHUB_REPOS=owner/repo` |
+| Tools through the gateway | In `../.env`: `TOOLS_PROVIDER=mcp`, `TOOL_GATEWAY_URL=http://localhost:8090`; run the gateway (`tool-gateway/AGENTS.md`) and give the control plane `RUN_TOKEN_*` so runs carry a token |
 | Real model locally | In `../.env`: `MODEL_PROVIDERS=minimax` and the `MODEL_MINIMAX_*` lines from `../.env.example` with your key; publish a spec with `model: minimax/MiniMax-M3` |
 | Real Bedrock locally | In `../.env`: add `bedrock` to `MODEL_PROVIDERS` and the `MODEL_BEDROCK_*` lines from `../.env.example` (profile from `~/.aws`, no keys in `.env`); run the worker on the host (the image has no `~/.aws`); spec `model: bedrock/amazon.nova-lite-v1:0` |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
@@ -51,6 +52,10 @@ Run from `worker/`.
   recorded Converse replies (`ResponseMetadata` removed) for the Bedrock adapter.
 - `tests/fake_github_server.py` + `tests/fixtures/github/*.json`: answers like the GitHub REST
   API (routes registered with `on`, `fail_next` for retries) for `tools_local.py`.
+- `adapters/tools_mcp.py` (`GatewayTools`): tools through the gateway over MCP (SDK client).
+- `tests/live_gateway.py`: the real tool gateway as a subprocess (fake connector, minimal env,
+  throwaway P-256 key) and `RunTokens` signing run tokens like the control plane; session
+  fixtures `live_gateway` and `run_tokens` in `conftest.py`.
 - `tests/fake_control_plane_server.py`: local HTTP server for the internal API (state from
   `InMemoryControlPlane`, PATCH bodies checked against `RunUpdate`, SigV4 header required,
   `fail_next` for retry tests).
@@ -116,5 +121,9 @@ Run from `worker/`.
 - Recorded GitHub fixtures are cleaned: owner/repo become `octocat/Hello-World`; users, avatars,
   node ids and bodies are removed. Check with `grep -ri <your-login> tests/fixtures` before
   committing a new recording.
+- Tool adapters get a `ToolContext` on every `describe` / `call`; only `tools_mcp.py` uses it.
+  Never log the run token: `RunRecord` and `ToolContext` reprs leave it out.
+- `GatewayTools` maps every failure to `ToolError` (the MCP SDK wraps errors in exception
+  groups; unwrap with `_first`) and does not retry: repeats are core's decision (ADR 0013).
 - The fake tools and scripted model are shared test infrastructure (later: chaos and load tests);
   keep them deterministic.

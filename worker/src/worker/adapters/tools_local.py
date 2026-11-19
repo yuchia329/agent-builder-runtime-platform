@@ -31,7 +31,7 @@ from urllib.parse import quote
 import httpx
 
 from worker.core.errors import ToolError
-from worker.core.types import ToolSpec
+from worker.core.types import ToolContext, ToolSpec
 
 log = logging.getLogger(__name__)
 
@@ -128,13 +128,13 @@ class GitHubTools:
             },
         )
 
-    def describe(self, names: Sequence[str]) -> list[ToolSpec]:
+    def describe(self, names: Sequence[str], context: ToolContext | None = None) -> list[ToolSpec]:
         missing = [n for n in names if n not in SPECS]
         if missing:
             raise ToolError(f"Unknown tools: {', '.join(missing)}")
         return [SPECS[n] for n in names]
 
-    def call(self, name: str, arguments: dict[str, Any]) -> Any:
+    def call(self, name: str, arguments: dict[str, Any], context: ToolContext | None = None) -> Any:
         if name == "github.search_issues":
             return self._search_issues(self._repo(arguments["repo"]), arguments["query"])
         if name == "github.add_label":

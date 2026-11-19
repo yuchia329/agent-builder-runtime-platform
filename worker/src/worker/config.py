@@ -16,7 +16,7 @@ from typing import Any
 QUEUE_BACKENDS = ("sqs", "memory")
 STATE_BACKENDS = ("dynamodb", "memory")
 MODEL_PROTOCOLS = ("openai", "bedrock")
-TOOLS_PROVIDERS = ("fake", "local")  # mcp in M4
+TOOLS_PROVIDERS = ("fake", "local", "mcp")
 PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
 BUILT_IN_PROVIDERS = ("stub",)
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -53,6 +53,7 @@ class Config:
     github_token: str | None = field(repr=False)  # secret: never logged
     github_repos: tuple[str, ...]
     github_api_url: str
+    tool_gateway_url: str | None
     aws_region: str
     concurrency: int
     visibility_seconds: int
@@ -88,6 +89,7 @@ class Config:
                 r.strip() for r in env.get("GITHUB_REPOS", "").split(",") if r.strip()
             ),
             github_api_url=env.get("GITHUB_API_URL", "https://api.github.com"),
+            tool_gateway_url=env.get("TOOL_GATEWAY_URL", "").strip() or None,
             aws_region=env.get("AWS_REGION", "us-east-1"),
             concurrency=positive_int("WORKER_CONCURRENCY", 4),
             visibility_seconds=positive_int("RUN_VISIBILITY_SECONDS", 60),
@@ -101,6 +103,8 @@ class Config:
             bad = [r for r in config.github_repos if not REPO.match(r)]
             if bad:
                 errors.append(f"GITHUB_REPOS: expected owner/name, got {', '.join(bad)}")
+        if config.tools_provider == "mcp" and not config.tool_gateway_url:
+            errors.append("TOOL_GATEWAY_URL is required when TOOLS_PROVIDER=mcp")
         if "MODEL_PROVIDER" in env:
             errors.append("MODEL_PROVIDER was replaced by MODEL_PROVIDERS (ADR 0010); remove it")
         if config.queue_backend == "sqs" and not config.run_queue_url:

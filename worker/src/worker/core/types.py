@@ -101,6 +101,10 @@ class RunRecord:
     spec: AgentSpec
     input: dict[str, Any]
     approval: ApprovalDecision | None = None
+    run_token: str | None = None  # for the tool gateway (ADR 0003); never logged
+
+    def __repr__(self) -> str:  # keep the run token out of logs and tracebacks
+        return f"RunRecord(run_id={self.run_id!r}, status={self.status}, steps={self.steps})"
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RunRecord:
@@ -116,6 +120,7 @@ class RunRecord:
             spec=AgentSpec.from_dict(d["spec"]),
             input=d["input"],
             approval=None if approval is None else ApprovalDecision.from_dict(approval),
+            run_token=d.get("run_token"),
         )
 
 
@@ -163,6 +168,21 @@ class RunUpdate:
 
 
 # --- Model conversation ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """Which run a tool request belongs to. The gateway adapter sends the run token with every
+    request and, on a call, the step and idempotency key (contracts/mcp-tool-call.schema.json);
+    other adapters ignore it. ``step`` and ``idempotency_key`` are None when describing tools."""
+
+    run_id: str
+    run_token: str | None
+    step: int | None = None
+    idempotency_key: str | None = None
+
+    def __repr__(self) -> str:  # never show the token
+        return f"ToolContext(run_id={self.run_id!r}, step={self.step})"
 
 
 @dataclass(frozen=True)

@@ -123,7 +123,7 @@ def test_failing_tool_is_reported_to_the_model(clock):
     tools = issue_triage_tools()
     original = tools.call
 
-    def flaky(name, arguments):
+    def flaky(name, arguments, context=None):
         if name == "github.search_issues":
             raise ToolError("GitHub returned 502")
         return original(name, arguments)
@@ -161,10 +161,10 @@ def test_time_budget_fails_the_run(clock):
         def __init__(self):
             self.inner = issue_triage_tools()
 
-        def describe(self, names):
+        def describe(self, names, context=None):
             return self.inner.describe(names)
 
-        def call(self, name, arguments):
+        def call(self, name, arguments, context=None):
             clock.advance(400)  # longer than max_seconds (300)
             return self.inner.call(name, arguments)
 
@@ -310,10 +310,10 @@ class BigResultTools:
     def __init__(self):
         self.inner = issue_triage_tools()
 
-    def describe(self, names):
+    def describe(self, names, context=None):
         return self.inner.describe(names)
 
-    def call(self, name, arguments):
+    def call(self, name, arguments, context=None):
         return {"result": self.inner.call(name, arguments), "padding": "p" * 3000}
 
 
@@ -365,3 +365,40 @@ def test_input_too_large_for_context_fails_the_run(clock):
     assert "does not fit the model's context window" in world.stored["failure"]["message"]
     assert world.model.calls == []
     world.assert_updates_match_contract()
+
+
+def test_tools_get_the_run_token_step_and_idempotency_key(clock):
+    from worker.core.handle_run import tool_call_key
+    from worker.core.types import ToolCall
+
+    class RecordingTools:
+        def __init__(self):
+            self.inner, self.contexts = issue_triage_tools(), []
+
+        def describe(self, names, context):
+            self.contexts.append(("describe", context))
+            return self.inner.describe(names)
+
+        def call(self, name, arguments, context):
+            self.contexts.append((name, context))
+            return self.inner.call(name, arguments)
+
+    tools = RecordingTools()
+    world = World(
+        clock,
+        [tool_turn(SEARCH), final_turn("done")],
+        run_changes={"run_token": "eyJ.run.token"},
+        tools=tools,
+    )
+
+    assert world.run() is RunStatus.SUCCEEDED
+
+    (_, described), (_, called) = tools.contexts
+    assert (described.run_id, described.run_token, described.step) == (
+        RUN_ID,
+        "eyJ.run.token",
+        None,
+    )
+    assert (called.run_token, called.step) == ("eyJ.run.token", 2)  # model turn 1, this call 2
+    assert called.idempotency_key == tool_call_key(RUN_ID, 2, ToolCall("x", *SEARCH))
+    assert "eyJ" not in repr(called) and "eyJ" not in repr(world.control_plane.get_run(RUN_ID))

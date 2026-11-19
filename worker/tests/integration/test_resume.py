@@ -138,10 +138,10 @@ class KillingTools:
         self.inner, self.calls = issue_triage_tools(), []
         self._name, self._when, self._done = name, when, False
 
-    def describe(self, names):
+    def describe(self, names, context=None):
         return self.inner.describe(names)
 
-    def call(self, name, arguments):
+    def call(self, name, arguments, context=None):
         dying = name == self._name and not self._done
         self._done = self._done or dying
         if dying and self._when == "before":
@@ -221,10 +221,10 @@ def test_stored_tool_error_is_reused_not_retried(clock):
         def __init__(self):
             self.inner, self.calls = issue_triage_tools(), []
 
-        def describe(self, names):
+        def describe(self, names, context=None):
             return self.inner.describe(names)
 
-        def call(self, name, arguments):
+        def call(self, name, arguments, context=None):
             self.calls.append(name)
             if name == "github.search_issues":
                 raise ToolError("GitHub returned 502")
@@ -308,10 +308,10 @@ def test_time_budget_counts_working_time_across_attempts_not_the_gap(clock):
         def __init__(self):
             self.inner, self.calls = issue_triage_tools(), []
 
-        def describe(self, names):
+        def describe(self, names, context=None):
             return self.inner.describe(names)
 
-        def call(self, name, arguments):
+        def call(self, name, arguments, context=None):
             self.calls.append(name)
             clock.advance(100)  # each tool call takes 100 working seconds
             return self.inner.call(name, arguments)
@@ -336,10 +336,10 @@ def test_checkpoint_after_losing_the_lease_stops_without_reporting(clock):
         def __init__(self):
             self.inner, self.calls = issue_triage_tools(), []
 
-        def describe(self, names):
+        def describe(self, names, context=None):
             return self.inner.describe(names)
 
-        def call(self, name, arguments):
+        def call(self, name, arguments, context=None):
             self.calls.append(name)
             clock.advance(LEASE + 1)
             platform.state.take_lease(RUN_ID, "worker-other/1", LEASE)

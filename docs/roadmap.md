@@ -309,7 +309,7 @@ Work in this order:
   `approval` (from `GET /internal/runs/{id}`) is approved for the same step, tool and canonical
   arguments; otherwise a tool error. Check: unit tests with a fake control plane (no approval,
   rejected, other step, other arguments, match).
-- [ ] `[worker]` `tools_mcp.py`: MCP client with the run token, `_meta` step and idempotency key,
+- [x] `[worker]` `tools_mcp.py`: MCP client with the run token, `_meta` step and idempotency key,
   annotations to `ToolSpec` flags, tool errors to `ToolError`; `TOOLS_PROVIDER=mcp`,
   `TOOL_GATEWAY_URL`. Check: the `ToolClient` contract suite passes against the gateway with the
   fake connector.
@@ -384,15 +384,15 @@ service has followed.
   check `ttl` themselves).
 
 - **Internal API and gateway auth is IAM (SigV4) through API Gateway** (ADR 0007). Declared in
-  `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`tools_mcp.py` in M4 signs
-  gateway calls; `control_plane_http.py` done), `tool-gateway` (signs calls to the control plane).
+  `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`control_plane_http.py` done;
+  `tools_mcp.py` takes an `auth` hook, signer in M6), `tool-gateway` (`HttpControlPlane` takes a
+  `signer`, signer in M6). Nothing checks signatures locally.
 
 - **Run token, connector allowlist, MCP call conventions** (M4). Declared in
   `contracts/run-token.schema.json`, `contracts/connector-allowlist.schema.json`,
   `contracts/mcp-tool-call.schema.json` and `run_token` in `contracts/internal-api.openapi.yaml`.
-  Must follow: `tool-gateway`
-  done, `worker` (`tools_mcp.py`: send the token
-  and `_meta`, read annotations). Tool arguments become GitHub's own parameter names (`owner`,
+  `tool-gateway` and `worker` done (`tools_mcp.py` sends the token and `_meta`, reads
+  annotations and `structuredContent`). Must follow: `specs` (M4 task 11). Tool arguments become GitHub's own parameter names (`owner`,
   `repo`, `q`, `labels`, `state_reason`; hook extra `duplicate_of`) when the worker switches to
   the gateway; specs keep their tool names. `control-plane` done. Results: the tool's JSON in
   `structuredContent` (also as text in `content[0]`), added to `mcp-tool-call.schema.json`'s
@@ -403,6 +403,21 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · worker** — M4 task 8: `adapters/tools_mcp.py` (`GatewayTools`, official MCP SDK
+  client, one short session per request in its own event loop): run token as bearer, `_meta`
+  step and idempotency key, annotations to `ToolSpec` flags, `structuredContent` (`{"result"}`
+  unwrapped), `isError` / JSON-RPC errors / 401 / transport to `ToolError` without the token; no
+  retries (core decides repeats, ADR 0013). Port change: `ToolContext(run_id, run_token, step,
+  idempotency_key)` passed to `describe` and `call`; `RunRecord.run_token` (hidden from repr).
+  `TOOLS_PROVIDER=mcp` + `TOOL_GATEWAY_URL`. Tests start the real gateway
+  (`tests/live_gateway.py`, `uv run --project ../tool-gateway gateway`, fake connector,
+  throwaway key): the `ToolClient` contract suite, 15 adapter tests, two `handle_run` runs. 312
+  worker tests pass. Next: `[local-stack]` gateway in compose (M4 task 9). Gotchas: the SDK wraps
+  errors in exception groups (`_first` unwraps); through `mcp` the GitHub tools take GitHub's
+  argument names while `specs/issue-triage.yaml` still names the M1 ones (task 11); the MCP SDK
+  adds starlette and uvicorn to the worker image; worker tests now need the gateway's `.venv`
+  (`cd tool-gateway && uv sync`).
 
 - **2026-11-18 · tool-gateway** — M4 task 7: second approval check. `approvals.py`
   (`ApprovalCheck`): a `require_approval` tool runs only if `GET /internal/runs/{sub}` shows the

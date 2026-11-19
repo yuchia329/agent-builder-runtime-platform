@@ -30,3 +30,19 @@ def fake_control_plane_server():
 
     with FakeControlPlaneServer() as server:
         yield server
+
+
+@pytest.fixture(scope="session")
+def run_tokens():
+    from live_gateway import RunTokens
+
+    return RunTokens()
+
+
+@pytest.fixture(scope="session")
+def live_gateway(run_tokens):
+    """The real tool gateway with the fake connector, once per test session."""
+    from live_gateway import LiveGateway
+
+    with LiveGateway(run_tokens) as gateway:
+        yield gateway

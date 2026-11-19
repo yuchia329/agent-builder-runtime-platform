@@ -194,3 +194,24 @@ def test_wiring_builds_github_tools():
     app = build(Config.from_env({**GITHUB, "QUEUE_BACKEND": "memory"}))
 
     assert isinstance(app.deps.tools, GitHubTools)
+
+
+def test_mcp_tools_need_the_gateway_url_and_no_github_token():
+    with pytest.raises(ConfigError, match="TOOL_GATEWAY_URL is required"):
+        Config.from_env({**LOCAL, "TOOLS_PROVIDER": "mcp"})
+
+    config = Config.from_env(
+        {**LOCAL, "TOOLS_PROVIDER": "mcp", "TOOL_GATEWAY_URL": " http://gateway:8090 "}
+    )
+    assert config.tool_gateway_url == "http://gateway:8090"
+    assert config.github_token is None
+
+
+def test_wiring_builds_gateway_tools():
+    from worker.adapters.tools_mcp import GatewayTools
+    from worker.wiring import build
+
+    env = {"TOOLS_PROVIDER": "mcp", "TOOL_GATEWAY_URL": "http://gateway:8090"}
+    app = build(Config.from_env({**env, "QUEUE_BACKEND": "memory"}))
+
+    assert isinstance(app.deps.tools, GatewayTools)

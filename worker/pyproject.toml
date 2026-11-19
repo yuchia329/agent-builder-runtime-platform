@@ -7,6 +7,7 @@ dependencies = [
     "boto3>=1.44.4",
     "httpx>=0.28.1",
     "jsonschema>=4.23", # tool argument checks in core (a validation library, not a vendor SDK)
+    "mcp>=2.3.0",
 ]
 
 [project.scripts]
@@ -14,6 +15,7 @@ worker = "worker.__main__:main"
 
 [dependency-groups]
 dev = [
+    "pyjwt[crypto]>=2.15.1",
     "pytest>=8.3",
     "pyyaml>=6.0",
     "ruff>=0.15",

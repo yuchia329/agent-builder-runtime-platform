@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from worker.core.errors import ToolError
-from worker.core.types import ToolSpec
+from worker.core.types import ToolContext, ToolSpec
 
 Handler = Callable[[dict[str, Any]], Any]
 
@@ -27,13 +27,13 @@ class FakeTools:
         self._lock = threading.Lock()
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    def describe(self, names: Sequence[str]) -> list[ToolSpec]:
+    def describe(self, names: Sequence[str], context: ToolContext | None = None) -> list[ToolSpec]:
         missing = [n for n in names if n not in self._tools]
         if missing:
             raise ToolError(f"Unknown tools: {', '.join(missing)}")
         return [self._tools[n].spec for n in names]
 
-    def call(self, name: str, arguments: dict[str, Any]) -> Any:
+    def call(self, name: str, arguments: dict[str, Any], context: ToolContext | None = None) -> Any:
         tool = self._tools.get(name)
         if tool is None:
             raise ToolError(f"Unknown tool: {name}")

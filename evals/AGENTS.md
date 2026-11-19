@@ -12,6 +12,10 @@ Run from `evals/`.
 | --- | --- |
 | Install | `uv sync` (and `cd ../tool-gateway && uv sync` once: tests and runs start the real gateway) |
 | Test | `uv run pytest` (no Docker, no model provider: `ScriptedModel`) |
+| Suite (from repo root) | `make eval` (every spec with tasks) or `make eval SPEC=issue-triage`: 3 runs per task, 4 at once, report, comparison with `baselines/<spec>.json`; exit 1 on a regression. About $0.35 and 10 minutes for issue-triage |
+| Save a new baseline | `make eval-baseline SPEC=<name>`, then commit `evals/baselines/<name>.json` (only after reading the report) |
+| Suite with a modified spec | `uv run evals suite <spec> --specs-dir <folder with <spec>.yaml>` (after loading `.env`); tries a prompt change without editing `specs/` |
+| Why did a run fail | the report lists each failed run's checks and tool calls; everything (outputs too) is in `results/<spec>-<time>.json` (git-ignored) |
 | Run tasks on the real model | `set -a && . ../.env && set +a && uv run evals run tasks/issue-triage/<file>.yaml` (needs the `MODEL_*` settings; about $0.005 per issue-triage task) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
@@ -32,7 +36,11 @@ Run from `evals/`.
 - `checks.py`: one function per check kind over an `Outcome`.
 - `simulators/github.py`: the one repository `octocat/Hello-World`; search semantics in its
   docstring.
-- `cli.py`: `evals run`; `model_from_env` builds the worker's model router.
+- `suite.py`: `run_suite` (runs x tasks over `parallel` `Evaluation`s, one per worker thread, so
+  runs never share a simulator), `compare` with a baseline, `report`, baseline and results files.
+- `baselines/<spec>.json`: committed; per task passes out of runs, model, spec hash, cost.
+- `cli.py`: `evals run` (one run per task) and `evals suite`; `model_from_env` builds the worker's
+  model router.
 
 ## Conventions
 
@@ -45,6 +53,10 @@ Run from `evals/`.
   `Outcome.world`.
 - The simulator answers only what the connector sends; anything else is 404 like the real API.
   Response shapes follow the cleaned recordings in `../tool-gateway/tests/fixtures/`.
-- Tests never call a model provider; only `evals run` does, and it spends money.
+- Regression rules (`suite.py` docstring): a task regresses when its pass fraction drops by at least
+  2/3; the suite when the run pass rate drops more than 5 points. Smaller moves are noise
+  (an unchanged spec moved one task from 0/3 to 3/3), so do not tighten them without data.
+- Suite tests use `StubModel` (stateless, safe across threads), not `ScriptedModel`.
+- Tests never call a model provider; only `evals run` and `evals suite` do, and they spend money.
 - Tasks are made up: no real people, repositories or issue text. The repository is always
   `octocat/Hello-World`.

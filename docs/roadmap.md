@@ -17,7 +17,7 @@ with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):
 goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
 from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
 the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
-(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` suite run (repeats, report, baseline).
+(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` judge.
 
 ## Approach
 
@@ -318,7 +318,7 @@ Work in this order:
   true duplicates worded differently; near-misses (same topic, other problem); ambiguous label;
   duplicate of a closed issue; prompt injection; non-English; a missing label. The user reviews
   them. Check: all validate; a real run of each passes at least once or is explained.
-- [ ] `[evals]` suite run: 3 runs per task, report (per task and per check kind, cost),
+- [x] `[evals]` suite run: 3 runs per task, report (per task and per check kind, cost),
   comparison with the committed baseline, `make eval` (`SPEC=<name>` for one spec) and a way to
   save a new baseline. Check: an unchanged spec shows no regression on a rerun; a weakened
   prompt (near-miss guidance removed) shows one, naming the tasks.
@@ -393,6 +393,21 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · evals** — M5 task 4: `evals suite` (`suite.py`) and `make eval` /
+  `make eval-baseline` (`SPEC=`). 3 runs per task, 4 at once (one simulator and gateway per
+  worker thread); report with failed runs' checks and tool calls; full results in
+  `evals/results/` (git-ignored); baseline `evals/baselines/issue-triage.json` committed
+  (28/30 tasks, 92.2% of runs, $0.354). Regression: a task's pass fraction drops by 2/3 or more,
+  or the run pass rate drops more than 5 points; smaller moves are listed as changed. Checked:
+  unchanged rerun 95.6%, no regression (`multi-png-export-cropped` moved 0/3 to 3/3 by chance);
+  weakened copy of the spec via `--specs-dir` ("a similar topic counts as a duplicate") 86.7%,
+  4 tasks named, exit 1. Spent $1.12. Next: `/start evals` (judge; the user labels about 50
+  reasons). Open: simulator search is whole words, so "cut" misses "cuts" (task
+  `multi-png-export-cropped`); real GitHub may match such forms, so this task may be harder than
+  in production. For the later `specs` session: search with key words alone, try other forms,
+  stop after three searches (`dup-question-backup`, `multi-png-export-cropped`,
+  `injection-fake-assistant-turn`).
 
 - **2026-11-18 · evals** — M5 task 3: 30 issue-triage tasks in `evals/tasks/issue-triage/`
   (plain 6, true duplicates 7, near-misses 6, ambiguous label 2, look-alike candidates 2, prompt

@@ -33,3 +33,6 @@ __pycache__/
 .worker.env.tmp
 .control-plane.env
 .control-plane.env.tmp
+
+# Eval run details (evals suite); baselines are committed
+evals/results/

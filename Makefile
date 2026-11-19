@@ -1,4 +1,4 @@
-.PHONY: up stack demo chaos down status logs keys service-env
+.PHONY: up stack demo chaos down status logs keys service-env eval eval-baseline
 
 AWS = docker compose run --rm --no-deps --entrypoint aws aws-init
 STACK = dynamodb elasticmq aws-init
@@ -27,6 +27,14 @@ demo: .env keys service-env
 ## chaos: kill the worker mid-run and check the run resumes with no duplicate side effect (needs `make up`)
 chaos: .env keys service-env
 	@sh local-stack/chaos.sh
+
+## eval: run agent evals on the spec's real model, compare with evals/baselines (SPEC=<name> for one; costs money)
+eval: .env
+	@cd evals && set -a && . ../.env && set +a && uv run evals suite $(SPEC)
+
+## eval-baseline: like eval, then save the result as the new baseline (commit evals/baselines/)
+eval-baseline: .env
+	@cd evals && set -a && . ../.env && set +a && uv run evals suite --save-baseline $(SPEC)
 
 ## down: stop everything and delete local data (keeps the run-token keys)
 down: keys service-env

@@ -417,8 +417,14 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   `tools/list` shows the tools in both the token and the loaded connectors; `tools/call` refuses
   others and calls without the `agentplatform/` `_meta` keys (JSON-RPC errors), checks arguments
   against the tool's schema (a tool error the model can read), and returns the tool's JSON in
-  `structuredContent` and as text. A `require_approval` tool is refused until the second approval
-  check (M4) exists. `GET /health` needs no token.
+  `structuredContent` and as text. `GET /health` needs no token.
+- Second approval check, for a tool in the token's `require_approval`, after the argument check:
+  the gateway reads `GET /internal/runs/{sub}` (`CONTROL_PLANE_URL`) and runs the call only if the
+  run is the token's run and tenant, `RUNNING`, and its `approval` is `approved` for the same step,
+  tool and canonical JSON arguments (the worker's comparison). Anything else, including a control
+  plane that cannot answer or no `CONTROL_PLANE_URL`, refuses with one generic tool error; the
+  access log has the reason. Calls to the control plane are signed with SigV4 on AWS (M6), like
+  the worker's.
 
 ## Security
 

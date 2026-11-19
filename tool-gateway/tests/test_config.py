@@ -50,3 +50,20 @@ def test_github_connector_without_repos_fails_startup():
 
     with pytest.raises(ValueError, match="GITHUB_REPOS is not set"):
         build(Settings.from_env(env))
+
+
+def test_control_plane_url_is_optional():
+    base = {"RUN_TOKEN_PUBLIC_KEY": "k"}
+
+    assert Settings.from_env(base).control_plane_url == ""
+    url = Settings.from_env({**base, "CONTROL_PLANE_URL": " http://cp:8080 "}).control_plane_url
+    assert url == "http://cp:8080"
+
+
+def test_startup_without_control_plane_url_warns_that_approval_tools_are_refused(caplog):
+    settings = Settings.from_env({"RUN_TOKEN_PUBLIC_KEY": Keys().public_pem, "CONNECTORS": "fake"})
+
+    with caplog.at_level("WARNING", logger="gateway"):
+        build(settings)
+
+    assert "tools that need approval will be refused" in caplog.text

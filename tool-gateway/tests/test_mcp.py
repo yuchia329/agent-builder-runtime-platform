@@ -91,7 +91,7 @@ async def test_bad_arguments_are_a_tool_error_the_model_can_read(gateway, keys, 
     assert fake.calls == []
 
 
-async def test_approval_tools_fail_closed_until_the_approval_check_exists(gateway, keys, fake):
+async def test_approval_tools_are_refused_without_a_control_plane(gateway, keys, fake):
     approval = claims(tools=["github.close_issue"], require_approval=["github.close_issue"])
     async with mcp_client(gateway, token(keys, approval)) as client:
         result = await client.call_tool(

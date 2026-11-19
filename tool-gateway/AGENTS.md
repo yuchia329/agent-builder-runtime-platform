@@ -14,7 +14,7 @@ Run from `tool-gateway/`.
 | Install | `uv sync` |
 | Test | `uv run pytest` (no Docker) |
 | Run locally | `RUN_TOKEN_PUBLIC_KEY=<public half of the control plane's pair> CONNECTORS=fake uv run gateway` (port 8090; `GATEWAY_PORT` to change) |
-| Run with GitHub | `set -a && . ../.env && set +a && CONNECTORS=github uv run gateway` (needs `RUN_TOKEN_PUBLIC_KEY`, `GITHUB_REPOS`, `TENANT_ID` and the `GITHUB_APP_*` settings; startup logs "Credential from the environment") |
+| Run with GitHub | `set -a && . ../.env && set +a && CONNECTORS=github uv run gateway` (needs `RUN_TOKEN_PUBLIC_KEY`, `GITHUB_REPOS`, `TENANT_ID` and the `GITHUB_APP_*` settings; startup logs "Credential from the environment"; `CONTROL_PLANE_URL` from `.env` enables approval tools) |
 | Stop a background gateway | `kill $(lsof -ti :8090)` (not `pkill -f gateway`: it matches the shell too) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
@@ -34,7 +34,8 @@ Run from `tool-gateway/`.
   functions), `tools/executor.py` (`ConnectorClient`: one per generated connector, `HookCall`),
   `credentials.py` (which stored credential a call uses; returns an `Auth` the executor renews
   once on a 401), `github_app.py` (app JWT, installation token exchange and cache), `seed.py`
-  (local credentials from the environment into the memory `TokenStore`).
+  (local credentials from the environment into the memory `TokenStore`), `approvals.py` (second
+  approval check) with the `ControlPlane` port (`adapters/control_plane_http.py`, `_memory.py`).
 - `../connectors/<name>/`: `openapi.yaml` (cut, never edited by hand), `allowlist.yaml`, optional
   `hooks.py` with a `HOOKS` dict (loaded by `openapi_to_mcp.load_hooks`).
 - `ports/` (`Protocol` only) and `adapters/`; `src/gateway/connectors/fake.py` (in code, a test
@@ -43,6 +44,8 @@ Run from `tool-gateway/`.
   worker's fixtures (see its README); routes with `on`, `fail_next` for retries. It answers the
   App token exchange itself (`token_requests`, `fail_token_next`, `app_token`), so `requests` holds
   only API calls; `app_store()` / `app_credential()` give the matching App credential.
+- `tests/fake_control_plane.py`: answers `GET /internal/runs/{id}` from runs put with `put`;
+  `fail_next`, `garbage`.
 - `contracts.py` loads every `../contracts/*.schema.json` together (`CONTRACTS_DIR` to move).
 - `tests/gateway_testing.py`: keys, signed tokens, `LiveGateway` (the real app on a free port in a
   thread), `mcp_client` (the SDK's client with a bearer header). `tests/contract/`: one suite per
@@ -57,8 +60,9 @@ Run from `tool-gateway/`.
   logged and answered "<tool> failed unexpectedly". No secret in any message.
 - SDK 2.x does not validate tool arguments: `app.py` checks them against the tool's
   `input_schema`, and the call params against the contract, before a tool runs.
-- Fail closed: a tool in the token's `require_approval` is refused until the approval check
-  (M4 task 7) is in place.
+- Fail closed: a tool in the token's `require_approval` runs only after `approvals.ApprovalCheck`
+  finds an exact approved match in the run (`CONTROL_PLANE_URL`); every other outcome, including
+  errors, refuses. Keep `canonical()` equal to the worker's `_canonical` in `core/handle_run.py`.
 - DNS-rebinding protection is off on purpose (container host names; the token protects `/mcp`).
 - Tests talk to a real server through the SDK client (`LiveGateway`, `mcp_client`); async tests
   use `pytest.mark.anyio`.

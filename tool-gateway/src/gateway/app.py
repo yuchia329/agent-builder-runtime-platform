@@ -21,6 +21,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as McpTool
 
+from gateway.approvals import ApprovalCheck
 from gateway.auth.run_token import RunClaims, RunTokenVerifier, TokenRejected
 from gateway.contracts import Contracts
 from gateway.tools import access_log
@@ -35,7 +36,7 @@ INVALID_PARAMS = -32602
 UNAUTHORIZED = -32001
 
 
-def build_server(registry: Registry, contracts: Contracts) -> Server:
+def build_server(registry: Registry, contracts: Contracts, approvals: ApprovalCheck) -> Server:
     call_schema = contracts.validator("mcp-tool-call")
 
     async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None):
@@ -82,16 +83,23 @@ def build_server(registry: Registry, contracts: Contracts) -> Server:
         if errors:
             done("refused", "call params do not follow the contract")
             raise MCPError(INVALID_PARAMS, "Invalid tools/call params: " + "; ".join(errors[:3]))
-        if params.name in claims.require_approval:
-            # Fail closed until the second approval check exists (M4 task 7).
-            done("refused", "approval check not available")
-            return _error("This tool needs an approval check the gateway cannot do yet")
         argument_errors = sorted(
             Draft202012Validator(tool.input_schema).iter_errors(arguments), key=lambda e: e.path
         )
         if argument_errors:
             done("error", "invalid arguments")
             return _error("Invalid arguments: " + "; ".join(e.message for e in argument_errors[:5]))
+        if params.name in claims.require_approval:
+            # Second approval check (ADR 0003): blocking HTTP, so off the event loop.
+            refusal = await anyio.to_thread.run_sync(
+                approvals.check, claims, params.name, step, arguments
+            )
+            if refusal is not None:
+                done("refused", refusal)
+                return _error(
+                    f"{params.name} needs a person's approval for this exact call; "
+                    "no matching approval was found"
+                )
         try:
             # Tools make blocking HTTP calls; keep them off the event loop.
             result = await anyio.to_thread.run_sync(
@@ -210,8 +218,14 @@ async def _respond(send, status: int, body: dict, headers: list | None = None) -
     await send({"type": "http.response.body", "body": payload})
 
 
-def create_app(registry: Registry, verifier: RunTokenVerifier, contracts: Contracts):
-    server = build_server(registry, contracts)
+def create_app(
+    registry: Registry,
+    verifier: RunTokenVerifier,
+    contracts: Contracts,
+    approvals: ApprovalCheck | None = None,
+):
+    """`approvals` None: every require_approval tool is refused (fail closed)."""
+    server = build_server(registry, contracts, approvals or ApprovalCheck(None))
     mcp_app = server.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,

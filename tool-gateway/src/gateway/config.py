@@ -17,6 +17,7 @@ class Settings:
     port: int = 8090
     contracts_dir: Path = REPO_CONTRACTS
     connectors_dir: Path = CONNECTORS_FOLDER
+    control_plane_url: str = ""  # for the approval check; empty: approval tools refused
     env: tuple[tuple[str, str], ...] = ()  # for settings an allowlist names (GITHUB_REPOS, ...)
 
     @classmethod
@@ -36,5 +37,6 @@ class Settings:
             port=int(env.get("GATEWAY_PORT", "8090")),
             contracts_dir=Path(env.get("CONTRACTS_DIR", str(REPO_CONTRACTS))),
             connectors_dir=Path(env.get("CONNECTORS_DIR", str(CONNECTORS_FOLDER))),
+            control_plane_url=env.get("CONTROL_PLANE_URL", "").strip(),
             env=tuple(sorted(env.items())),
         )

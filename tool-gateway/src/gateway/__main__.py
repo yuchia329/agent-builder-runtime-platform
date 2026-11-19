@@ -4,8 +4,10 @@ import logging
 
 import uvicorn
 
+from gateway.adapters.control_plane_http import HttpControlPlane
 from gateway.adapters.token_store_memory import MemoryTokenStore
 from gateway.app import create_app
+from gateway.approvals import ApprovalCheck
 from gateway.auth.run_token import RunTokenVerifier
 from gateway.config import Settings
 from gateway.connectors.fake import FakeConnector
@@ -48,7 +50,12 @@ def build(settings: Settings, store: TokenStore | None = None):
         ",".join(settings.connectors) or "none",
         verifier.key_id,
     )
-    return create_app(registry, verifier, contracts)
+    if settings.control_plane_url:
+        approvals = ApprovalCheck(HttpControlPlane(settings.control_plane_url))
+    else:
+        approvals = ApprovalCheck(None)
+        log.warning("CONTROL_PLANE_URL is not set: tools that need approval will be refused")
+    return create_app(registry, verifier, contracts, approvals)
 
 
 def main() -> None:

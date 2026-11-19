@@ -16,6 +16,7 @@ Run from the repo root. Docker must be running.
 | Smoke test: publish the example spec, run it to `SUCCEEDED` with its tools through the gateway | `make demo` |
 | Create the local run-token key pair (once; `make up` does it) | `make keys` (delete `.run-token-*.env` for a new pair) |
 | Crash-safety demo: kill the worker mid-run, check the run resumes and adds its label once | `make chaos` (about 1 min) |
+| Owner login (acts_as owner) in Docker | the `GITHUB_OAUTH_*` and `OAUTH_STATE_SECRET` lines in `.env` (`.env.example`), then `make up`; the gateway logs `User login: ...`. Logins live in the container's memory: `make up` (rebuild) or `make down` means logging in again |
 | Start only DynamoDB Local + ElasticMQ (to run a service on the host) | `make stack` |
 | List tables and queues | `make status` |
 | Follow logs | `make logs` |
@@ -60,6 +61,10 @@ cd control-plane && set -a && . ../.env && set +a && ./gradlew bootRun
   `.run-token-public.env` (control plane and gateway) at the repo root, written by
   `run-token-keys.sh`; git- and docker-ignored, and never under `local-stack/`, which is mounted
   into containers. Compose reads only `.env` for `${...}`, so these come in through `env_file`.
+- The gateway gets the owner-login settings (`GITHUB_OAUTH_CLIENT_ID`,
+  `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`, `GATEWAY_PUBLIC_URL`, default
+  `http://localhost:8090`) by name. Part of them set fails the gateway's start, so `make up` fails
+  naming what is missing. Port 8090 must stay mapped to 8090: it is in the App's redirect URI.
 - The GitHub App `.pem` is mounted read-only only when `GITHUB_APP_PRIVATE_KEY_FILE` is set
   (`${VAR:+...}` gives the container path; `/dev/null` is mounted otherwise).
 - `demo.sh` fails unless the gateway logged an access line for the run.

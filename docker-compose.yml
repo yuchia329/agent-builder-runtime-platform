@@ -92,6 +92,11 @@ services:
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
       GITHUB_APP_PRIVATE_KEY_FILE: ${GITHUB_APP_PRIVATE_KEY_FILE:+/run/secrets/github-app.pem}
+      # Owner login for acts_as owner (ADR 0015): all three or none; unset = owner runs refused.
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET:-}
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:8090}
     volumes:
       - ${GITHUB_APP_PRIVATE_KEY_FILE:-/dev/null}:/run/secrets/github-app.pem:ro
     ports:

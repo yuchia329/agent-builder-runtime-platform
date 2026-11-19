@@ -322,6 +322,10 @@ Work in this order:
   and `/oauth/github/callback` (state and PKCE), token stored per tenant, user and provider; an
   owner run without a stored token fails naming the login URL. Check: tests with a fake GitHub
   OAuth server; a real login through the browser to localhost; an owner run labels as the user.
+- [ ] `[local-stack]` the Docker worker gets named settings instead of `env_file: .env` (today its
+  container holds every secret in `.env`, including `GITHUB_TOKEN` and the gateway's OAuth
+  secrets, though it uses none of them; ADR 0006). Check: `docker compose config` shows no secret
+  in the worker; `make demo` and `make chaos` pass.
 - [ ] `[specs]` issue-triage through the gateway: `TOOLS_PROVIDER=mcp`, no `GITHUB_TOKEN` in the
   worker's environment. Check: a planted duplicate is labeled and, after Approve in Slack, closed
   by `<app>[bot]`; the gateway access log shows both identities. **M4 done.**
@@ -381,13 +385,6 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
-- **Gateway owner-login settings in compose** (M4 task 10, ADR 0015; no contract change). The
-  gateway reads `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`,
-  `GATEWAY_PUBLIC_URL` (all in `.env.example`). Must follow: `local-stack` (pass them to the
-  `tool-gateway` service from `.env`; it maps port 8090, so the redirect URI
-  `http://localhost:8090/oauth/github/callback` works unchanged). Until then owner runs in
-  Docker are refused with "user login is not set up on this gateway".
-
 - **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
   Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `infra` (M6;
   `local-stack` done). Until then items never expire; correctness does not depend on it (claims
@@ -413,6 +410,17 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · local-stack** — Follow-up to M4 task 10 (cross-service entry removed): the
+  `tool-gateway` service gets `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`,
+  `OAUTH_STATE_SECRET`, `GATEWAY_PUBLIC_URL` (default `http://localhost:8090`) by name. Checked:
+  `make up` (gateway logs `User login: ...`), `make demo`, `make chaos`; with `CONNECTORS=github`
+  an owner call returns the login link, which redirects to GitHub's authorize page with
+  `redirect_uri=http://localhost:8090/oauth/github/callback`, S256 and the nonce cookie; the
+  container's request log shows `/oauth/github/start?<hidden>`. Next: `[specs]` M4 task 11; the
+  new `[local-stack]` task (worker without `env_file: .env`) can go before or after. Gotchas:
+  logins are lost when the gateway container is recreated; `docker compose config` prints every
+  `.env` secret the worker inherits, so never paste its output.
 
 - **2026-11-18 · tool-gateway** — M4 task 10: owner login for `acts_as: owner` through the team
   bot's GitHub App (ADR 0015) in `src/gateway/oauth/`: `signing.py` (HMAC notes with purpose and

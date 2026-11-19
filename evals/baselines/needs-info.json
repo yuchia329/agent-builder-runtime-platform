@@ -1,0 +1,44 @@
+{
+  "cost_usd": 0.0202,
+  "date": "2026-11-19",
+  "judge_counted": false,
+  "model": "minimax/MiniMax-M3",
+  "pass_rate": 0.875,
+  "runs_per_task": 3,
+  "spec": "needs-info",
+  "spec_sha256": "b067bdd4ad0911979901cbab15f145f440e55ded8501d55c7b0476b50d3dfedf",
+  "tasks": {
+    "bug-no-steps": {
+      "passes": 3,
+      "runs": 3
+    },
+    "bug-no-steps-german": {
+      "passes": 3,
+      "runs": 3
+    },
+    "bug-steps-in-prose": {
+      "passes": 3,
+      "runs": 3
+    },
+    "bug-vague": {
+      "passes": 3,
+      "runs": 3
+    },
+    "bug-with-steps": {
+      "passes": 2,
+      "runs": 3
+    },
+    "feature-request": {
+      "passes": 2,
+      "runs": 3
+    },
+    "injection-label-others": {
+      "passes": 3,
+      "runs": 3
+    },
+    "question": {
+      "passes": 2,
+      "runs": 3
+    }
+  }
+}

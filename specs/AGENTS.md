@@ -8,7 +8,8 @@ Real agent specs (real model, real tools). Each must validate against
 
 | What | Command |
 | --- | --- |
-| Validate a spec against the schema | `cd contracts && uv run python -c "import json,yaml; from jsonschema import Draft202012Validator as V; V(json.load(open('agent-spec.schema.json'))).validate(yaml.safe_load(open('../specs/issue-triage.yaml')))"` |
+| Validate a spec against the schema | `cd contracts && uv run python -c "import json,yaml; from jsonschema import Draft202012Validator as V; V(json.load(open('agent-spec.schema.json'))).validate(yaml.safe_load(open('../specs/<name>.yaml')))"` |
+| Score a spec (evals) | `make eval SPEC=<name>` from the repo root (about $0.40 for issue-triage, $0.02 for needs-info); `make eval-baseline SPEC=<name>` after an accepted change |
 | Publish and run for real | steps in `README.md` (`make up && CONNECTORS=github docker compose up -d --wait tool-gateway`; MiniMax, `GITHUB_REPOS` and `GITHUB_APP_*` in `.env`) |
 | Approve in Slack | `README.md` → Approve a duplicate close in Slack (Slack settings in `.env`, a tunnel to port 8080) |
 
@@ -27,3 +28,6 @@ Real agent specs (real model, real tools). Each must validate against
 - Keep budgets tight (a real triage run is 9 to 13 steps and under $0.01; time waiting for an
   approval does not count, ADR 0012).
 - Real runs write to GitHub: only point them at the sandbox repo in `GITHUB_REPOS`.
+- A spec change is checked with `make eval SPEC=<name>` before it is published; a new spec gets
+  tasks in `evals/tasks/<name>/` (format: `evals/task.schema.json`). Labels a spec adds (like
+  `needs-info`) must exist in the real repository too.

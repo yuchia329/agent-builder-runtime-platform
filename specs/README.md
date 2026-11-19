@@ -7,6 +7,12 @@ Example agent specs, run against the real model and tools. Each file follows
 | Spec | What it does | Tools |
 | --- | --- | --- |
 | `issue-triage.yaml` | Labels a new GitHub issue (`bug`, `enhancement`, ...), adds `duplicate` when an existing issue reports the same problem, and closes a high-confidence duplicate once a person approves in Slack | `github.search_issues`, `github.add_label`, `github.close_issue` (approval) |
+| `needs-info.yaml` | Labels a new bug report `needs-info` when it does not say how to reproduce the problem; nothing else (the repository needs a `needs-info` label) | `github.add_label` |
+
+Every spec here with tasks in `evals/tasks/<name>/` is scored by `make eval` (`SPEC=<name>` for
+one; real model, simulated GitHub, see `evals/AGENTS.md`). Run it after changing a spec's
+instructions or model, and save a new baseline (`make eval-baseline SPEC=<name>`) once the change
+is accepted.
 
 ## Run issue-triage for real
 

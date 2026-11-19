@@ -1,0 +1,40 @@
+spec: needs-info
+about: 'feature request, not a bug: no label'
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: Add SVG export, body: I need vector files for print. Please add SVG to the
+      export formats.}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, needs-info]
+    issues:
+    - number: 3
+      title: Search ignores accented characters
+      body: Searching for 'cafe' does not find 'café'.
+      labels: [bug]
+    - number: 5
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes.
+      labels: [enhancement]
+    - number: 20
+      title: Add SVG export
+      body: I need vector files for print. Please add SVG to the export formats.
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: []
+- tool_not_called: {tool: github.add_label}
+- output:
+    matches: ['(?im)^\W*Bug report:\W*no\b', '(?im)^\W*Steps to reproduce:\W*not applicable\b', '(?im)^\W*Needs
+        info:\W*no\b']
+- github:
+    issue: 3
+    labels: [bug]
+    state: open
+- github:
+    issue: 5
+    labels: [enhancement]
+    state: open

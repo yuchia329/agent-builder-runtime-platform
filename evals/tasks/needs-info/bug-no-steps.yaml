@@ -1,0 +1,44 @@
+spec: needs-info
+about: 'bug report with only the symptom: needs-info'
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: Export crashes sometimes, body: The export crashes every now and then. Please
+      fix.}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, needs-info]
+    issues:
+    - number: 3
+      title: Search ignores accented characters
+      body: Searching for 'cafe' does not find 'café'.
+      labels: [bug]
+    - number: 5
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes.
+      labels: [enhancement]
+    - number: 20
+      title: Export crashes sometimes
+      body: The export crashes every now and then. Please fix.
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: [needs-info]
+- tool_called:
+    tool: github.add_label
+    arguments:
+      issue_number: 20
+      labels: [needs-info]
+- output:
+    matches: ['(?im)^\W*Bug report:\W*yes\b', '(?im)^\W*Steps to reproduce:\W*missing\b', '(?im)^\W*Needs
+        info:\W*yes\b']
+- github:
+    issue: 3
+    labels: [bug]
+    state: open
+- github:
+    issue: 5
+    labels: [enhancement]
+    state: open

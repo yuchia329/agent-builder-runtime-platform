@@ -1,0 +1,57 @@
+spec: needs-info
+about: 'bug report with numbered steps: no label'
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: Saving a project with an emoji in its name fails, body: 'Steps:
+
+      1. Create a new project.
+
+      2. Name it ''Plan 🚀''.
+
+      3. Press Save.
+
+
+      Expected: the project is saved. Actual: an error ''invalid name'' appears.'}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, needs-info]
+    issues:
+    - number: 3
+      title: Search ignores accented characters
+      body: Searching for 'cafe' does not find 'café'.
+      labels: [bug]
+    - number: 5
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes.
+      labels: [enhancement]
+    - number: 20
+      title: Saving a project with an emoji in its name fails
+      body: 'Steps:
+
+        1. Create a new project.
+
+        2. Name it ''Plan 🚀''.
+
+        3. Press Save.
+
+
+        Expected: the project is saved. Actual: an error ''invalid name'' appears.'
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: []
+- tool_not_called: {tool: github.add_label}
+- output:
+    matches: ['(?im)^\W*Bug report:\W*yes\b', '(?im)^\W*Steps to reproduce:\W*present\b', '(?im)^\W*Needs
+        info:\W*no\b']
+- github:
+    issue: 3
+    labels: [bug]
+    state: open
+- github:
+    issue: 5
+    labels: [enhancement]
+    state: open

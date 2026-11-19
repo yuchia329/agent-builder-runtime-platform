@@ -17,7 +17,11 @@ with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):
 goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
 from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
 the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
-(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[specs]` second agent `needs-info`.
+(ADR 0015); no other container holds a GitHub credential. **M5 done (evals):** `make eval` scores every spec with
+tasks in `evals/tasks/` on its real model against a simulated GitHub through the real gateway (ADR
+0016), 3 runs per task, compared with a committed baseline; an LLM judge (trusted at 99-100%
+agreement with 75 labels) grades issue-triage's answers. Baselines: issue-triage 29/30 tasks,
+needs-info 8/8. Next: M6 (AWS deploy), to be planned.
 
 ## Approach
 
@@ -56,7 +60,7 @@ can run alongside 2 to 5. Start a session with
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Done        |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
-| M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Planned     |
+| M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Not started |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
@@ -325,7 +329,7 @@ Work in this order:
   prompt (near-miss guidance removed) shows one, naming the tasks.
 - [x] `[evals]` judge: rubric per spec, a labels file where the user marks about 50 reasons good
   or bad, agreement reported. Check: agreement printed; counted only at 90% or more.
-- [ ] `[specs]` second agent `needs-info` (labels a bug report `needs-info` when it lacks steps to
+- [x] `[specs]` second agent `needs-info` (labels a bug report `needs-info` when it lacks steps to
   reproduce; other tools and output than issue-triage) with about 8 tasks in
   `evals/tasks/needs-info/`. Check: `make eval SPEC=needs-info` runs with no change to the runner.
   **M5 done.**
@@ -394,6 +398,17 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · specs** — M5 task 6, **M5 done**. `specs/needs-info.yaml` (labels a bug report
+  `needs-info` when it lacks steps to reproduce; only `github.add_label`, no approval, budget 6
+  steps / $0.02 / 120 s; summary `Bug report / Steps to reproduce / Needs info`) and 8 tasks in
+  `evals/tasks/needs-info/`; ran with no change under `evals/src` or `evals/tests`. Baseline
+  8/8 tasks, 87.5% of runs, $0.02; rerun 91.7%, no regression. No judge (fixed output lines).
+  Findings for a later prompt session: twice labeled a feature request or question `needs-info`
+  while its summary said `Needs info: no`; once called add_label without `labels`;
+  `bug-with-steps` flaky (1-2 of 3). The sandbox repo needs a `needs-info` label before a live
+  run. specs README/AGENTS: spec changes are checked with `make eval SPEC=<name>`. Open: ADR 0016
+  is still Proposed; accept it when the user agrees. Next: plan M6 ("plan M6").
 
 - **2026-11-19 · evals** — M5 task 5: LLM judge. `judge.py` (rubric + context + answer to
   `{"verdict", "why"}` through the worker's model adapter), `labels.py`, `evals labels` and

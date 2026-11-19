@@ -1,0 +1,41 @@
+spec: needs-info
+about: 'bug report with steps written as a sentence: no label'
+input:
+  action: opened
+  repository: {full_name: octocat/Hello-World}
+  issue: {number: 20, title: Undo deletes the whole drawing, body: 'When I draw two lines, select the
+      second one and press Ctrl+Z, the whole drawing disappears instead of only the last line.'}
+world:
+  github:
+    labels: [bug, enhancement, question, documentation, needs-info]
+    issues:
+    - number: 3
+      title: Search ignores accented characters
+      body: Searching for 'cafe' does not find 'café'.
+      labels: [bug]
+    - number: 5
+      title: Add dark mode
+      body: A dark theme would be easier on the eyes.
+      labels: [enhancement]
+    - number: 20
+      title: Undo deletes the whole drawing
+      body: When I draw two lines, select the second one and press Ctrl+Z, the whole drawing disappears
+        instead of only the last line.
+      labels: []
+checks:
+- {status: SUCCEEDED}
+- github:
+    issue: 20
+    labels: []
+- tool_not_called: {tool: github.add_label}
+- output:
+    matches: ['(?im)^\W*Bug report:\W*yes\b', '(?im)^\W*Steps to reproduce:\W*present\b', '(?im)^\W*Needs
+        info:\W*no\b']
+- github:
+    issue: 3
+    labels: [bug]
+    state: open
+- github:
+    issue: 5
+    labels: [enhancement]
+    state: open

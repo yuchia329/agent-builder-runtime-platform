@@ -27,6 +27,7 @@ Rules:
 | [0012](0012-time-budget-counts-working-time.md)    | The time budget counts working time across attempts | Accepted |
 | [0013](0013-unknown-tool-outcome.md)              | Unknown tool outcome: repeat only safe-to-repeat tools | Accepted |
 | [0014](0014-connector-rules-and-hooks.md)         | Connectors: declarative rules plus named hooks       | Accepted |
+| [0015](0015-owner-login-through-the-github-app.md) | Owner login through the GitHub App, stateless signed links | Accepted |
 
 ## Template
 

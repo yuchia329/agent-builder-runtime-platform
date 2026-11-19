@@ -72,15 +72,17 @@ def meta(step: int = 3, key: str = "a" * 64) -> dict[str, Any]:
 
 
 class LiveGateway:
-    """The real app on 127.0.0.1 and a free port, in a thread."""
+    """The real app on 127.0.0.1 and a free port, in a thread. `oauth`: a function from the
+    gateway's URL to the login routes (their redirect URI needs the port)."""
 
-    def __init__(self, keys: Keys, *connectors: FakeConnector, approvals=None) -> None:
-        verifier = RunTokenVerifier(keys.public_pem, CONTRACTS)
-        app = create_app(Registry(connectors), verifier, CONTRACTS, approvals)
+    def __init__(self, keys: Keys, *connectors: FakeConnector, approvals=None, oauth=None) -> None:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             self.port = s.getsockname()[1]
         self.url = f"http://127.0.0.1:{self.port}"
+        verifier = RunTokenVerifier(keys.public_pem, CONTRACTS)
+        routes = oauth(self.url) if oauth else None
+        app = create_app(Registry(connectors), verifier, CONTRACTS, approvals, routes)
         self._server = uvicorn.Server(
             uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning")
         )

@@ -9,7 +9,6 @@ from gateway.auth.run_token import RunClaims
 from gateway.config import CONNECTORS_FOLDER
 from gateway.credentials import Credentials
 from gateway.github_app import GitHubAppTokens
-from gateway.ports.token_store import CredentialKey
 from gateway.tools.executor import ConnectorClient
 from gateway.tools.openapi_to_mcp import load_connector
 from gateway.tools.registry import CallContext, ToolFailure
@@ -144,17 +143,6 @@ def test_missing_credential_is_a_tool_failure_naming_what_is_missing(github):
     ):
         call(github, "github.search_issues", {"q": "x"}, store=MemoryTokenStore())
     assert github.requests == []
-
-
-def test_owner_runs_use_the_owners_credential(github):
-    store = MemoryTokenStore()
-    store.put(CredentialKey("tenant-test", "user:42", "github"), {"token": "gho_owner"})
-    run = RunClaims.from_payload(claims(acts_as="owner", owner="user:42"))
-
-    call(github, "github.search_issues", {"q": "x"}, store=store, run=run)
-
-    headers = {k.lower(): v for k, v in github.requests[0].headers.items()}
-    assert headers["authorization"] == "Bearer gho_owner"
 
 
 def test_server_errors_are_retried(github):

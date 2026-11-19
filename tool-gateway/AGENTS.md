@@ -15,6 +15,7 @@ Run from `tool-gateway/`.
 | Test | `uv run pytest` (no Docker) |
 | Run locally | `RUN_TOKEN_PUBLIC_KEY=<public half of the control plane's pair> CONNECTORS=fake uv run gateway` (port 8090; `GATEWAY_PORT` to change) |
 | Run with GitHub | `set -a && . ../.env && set +a && CONNECTORS=github uv run gateway` (needs `RUN_TOKEN_PUBLIC_KEY`, `GITHUB_REPOS`, `TENANT_ID` and the `GITHUB_APP_*` settings; startup logs "Credential from the environment"; `CONTROL_PLANE_URL` from `.env` enables approval tools) |
+| Owner login (acts_as owner) | add `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET` to `../.env` (`.env.example`); the App's redirect URI is `http://localhost:8090/oauth/github/callback`; an owner run's tool error gives the link to open; logins are lost on restart (memory store) |
 | Stop a background gateway | `kill $(lsof -ti :8090)` (not `pkill -f gateway`: it matches the shell too) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
@@ -36,6 +37,10 @@ Run from `tool-gateway/`.
   once on a 401), `github_app.py` (app JWT, installation token exchange and cache), `seed.py`
   (local credentials from the environment into the memory `TokenStore`), `approvals.py` (second
   approval check) with the `ControlPlane` port (`adapters/control_plane_http.py`, `_memory.py`).
+- `oauth/`: owner login (ADR 0015): `signing.py` (signed tickets and state, PKCE verifier
+  derived from a nonce), `github.py` (provider HTTP), `logins.py` (`OAuthLogins`: link, `begin`,
+  `finish`, `headers` with refresh), `routes.py` (Starlette app mounted by `RunTokenAuth` at
+  `/oauth/`).
 - `../connectors/<name>/`: `openapi.yaml` (cut, never edited by hand), `allowlist.yaml`, optional
   `hooks.py` with a `HOOKS` dict (loaded by `openapi_to_mcp.load_hooks`).
 - `ports/` (`Protocol` only) and `adapters/`; `src/gateway/connectors/fake.py` (in code, a test
@@ -44,6 +49,9 @@ Run from `tool-gateway/`.
   worker's fixtures (see its README); routes with `on`, `fail_next` for retries. It answers the
   App token exchange itself (`token_requests`, `fail_token_next`, `app_token`), so `requests` holds
   only API calls; `app_store()` / `app_credential()` give the matching App credential.
+- `tests/fake_github_oauth.py`: GitHub's login (authorize auto-approves or `deny`; token
+  endpoint checks client secret and PKCE, rotates refresh tokens; `/user`); `LiveGateway(...,
+  oauth=fn)` takes a function from the gateway URL to the login routes.
 - `tests/fake_control_plane.py`: answers `GET /internal/runs/{id}` from runs put with `put`;
   `fail_next`, `garbage`.
 - `contracts.py` loads every `../contracts/*.schema.json` together (`CONTRACTS_DIR` to move).
@@ -87,3 +95,9 @@ Run from `tool-gateway/`.
 - Recorded fixtures are cleaned like the worker's (owner/repo `octocat/Hello-World`, no users,
   avatars, node ids or bodies); check with `grep -ri <your-login> tests/fixtures` before
   committing a new recording.
+- Login routes keep no server state (Lambda): everything between `/start` and `/callback` is in
+  signed notes and the nonce cookie. A note's purpose (`ticket`, `state`) is checked; derived
+  values use their own label. Never put a ticket, state, code or token in a page or a log line
+  (uvicorn's request log goes through `HideLoginQueries`).
+- `Settings` fields holding secrets use `field(repr=False)`; `Settings.env` holds the whole
+  environment and is hidden too.

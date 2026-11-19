@@ -399,8 +399,16 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   installation id in the `TokenStore`); the gateway signs a 10-minute app JWT, exchanges it for the
   installation token, caches that until 5 minutes before its hour ends, and renews once if GitHub
   answers 401. The App's installation (only the allowed repos, Issues and Metadata) is a second
-  limit beside `GITHUB_REPOS`; `acts_as: owner` uses the publisher's OAuth token, stored after a one-time login
-  (`/oauth/<provider>/start`, `/callback`).
+  limit beside `GITHUB_REPOS`. `acts_as: owner` uses the owner's own token from a one-time login
+  through the same App ([ADR 0015](adr/0015-owner-login-through-the-github-app.md)): an owner run
+  without one fails with a tool error naming `<GATEWAY_PUBLIC_URL>/oauth/github/start?ticket=...`
+  (a ticket signed with `OAUTH_STATE_SECRET`, 10 minutes). `/start` sets a nonce cookie and sends
+  GitHub a signed `state` and a PKCE S256 challenge (verifier derived from the nonce, never
+  stored); `/callback` checks state and cookie, exchanges the code, reads the login from
+  `GET /user`, and stores tokens, expiry times and login under `(tenant, owner, github)`. Calls
+  refresh the token within 5 minutes of expiry or after a 401 (GitHub replaces the refresh
+  token); a refused refresh deletes the login. Without the `GITHUB_OAUTH_*` settings `/oauth/*`
+  answers 503 and owner runs are refused. uvicorn's request log hides `/oauth/` query strings.
 - Every call writes an access log line: run, tenant, agent and version, `started_by`, the identity
   acted as, tool, argument hash, outcome. Never a token or argument values.
 - Built in stages: in M1 tool calls run inside the worker; in M4 they move into this service
@@ -410,7 +418,7 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   (read first: pull requests refused, an already closed issue left as it is).
 - Runs on Lambda behind the shared API Gateway. `/mcp` requires IAM authorization (SigV4) and a
   valid run token. MCP uses stateless Streamable HTTP with JSON responses, so nothing depends on a
-  warm instance. OAuth callback routes are public.
+  warm instance. The `/oauth/` routes are public (a browser calls them) and keep no state.
 - Every `/mcp` request (`initialize` and `tools/list` too) needs a valid run token: ES256, `kid`
   equal to the configured public key's thumbprint, issuer, audience, expiry and issue time within
   30 s, claims valid against the contract. Otherwise HTTP 401 with a JSON-RPC error and no detail.
@@ -484,6 +492,7 @@ definition environment, with secrets from Secrets Manager.
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`, `KMS_KEY_ID`                 |
 | GitHub App (local)  | gateway                                | With `TOKEN_STORE=memory`, all or none: `TENANT_ID`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_FILE` (path to the `.pem`, kept outside the repo); stored as the tenant's team-bot at startup. On AWS the `TokenStore` is written by an operator |
+| Owner login         | gateway                                | All three or none: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` (secret), `OAUTH_STATE_SECRET` (secret, 32+ characters); `GATEWAY_PUBLIC_URL` (default `http://localhost:8090`, where browsers reach the gateway). Unset: owner runs refused (ADR 0015) |
 | Gateway             | gateway                                | `CONNECTORS` (comma list: `fake`, `github` from M4), `GATEWAY_HOST` (default 127.0.0.1), `GATEWAY_PORT` (default 8090), `CONTRACTS_DIR` (default `../contracts`) |
 | Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY` (secret, control plane), `RUN_TOKEN_PUBLIC_KEY` (control plane checks the pair and derives `kid`; gateway verifies); P-256 PEM or one-line base64 body; both unset = no tokens |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
@@ -589,7 +598,7 @@ tool-gateway/                   Python, MCP SDK (Starlette) + uvicorn (see tool-
     auth/       run_token
     tools/      registry, access_log, openapi_to_mcp (generator), rules, executor
     credentials.py
-    oauth/      routes, providers (M4)
+    oauth/      signing (tickets, state), github (provider), logins (flow, refresh), routes
     ports/      token_store
     adapters/   token_store_memory (token_store_ssm in M6)
     connectors/ fake (in code, a test double)

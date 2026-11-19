@@ -317,7 +317,8 @@ Work in this order:
   committed); the GitHub App `.pem` mounted read-only from `GITHUB_APP_PRIVATE_KEY_FILE`;
   the gateway's `CONTROL_PLANE_URL` set (else approval tools are refused); `make demo` runs its tools through the gateway. Check: `make up && make demo` and
   `make chaos` pass.
-- [ ] `[tool-gateway]` per-user OAuth for `acts_as: owner`: GitHub OAuth App, `/oauth/github/start`
+- [x] `[tool-gateway]` per-user OAuth for `acts_as: owner`: through the team bot's GitHub App
+  (ADR 0015, not a separate OAuth App), `/oauth/github/start`
   and `/oauth/github/callback` (state and PKCE), token stored per tenant, user and provider; an
   owner run without a stored token fails naming the login URL. Check: tests with a fake GitHub
   OAuth server; a real login through the browser to localhost; an owner run labels as the user.
@@ -367,6 +368,8 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 - Will the repo be public? Affects how much personal context belongs in it.
 - Users and roles (RBAC): who may publish an agent, approve a call, or publish with
   `acts_as: owner`. Needs users in the control plane (today one tenant, one API key). After M4.
+  Then the owner login link moves behind the user's sign-in (ADR 0015: today anyone holding a
+  valid link can connect their account as that owner).
 - Is the worker's scale-from-0 delay (a minute or more) acceptable for demos, or add the Lambda
   worker entrypoint (ADR 0005) early?
 - Is Spring Boot's cold start on Lambda with SnapStart fast enough for Slack's 3-second callback
@@ -377,6 +380,13 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
+
+- **Gateway owner-login settings in compose** (M4 task 10, ADR 0015; no contract change). The
+  gateway reads `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`,
+  `GATEWAY_PUBLIC_URL` (all in `.env.example`). Must follow: `local-stack` (pass them to the
+  `tool-gateway` service from `.env`; it maps port 8090, so the redirect URI
+  `http://localhost:8090/oauth/github/callback` works unchanged). Until then owner runs in
+  Docker are refused with "user login is not set up on this gateway".
 
 - **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
   Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `infra` (M6;
@@ -403,6 +413,26 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · tool-gateway** — M4 task 10: owner login for `acts_as: owner` through the team
+  bot's GitHub App (ADR 0015) in `src/gateway/oauth/`: `signing.py` (HMAC notes with purpose and
+  expiry; PKCE verifier derived from the nonce), `github.py` (exchange, refresh, `GET /user`),
+  `logins.py` (login link, `begin` / `finish`, `headers` with refresh within 5 minutes of expiry
+  or after a 401, refused refresh deletes the login), `routes.py` (`/oauth/github/start`,
+  `/callback`; nonce cookie HttpOnly, SameSite=Lax; `no-store`, no referrer; 503 without
+  settings). `Credentials(store, logins=)` handles the `oauth` kind; an owner run without a login
+  gets a tool error naming the link. Settings `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`,
+  `OAUTH_STATE_SECRET`, `GATEWAY_PUBLIC_URL`; `Settings.env` and the secrets are hidden from repr.
+  `tests/fake_github_oauth.py` (checks client secret and PKCE, rotates refresh tokens); 36 tests in
+  `tests/test_oauth.py`, 209 in all. Live: owner `add_label` on sandbox #9 first failed with the
+  link, then after a browser login showed actor = the person, `performed_via_github_app` = the App.
+  Next: `local-stack` passes the login settings (Cross-service changes), then `[specs]` M4 task 11.
+  Gotchas: GitHub's App settings page moved things: the client secret is under **Credentials**,
+  "Callback URL" is now **Redirect URI** (must be saved, or GitHub says "must be configured with a
+  callback URL"), token expiry is under **Optional features**. uvicorn's request log printed the
+  callback's `code` and `state`; `__main__.HideLoginQueries` hides `/oauth/` queries. The memory
+  store forgets logins on restart. The Docker gateway must be stopped to run one on the host
+  (both use 8090).
 
 - **2026-11-18 · local-stack** — M4 task 9: `tool-gateway/Dockerfile` (uv, contracts and
   connectors copied in, `/health` check) and a `tool-gateway` compose service on 8090 that gets

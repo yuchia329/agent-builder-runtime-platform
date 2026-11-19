@@ -1,5 +1,6 @@
 """The gateway's ASGI app: MCP over Streamable HTTP at /mcp (stateless, JSON responses) behind a
-run-token check, plus GET /health. Conventions: contracts/mcp-tool-call.schema.json."""
+run-token check, plus GET /health and the public login routes under /oauth/ (gateway.oauth).
+Conventions: contracts/mcp-tool-call.schema.json."""
 
 import json
 import logging
@@ -24,6 +25,7 @@ from mcp.types import Tool as McpTool
 from gateway.approvals import ApprovalCheck
 from gateway.auth.run_token import RunClaims, RunTokenVerifier, TokenRejected
 from gateway.contracts import Contracts
+from gateway.oauth.routes import unavailable_app
 from gateway.tools import access_log
 from gateway.tools.registry import CallContext, Registry, ToolFailure
 
@@ -160,18 +162,21 @@ def _error(message: str) -> CallToolResult:
 
 class RunTokenAuth:
     """ASGI wrapper: /mcp needs a valid run token (claims put in the scope's state for the
-    handlers); /health answers without one. A refusal is HTTP 401 with a JSON-RPC error body and
-    no detail; the reason goes to the log, the token never does."""
+    handlers); /health and /oauth/ (a person's browser) answer without one. A refusal is HTTP 401
+    with a JSON-RPC error body and no detail; the reason goes to the log, the token never does."""
 
-    def __init__(self, app, verifier: RunTokenVerifier) -> None:
+    def __init__(self, app, verifier: RunTokenVerifier, oauth=None) -> None:
         self._app = app
         self._verifier = verifier
+        self._oauth = oauth or unavailable_app()
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
             return await self._app(scope, receive, send)  # lifespan
         if scope["path"] == "/health" and scope["method"] == "GET":
             return await _respond(send, 200, {"status": "ok"})
+        if scope["path"].startswith("/oauth/"):
+            return await self._oauth(scope, receive, send)
         if scope["path"].rstrip("/") == "/mcp":
             token = _bearer(scope)
             try:
@@ -223,8 +228,10 @@ def create_app(
     verifier: RunTokenVerifier,
     contracts: Contracts,
     approvals: ApprovalCheck | None = None,
+    oauth=None,
 ):
-    """`approvals` None: every require_approval tool is refused (fail closed)."""
+    """`approvals` None: every require_approval tool is refused (fail closed). `oauth`: the login
+    routes (`gateway.oauth.routes.oauth_app`); None answers 503 there."""
     server = build_server(registry, contracts, approvals or ApprovalCheck(None))
     mcp_app = server.streamable_http_app(
         streamable_http_path="/mcp",
@@ -234,4 +241,4 @@ def create_app(
         # localhost) gains nothing; the check would refuse container host names.
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
-    return RunTokenAuth(mcp_app, verifier)
+    return RunTokenAuth(mcp_app, verifier, oauth)

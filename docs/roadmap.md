@@ -17,7 +17,7 @@ with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):
 goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
 from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
 the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
-(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` judge.
+(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[specs]` second agent `needs-info`.
 
 ## Approach
 
@@ -296,7 +296,8 @@ performance by M7 on AWS. Decided when planning (2026-11-18):
 - Each task runs 3 times and passes on 2 of 3. Regression: a task that passes in the baseline now
   fails, or the pass rate drops more than 5 points. The baseline is a committed file per spec.
 - Judge model `minimax/MiniMax-M3`. Its score is reported but not counted until it agrees with
-  50 hand labels (by the user) at least 90% of the time.
+  about 50 labels at least 90% of the time (changed when building it: the labels were made by
+  Claude at the user's request, not by hand; the user may change any of them).
 - The task format lives in `evals/` (only evals reads it), not `contracts/`.
 - Cost about $0.005 per issue-triage run: 30 tasks x 3 runs is about $0.45.
 - Later, not M5: a CI gate on pull requests (needs a GitHub secret and working through PRs), and
@@ -322,7 +323,7 @@ Work in this order:
   comparison with the committed baseline, `make eval` (`SPEC=<name>` for one spec) and a way to
   save a new baseline. Check: an unchanged spec shows no regression on a rerun; a weakened
   prompt (near-miss guidance removed) shows one, naming the tasks.
-- [ ] `[evals]` judge: rubric per spec, a labels file where the user marks about 50 reasons good
+- [x] `[evals]` judge: rubric per spec, a labels file where the user marks about 50 reasons good
   or bad, agreement reported. Check: agreement printed; counted only at 90% or more.
 - [ ] `[specs]` second agent `needs-info` (labels a bug report `needs-info` when it lacks steps to
   reproduce; other tools and output than issue-triage) with about 8 tasks in
@@ -393,6 +394,23 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · evals** — M5 task 5: LLM judge. `judge.py` (rubric + context + answer to
+  `{"verdict", "why"}` through the worker's model adapter), `labels.py`, `evals labels` and
+  `evals judge-check`; suites judge every answer and a "bad" verdict fails the run once
+  `judges/<spec>.json` says trusted for the current rubric and model (90% agreement, 5+ bad
+  labels, 80% caught); `--no-judge` skips it. `rubrics/issue-triage.md`; 75 labels in
+  `labels/issue-triage.yaml` made by Claude (Fable 5.2) at the user's request, not by hand
+  (header says so): 1-50 used to adjust the rubric, 51-75 labeled after it was frozen. First
+  check 88% (judge called unseen facts "invented"); fixed by giving it repository labels and each
+  existing issue's labels, telling it not to grade the agent's statements about its own
+  searches, and requiring the duplicate to be clear from the title. Now 99-100% on 75, 16/16 bad
+  caught (fresh 25: 96-100%). Baseline re-saved with the judge counting: 29/30 tasks, 93.3% of
+  runs, $0.42; the judge failed 2 otherwise passing runs for small unsupported asides ("the only
+  other issue", "different code path"): strict but defensible. Spent about $0.68. Next:
+  `/start specs` (`needs-info` spec), then its tasks. Gotchas: any rubric edit makes the judge
+  "reported only" until `judge-check` runs again, then save a new baseline; validate rubric
+  changes on newly sampled labels.
 
 - **2026-11-19 · evals** — M5 task 4: `evals suite` (`suite.py`) and `make eval` /
   `make eval-baseline` (`SPEC=`). 3 runs per task, 4 at once (one simulator and gateway per

@@ -527,7 +527,8 @@ the spec as `<provider>/<model id>`; config only defines the providers
   agent's decisions, not the platform. One harness serves every
   spec: an agent's tasks (`tasks/<spec name>/`) give the trigger event, the starting state of the
   outside world, and checks (tools called or not, end state, output, budget, an LLM judge on free
-  text against the author's rubric, checked against about 50 hand labels). `make eval` runs on the
+  text against the author's rubric; it counts only once it agrees with labeled answers, at
+  least 90%). `make eval` runs on the
   host in one process: the worker's `handle_run` with in-memory adapters and the spec's real
   model, tools through the real gateway pointed at simulated services (one per connector,
   scripted responses otherwise). Each task runs 3 times; a regression is a task that passed in

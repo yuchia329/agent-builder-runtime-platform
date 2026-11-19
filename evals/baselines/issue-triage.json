@@ -1,8 +1,9 @@
 {
-  "cost_usd": 0.3541,
+  "cost_usd": 0.416,
   "date": "2026-11-19",
+  "judge_counted": true,
   "model": "minimax/MiniMax-M3",
-  "pass_rate": 0.9222,
+  "pass_rate": 0.9333,
   "runs_per_task": 3,
   "spec": "issue-triage",
   "spec_sha256": "92e1f79bba64efe6fa1c286a926ba96e52a5bccca3a9f8bf910980115ef90680",
@@ -32,7 +33,7 @@
       "runs": 3
     },
     "dup-offline-edits-lost": {
-      "passes": 2,
+      "passes": 3,
       "runs": 3
     },
     "dup-password-reset-email": {
@@ -60,7 +61,7 @@
       "runs": 3
     },
     "lang-german-duplicate": {
-      "passes": 3,
+      "passes": 2,
       "runs": 3
     },
     "lang-spanish-bug": {
@@ -72,7 +73,7 @@
       "runs": 3
     },
     "multi-png-export-cropped": {
-      "passes": 0,
+      "passes": 3,
       "runs": 3
     },
     "multi-startup-crash-after-update": {
@@ -104,7 +105,7 @@
       "runs": 3
     },
     "plain-bug-csv-export-empty": {
-      "passes": 3,
+      "passes": 2,
       "runs": 3
     },
     "plain-bug-reminders-dst": {
@@ -120,7 +121,7 @@
       "runs": 3
     },
     "plain-enhancement-zoom-shortcut": {
-      "passes": 3,
+      "passes": 2,
       "runs": 3
     },
     "plain-question-proxy": {

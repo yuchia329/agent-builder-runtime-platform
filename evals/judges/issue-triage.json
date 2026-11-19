@@ -1,0 +1,12 @@
+{
+  "agreement": 1.0,
+  "bad_caught": 16,
+  "bad_labels": 16,
+  "date": "2026-11-19",
+  "errors": 0,
+  "labeled": 75,
+  "model": "minimax/MiniMax-M3",
+  "rubric_sha256": "6a46e8164c601f070b481c24d4d6481e28216c2f133448b46b264acefea3c802",
+  "spec": "issue-triage",
+  "trusted": true
+}

@@ -9,6 +9,9 @@ Comparison with `evals/baselines/<spec>.json` (only tasks in both count):
   smaller moves are listed as changed, because a task that passes about half the time flips
   between suites by chance;
 - the suite regresses when the run pass rate drops by more than 5 points.
+
+With a `Judge`, every run's answer is also graded (judge.py). A "bad" verdict fails the run only
+when the judge is counted (trusted for this rubric); otherwise verdicts are only reported.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from typing import Any
 
 from worker.ports.model import Model
 
+from evals.judge import Judge, context_of
 from evals.runner import Evaluation
 from evals.task import EVALS_DIR, SPECS_DIR, Task, load_task
 
@@ -50,6 +54,8 @@ class RunSummary:
     calls: list[dict[str, Any]]  # tool, arguments, error
     output: str | None
     error: str | None = None  # the run itself broke (not a check failure)
+    judge: dict[str, Any] | None = None  # verdict, why, counted
+    judge_cost_usd: float = 0.0
 
 
 @dataclass
@@ -58,6 +64,7 @@ class SuiteResult:
     model: str
     spec_sha256: str
     runs_per_task: int
+    judge_counted: bool = False
     runs: list[RunSummary] = field(default_factory=list)
 
     def task_passes(self) -> dict[str, int]:
@@ -74,7 +81,10 @@ class SuiteResult:
 
     @property
     def cost_usd(self) -> float:
-        return sum(r.cost_usd for r in self.runs)
+        return sum(r.cost_usd + r.judge_cost_usd for r in self.runs)
+
+    def judged(self) -> Counter[str]:
+        return Counter(r.judge["verdict"] for r in self.runs if r.judge)
 
     def check_kinds(self) -> dict[str, tuple[int, int]]:
         passed: Counter[str] = Counter()
@@ -93,6 +103,7 @@ class SuiteResult:
             "spec_sha256": self.spec_sha256,
             "date": datetime.now(UTC).strftime("%Y-%m-%d"),
             "runs_per_task": self.runs_per_task,
+            "judge_counted": self.judge_counted,
             "pass_rate": round(self.pass_rate, 4),
             "cost_usd": round(self.cost_usd, 4),
             "tasks": {t: {"passes": p, "runs": runs[t]} for t, p in self.task_passes().items()},
@@ -112,10 +123,17 @@ def load_tasks(spec_name: str, specs_dir: Path = SPECS_DIR) -> list[Task]:
 
 
 def run_suite(
-    tasks: list[Task], model: Model, runs: int = 3, parallel: int = 4, progress=None
+    tasks: list[Task],
+    model: Model,
+    runs: int = 3,
+    parallel: int = 4,
+    progress=None,
+    judge: Judge | None = None,
+    judge_counted: bool = False,
 ) -> SuiteResult:
     spec = tasks[0].spec
-    result = SuiteResult(spec["name"], spec["model"], spec_hash(spec), runs)
+    counted = judge is not None and judge_counted
+    result = SuiteResult(spec["name"], spec["model"], spec_hash(spec), runs, counted)
     jobs = [(task, n) for n in range(1, runs + 1) for task in tasks]
     workers = max(1, min(parallel, len(jobs)))
     free: queue.Queue[Evaluation] = queue.Queue()
@@ -128,7 +146,7 @@ def run_suite(
             task, n = job
             evaluation = free.get()
             try:
-                summary = _run_once(evaluation, task, n, model)
+                summary = _run_once(evaluation, task, n, model, judge, counted)
             finally:
                 free.put(evaluation)
             with lock:
@@ -143,22 +161,35 @@ def run_suite(
     return result
 
 
-def _run_once(evaluation: Evaluation, task: Task, n: int, model: Model) -> RunSummary:
+def _run_once(
+    evaluation: Evaluation,
+    task: Task,
+    n: int,
+    model: Model,
+    judge: Judge | None = None,
+    counted: bool = False,
+) -> RunSummary:
     try:
         r = evaluation.run(task, model)
     except Exception as e:  # noqa: BLE001 - a broken run fails its task, the suite goes on
         return RunSummary(task.name, n, False, "ERROR", 0, 0.0, [], [], None, repr(e)[:500])
     o = r.outcome
+    verdict = judge.grade(context_of(task), o.output) if judge else None
+    passed = r.passed and not (counted and verdict is not None and verdict.verdict == "bad")
     return RunSummary(
         task=task.name,
         run=n,
-        passed=r.passed,
+        passed=passed,
         status=o.status,
         steps=o.steps,
         cost_usd=o.cost_usd,
         checks=[{"kind": c.kind, "passed": c.passed, "detail": c.detail} for c in r.checks],
         calls=[{"tool": c.tool, "arguments": c.arguments, "error": c.error} for c in o.calls],
         output=o.output,
+        judge=None
+        if verdict is None
+        else {"verdict": verdict.verdict, "why": verdict.why, "counted": counted},
+        judge_cost_usd=verdict.cost_usd if verdict else 0.0,
     )
 
 
@@ -203,6 +234,8 @@ def compare(result: SuiteResult, baseline: dict[str, Any] | None) -> Comparison:
         notes.append(f"model differs: baseline {baseline.get('model')}, now {result.model}")
     if baseline.get("spec_sha256") != result.spec_sha256:
         notes.append("spec differs from the baseline's")
+    if baseline.get("judge_counted", False) != result.judge_counted:
+        notes.append("the judge counts in one of the two and not the other")
     return Comparison(
         regressions,
         changed,
@@ -254,9 +287,24 @@ def report(result: SuiteResult, comparison: Comparison) -> str:
         if r.error:
             lines.append(f"    error: {r.error}")
         lines += [f"    FAIL {c['kind']}: {c['detail']}" for c in r.checks if not c["passed"]]
+        if r.judge and r.judge["counted"] and r.judge["verdict"] == "bad":
+            lines.append(f"    FAIL judge: {r.judge['why']}")
         for c in r.calls:
             error = f"  -> ERROR {c['error'][:120]}" if c["error"] else ""
             lines.append(f"    call {c['tool']} {json.dumps(c['arguments'])}{error}")
+    judged = result.judged()
+    if judged:
+        state = "counted" if result.judge_counted else "not counted until trusted"
+        lines.append(
+            f"\nJudge ({state}): good {judged['good']}/{sum(judged.values())}, "
+            f"bad {judged['bad']}, unreadable {judged['error']}"
+        )
+        if not result.judge_counted:
+            lines += [
+                f"  bad: {r.task} run {r.run}: {r.judge['why']}"
+                for r in result.runs
+                if r.judge and r.judge["verdict"] == "bad"
+            ]
     lines.append("\nChecks by kind:")
     lines += [f"  {k:<16} {p}/{t}" for k, (p, t) in result.check_kinds().items()]
     task_ok = sum(_majority(p / runs[t]) for t, p in passes.items())

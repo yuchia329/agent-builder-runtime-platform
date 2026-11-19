@@ -89,7 +89,7 @@ scale to 0, both data stores are DynamoDB on-demand, and model providers bill pe
 | ------------- | ----------------------- | ------------------------------------------------------------- | -------------------------------------------------------- |
 | Control plane | Lambda (SnapStart)      | Tenants, specs and versions, runs, approvals, Slack bot       | Control-plane DynamoDB table, SQS (send), Slack          |
 | Worker        | ECS Fargate, 0..N tasks | Executing one run: agent loop, budget, checkpoints            | SQS (receive), run-state DynamoDB table, model providers, control plane, gateway |
-| Tool gateway  | Lambda                  | OAuth tokens, connector definitions, outside API calls        | Secrets Manager / KMS, outside APIs                      |
+| Tool gateway  | Lambda                  | OAuth tokens, connector definitions, outside API calls        | SSM Parameter Store / KMS, outside APIs                  |
 
 Supporting components are not deployed as services but are built and worked on the same way:
 
@@ -104,7 +104,7 @@ Supporting components are not deployed as services but are built and worked on t
 | `ci`          | `.github/workflows/`                                      | Build, test and eval workflows                                       |
 
 The component names in both tables are the names used for work sessions and roadmap tasks.
-Managed services (API Gateway, SQS, DynamoDB, Secrets Manager, KMS, CloudWatch, X-Ray) and model
+Managed services (API Gateway, SQS, DynamoDB, SSM Parameter Store, KMS, CloudWatch, X-Ray) and model
 providers (MiniMax, Bedrock, others) are not components: code reaches them through adapters inside the services, and `infra` creates them.
 
 Boundaries the design depends on:
@@ -127,7 +127,7 @@ Boundaries the design depends on:
 | Workers          | Python 3.12, uv, own agent loop; model adapters per protocol (OpenAI-compatible, Bedrock Converse) behind a router, ECS Fargate |
 | Run state        | DynamoDB (DynamoDB Local for dev)                                     |
 | Tool gateway     | Python, FastAPI, MCP Python SDK (stateless Streamable HTTP), Lambda   |
-| Secrets          | AWS Secrets Manager, KMS                                              |
+| Secrets          | SSM Parameter Store (SecureString), KMS                               |
 | Observability    | OpenTelemetry (Java + Python SDKs), ADOT collector, CloudWatch, X-Ray |
 | Evals / CI       | GitHub Actions, pytest-based eval runner, LLM judge on a configured provider |
 | Load test        | Stub model server + k6 or Locust                                      |
@@ -249,7 +249,8 @@ the table from that file.
   runs, oldest first. Each stuck run is touched (queued-at = now, only if still `QUEUED`), then
   published, so it is re-sent at most once per threshold; a second message for a slow run is
   harmless (worker lease and status check). Locally a Spring schedule runs it; on Lambda,
-  EventBridge Scheduler invokes it (M6), since a function is frozen between requests.
+  EventBridge Scheduler invokes it every 5 minutes (M6), since a function is frozen between
+  requests. That stays inside the free tiers: $0 while idle, though never completely silent.
 - The same schedule runs the approval sweep. A run moving to `WAITING_APPROVAL` enters
   `RUNS#APPROVAL_UNSENT`; recording its post moves it to `RUNS#APPROVAL_SENT` (same sort key); any
   other status, including a rejection or an expiry, removes it. The post sweep reads only the
@@ -482,7 +483,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 No shared runtime config folder. Terraform creates resources and outputs their names. Each service
 declares config only for what it touches (`application.yml` in Java, `config.py` in Python) and
 reads values from environment variables: `.env` locally; in AWS, the Lambda function or ECS task
-definition environment, with secrets from Secrets Manager.
+definition environment, with secrets from SSM Parameter Store (SecureString).
 
 | Resource            | Used by                                | Env vars                                                |
 | ------------------- | -------------------------------------- | ------------------------------------------------------- |
@@ -557,8 +558,8 @@ AWS (one region)                                idle cost
 │   └── run-state table (from M2)               ~$0   storage only
 ├── SQS run queue + dead-letter queue           $0    per request
 ├── Bedrock (if configured)                     $0    per token
-├── Secrets Manager (model API keys)            $0.40 per secret per month
-├── SSM Parameter Store (gateway tokens)        $0    standard tier
+├── SSM Parameter Store (secrets, tokens)       $0    standard tier
+├── EventBridge Scheduler (sweeps, 5 min)       $0    free tier
 ├── KMS key                                     $1 per month
 └── ECR, CloudWatch logs and alarms, X-Ray      cents
 ```
@@ -576,8 +577,8 @@ AWS (one region)                                idle cost
 - **Data:** two DynamoDB tables (control plane, run state), on-demand capacity.
 - **Not used:** load balancer, NAT gateway, interface VPC endpoints, RDS, RDS Proxy, always-on EC2.
 - **Model providers:** billed per token, nothing when idle. Non-AWS providers (MiniMax, OpenAI,
-  OpenRouter) are reached over the internet from the public subnet; their API keys are in Secrets
-  Manager. Bedrock, if configured: on-demand, no Provisioned Throughput; enable model access in the
+  OpenRouter) are reached over the internet from the public subnet; their API keys are in SSM
+  Parameter Store. Bedrock, if configured: on-demand, no Provisioned Throughput; enable model access in the
   deploy region first.
 
 ## Repository layout

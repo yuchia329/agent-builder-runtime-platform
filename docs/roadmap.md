@@ -21,7 +21,7 @@ the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a
 tasks in `evals/tasks/` on its real model against a simulated GitHub through the real gateway (ADR
 0016), 3 runs per task, compared with a committed baseline; an LLM judge (trusted at 99-100%
 agreement with 75 labels) grades issue-triage's answers. Baselines: issue-triage 29/30 tasks,
-needs-info 8/8. Next: M6 (AWS deploy), to be planned.
+needs-info 8/8. Next: M6 (AWS deploy), planned below; first task `[infra]` bootstrap.
 
 ## Approach
 
@@ -61,7 +61,7 @@ can run alongside 2 to 5. Start a session with
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
-| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
+| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Planned     |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Not started |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
@@ -334,17 +334,81 @@ Work in this order:
   `evals/tasks/needs-info/`. Check: `make eval SPEC=needs-info` runs with no change to the runner.
   **M5 done.**
 
+## M6 tasks: AWS deploy
+
+The platform of M0 to M4 moves to AWS with no hourly cost while idle (ADR 0007), plus tracing and
+protection; one live triage at the end proves all of it. Decided when planning (2026-11-19):
+
+- Account and region: the AWS CLI profile `default`, `us-east-1`. Never the `prod` profile;
+  credentials stay in `~/.aws`, never in `.env` or Terraform files.
+- Terraform from the user's laptop (`terraform apply`); state in an S3 bucket with Terraform's own
+  lock file (no lock table), made once by `infra/bootstrap/`. One environment, `infra/envs/dev/`.
+  Deploying from GitHub Actions comes later with the CI gate.
+- Every resource carries the tag `project = agent-platform` (provider `default_tags`). Budgets:
+  $10 a month on that tag (the user activates it under Billing, Cost allocation tags; it counts
+  from activation) and $90 a month for the whole account as a safety net (other resources run in
+  it). The first two budgets are free.
+- Secrets in SSM Parameter Store SecureString (free), not Secrets Manager; the run-token key in
+  KMS (signing happens in KMS, the private key never leaves it). Fixed idle cost about $1 a month.
+- Domain: a subdomain of the user's domain in Cloudflare (`api.<your-domain>`); the domain name
+  stays out of the repo (a Terraform variable set locally).
+- One tenant, one user. Multi-tenant use (other people, users and roles) is a later milestone.
+- The control plane's sweeps run from EventBridge Scheduler every 5 minutes (configurable; within
+  the free tiers, so $0 idle, though never completely silent).
+- Tracing (OpenTelemetry to X-Ray: timings, tokens, cost, never issue text or model replies) and
+  protection (API Gateway throttling, a daily model spend alarm) are part of M6 and come before
+  the final live check, so one live run proves everything.
+- First risk to settle: Spring Boot 4.1 on Lambda with SnapStart, and its cold start against
+  Slack's 3-second limit (open question).
+
+Work in this order:
+
+- [ ] `[infra]` bootstrap: `infra/bootstrap/` (state bucket: versioned, encrypted, public access
+  blocked) and `infra/envs/dev/` (provider with profile `default`, `us-east-1`, `default_tags`);
+  the two budgets with email alerts; `infra/AGENTS.md`, `CLAUDE.md` and the Commands table.
+  Check: `terraform plan` clean after apply; both budgets visible; the user has activated the tag.
+- [ ] `[control-plane]` Lambda packaging trial: run the control plane on Lambda (Java 21,
+  SnapStart through a published version or alias) with the adapter the trial picks for Spring Boot
+  4.1; measure cold and warm response times; an entry the scheduler calls for the sweeps
+  (`@Scheduled` stays for local runs). ADR 0017 records the choice. Check: numbers in the ADR;
+  a cold Slack callback answers within 3 s, or the ADR says what is done instead.
+- [ ] `[infra]` data: both DynamoDB tables from their JSON definitions (with TTL), SQS run queue
+  and dead-letter queue, ECR repositories, the KMS signing key (ECC_NIST_P256), SSM parameters
+  (values put by the user, never in Terraform files). Check: apply; tables match the local ones.
+- [ ] `[control-plane]` AWS adapters: run tokens signed with KMS (ES256, JOSE signature from
+  KMS's DER), secrets read from SSM. Check: tests with a fake KMS; a token verifies with the
+  public key and validates against `run-token.schema.json`.
+- [ ] `[tool-gateway]` Lambda entry, SSM `TokenStore` adapter (passes the contract suite),
+  SigV4 `signer` for `HttpControlPlane`, run-token public key from KMS. Check: tests; the
+  gateway answers `/health` on Lambda.
+- [ ] `[worker]` SigV4 `auth` for `GatewayTools` (like `sigv4_signer`); image for Fargate; the
+  model key from SSM through the ECS task definition. Check: tests; image runs locally.
+- [ ] `[infra]` compute: Lambdas (control plane alias with SnapStart, gateway), one HTTP API
+  (public routes: agents API, webhooks, Slack; IAM-authorized routes: `/internal/*`, `/mcp`),
+  custom domain with an ACM certificate validated in Cloudflare (records added by the user),
+  default endpoint off; Fargate service in public subnets (no NAT) scaled 0..N on queue depth;
+  EventBridge Scheduler for the sweeps; least-privilege IAM roles. Check: publish the example
+  spec and run it with the stub model on AWS (like `make demo`) to `SUCCEEDED`; workers back to 0.
+- [ ] `[control-plane]` tracing: OpenTelemetry spans, trace id passed to the run (queue message
+  and run record; if a contract changes, list it under Cross-service changes), Lambda active
+  tracing. Check: tests; spans in X-Ray for a stub run.
+- [ ] `[worker]` tracing: spans per model call, tool call and checkpoint with the attributes in
+  `docs/architecture.md` → Observability; collector container in the Fargate task. Check: a stub
+  run shows one trace across control plane and worker.
+- [ ] `[tool-gateway]` tracing: span per tool call, joined to the worker's trace. Check: the
+  stub run's trace includes the gateway.
+- [ ] `[infra]` protection: route throttling, a daily model spend alarm (cost per run as a metric,
+  email above a limit), log retention. Check: a burst above the limit gets 429; the alarm fires
+  on a test value.
+- [ ] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL and Slack's
+  Request URL moved to the domain (no tunnels); a planted duplicate in the sandbox is labeled
+  and, after Approve in Slack, closed by `<app>[bot]` on AWS; its trace in X-Ray; a day later the
+  project tag's cost shows no hourly charge. **M6 done.**
+
 ## Later milestones (draft)
 
 Rough lists so the path is visible. Each milestone's planning session rewrites its own list.
 
-- **M6 AWS deploy:** `[infra]` Budgets alert and Terraform state first; tables, queue and DLQ;
-  ECR images; control plane on Lambda with SnapStart and the gateway on Lambda behind one API
-  Gateway HTTP API on a custom domain (Cloudflare DNS); workers on Fargate scaled on queue depth
-  from 0; IAM (SigV4) between services (the gateway's `HttpControlPlane` takes a `signer`: plug in
-  SigV4 like the worker's `sigv4_signer`); SSM `TokenStore` adapter and KMS run-token signing;
-  EventBridge Scheduler for the sweeps; OpenTelemetry to X-Ray. Slack's Request URL moves to the
-  real domain (no tunnel). Check: live triage on AWS and no hourly cost while idle.
 - **M7 scale proof:** against the M6 deployment on AWS (cold starts, scaling from 0 and SQS
   exist only there). `[loadtest]` driver (k6 or Locust, open question), stub model with fixed
   latency, 1,000 concurrent runs (queue-to-start p95, runs per minute, worker CPU and memory),

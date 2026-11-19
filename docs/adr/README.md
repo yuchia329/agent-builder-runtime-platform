@@ -31,6 +31,7 @@ Rules:
 | [0016](0016-agent-evals-run-worker-code-in-process.md) | Agent evals run the worker's code in process, against simulated services | Proposed |
 | [0017](0017-control-plane-on-lambda-snapstart.md) | Control plane on Lambda: serverless-java-container, SnapStart with priming, 1769 MB arm64 | Proposed |
 | [0018](0018-secrets-in-ssm-signing-in-kms.md) | Secrets in SSM Parameter Store, run-token signing in KMS, values outside Terraform | Proposed |
+| [0019](0019-gateway-on-lambda-web-adapter.md) | Tool gateway on Lambda through the Lambda Web Adapter | Proposed |
 
 ## Template
 

@@ -77,12 +77,15 @@ class OAuthSettings:
 class Settings:
     run_token_public_key: str
     connectors: tuple[str, ...]
-    token_store: str = "memory"
+    token_store: str = "memory"  # or "ssm" (ADR 0018)
+    token_store_path: str = ""  # TOKEN_STORE_SSM_PATH, for ssm
     host: str = "127.0.0.1"
     port: int = 8090
     contracts_dir: Path = REPO_CONTRACTS
     connectors_dir: Path = CONNECTORS_FOLDER
     control_plane_url: str = ""  # for the approval check; empty: approval tools refused
+    control_plane_sigv4: bool = False  # sign calls to it with SigV4 (AWS, CONTROL_PLANE_SIGV4)
+    region: str = ""  # AWS_REGION, for SigV4
     oauth: OAuthSettings | None = None  # user login for acts_as owner; None: owner runs refused
     # For settings an allowlist names (GITHUB_REPOS, ...); holds secrets, so never shown.
     env: tuple[tuple[str, str], ...] = field(default=(), repr=False)
@@ -92,14 +95,29 @@ class Settings:
         env = dict(os.environ if env is None else env)
         key = env.get("RUN_TOKEN_PUBLIC_KEY", "").strip()
         if not key:
-            raise ValueError("RUN_TOKEN_PUBLIC_KEY is required (the control plane's run token key)")
-        store = env.get("TOKEN_STORE", "memory")
-        if store != "memory":
-            raise ValueError(f"TOKEN_STORE={store!r} is not supported yet (memory; ssm in M6)")
+            raise ValueError(
+                "RUN_TOKEN_PUBLIC_KEY is required (the control plane's run token key; "
+                "on AWS RUN_TOKEN_KMS_KEY_ID)"
+            )
+        store = env.get("TOKEN_STORE", "memory").strip()
+        store_path = env.get("TOKEN_STORE_SSM_PATH", "").strip()
+        if store not in ("memory", "ssm"):
+            raise ValueError(f"TOKEN_STORE must be memory or ssm, not {store!r}")
+        if store == "ssm" and not store_path.startswith("/"):
+            raise ValueError("TOKEN_STORE=ssm needs TOKEN_STORE_SSM_PATH, a path starting with /")
+        sigv4 = env.get("CONTROL_PLANE_SIGV4", "").strip().lower()
+        if sigv4 not in ("", "true", "false"):
+            raise ValueError("CONTROL_PLANE_SIGV4 must be true or false")
+        region = env.get("AWS_REGION", "").strip()
+        if sigv4 == "true" and not region:
+            raise ValueError("CONTROL_PLANE_SIGV4=true needs AWS_REGION")
         return cls(
             run_token_public_key=key,
             connectors=tuple(c.strip() for c in env.get("CONNECTORS", "").split(",") if c.strip()),
             token_store=store,
+            token_store_path=store_path,
+            control_plane_sigv4=sigv4 == "true",
+            region=region,
             host=env.get("GATEWAY_HOST", "127.0.0.1"),
             port=int(env.get("GATEWAY_PORT", "8090")),
             contracts_dir=Path(env.get("CONTRACTS_DIR", str(REPO_CONTRACTS))),

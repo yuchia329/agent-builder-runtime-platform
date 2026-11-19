@@ -19,8 +19,8 @@ def test_defaults_and_connector_list():
     assert (settings.host, settings.port, settings.token_store) == ("127.0.0.1", 8090, "memory")
 
 
-def test_only_the_memory_store_exists_yet():
-    with pytest.raises(ValueError, match="TOKEN_STORE"):
+def test_the_ssm_store_needs_its_path():
+    with pytest.raises(ValueError, match="TOKEN_STORE_SSM_PATH"):
         Settings.from_env({"RUN_TOKEN_PUBLIC_KEY": "k", "TOKEN_STORE": "ssm"})
 
 

@@ -25,7 +25,8 @@ needs-info 8/8. **M6 (AWS deploy) in progress:** Terraform bootstrap applied (st
 budgets); control plane packaged for Lambda (ADR 0017: SnapStart with priming, 1769 MB arm64, a
 cold Slack click in about 2.2 s); dev data applied (tables, run queue, worker ECR, KMS signing key,
 SSM secret parameters; ADR 0018); control plane signs run tokens with KMS and reads secrets from SSM
-(`SECRETS_SOURCE=ssm`); next `[tool-gateway]` Lambda entry.
+(`SECRETS_SOURCE=ssm`); gateway runs on Lambda with the Web Adapter (ADR 0019), SSM `TokenStore`,
+KMS public key, SigV4 to the control plane; next `[worker]` SigV4 and image.
 
 ## Approach
 
@@ -382,7 +383,7 @@ Work in this order:
 - [x] `[control-plane]` AWS adapters: run tokens signed with KMS (ES256, JOSE signature from
   KMS's DER), secrets read from SSM. Check: tests with a fake KMS; a token verifies with the
   public key and validates against `run-token.schema.json`.
-- [ ] `[tool-gateway]` Lambda entry, SSM `TokenStore` adapter (passes the contract suite),
+- [x] `[tool-gateway]` Lambda entry, SSM `TokenStore` adapter (passes the contract suite),
   SigV4 `signer` for `HttpControlPlane`, run-token public key from KMS. Check: tests; the
   gateway answers `/health` on Lambda.
 - [ ] `[worker]` SigV4 `auth` for `GatewayTools` (like `sigv4_signer`); image for Fargate; the
@@ -467,6 +468,30 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-19 · tool-gateway** — M6 task 5. Lambda through the AWS Lambda Web Adapter layer (ADR
+  0019, Proposed): Mangum is out because MCP's `StreamableHTTPSessionManager.run()` works once per
+  instance and Mangum runs the lifespan per invocation. `run.sh` (handler) starts the unchanged
+  uvicorn app; `scripts/lambda_zip.py` builds a 27.7 MB zip (arm64 manylinux 2.34 wheels,
+  `gateway`, `connectors/`, contract schemas). Trial on AWS (`scripts/lambda_trial.py`, all
+  deleted): cold `/health` 3.4 s init, `/mcp` without token 401, `initialize` with a token signed
+  by the dev KMS key 200 in 17 ms, warm 2 ms, 152 MB used. `adapters/token_store_ssm.py`: one
+  SecureString per credential at `<path>/<tenant>/<identity>/<provider>`, bytes outside
+  `A-Z a-z 0-9 . -` as `_XX` (so `user:42` is `user_3A42`), 4 KB max, no cache (refresh tokens
+  rotate); passes the contract suite under moto. `aws.aws_env` at startup: `RUN_TOKEN_KMS_KEY_ID`
+  to the public key, `SECRETS_SSM_PATH` to the OAuth secrets; `CONTROL_PLANE_SIGV4=true` signs
+  internal calls. `scripts/put_app_credential.py` writes the GitHub App credential from `.env`.
+  249 tests pass. Gotchas: moto's KMS `GetPublicKey` has only `CustomerMasterKeySpec`; boto3 is
+  now a runtime dependency (local stack image unchecked). For `[infra]` compute: layer
+  `arn:aws:lambda:us-east-1:753240598075:layer:LambdaAdapterLayerArm64:30`, handler `run.sh`,
+  python3.12, arm64, about 512 MB is enough; env `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`,
+  `AWS_LWA_READINESS_CHECK_PATH=/health`, `RUN_TOKEN_KMS_KEY_ID`, `TOKEN_STORE=ssm`,
+  `TOKEN_STORE_SSM_PATH=/agent-platform/dev/gateway/tokens`,
+  `SECRETS_SSM_PATH=/agent-platform/dev/gateway`, `CONTROL_PLANE_URL`, `CONTROL_PLANE_SIGV4=true`,
+  `CONNECTORS`, `GITHUB_REPOS`, `GITHUB_OAUTH_CLIENT_ID`, `GATEWAY_PUBLIC_URL`; role
+  `ssm:GetParameter/PutParameter/DeleteParameter` on `.../gateway/tokens/*`, `ssm:GetParameters` on
+  the two gateway secrets, `kms:GetPublicKey`, `execute-api:Invoke` on `/internal/*`. Before go
+  live: `put_app_credential.py`. API Gateway's 30 s cap is below the worker's 60 s tool timeout.
+  Next: `[worker]` SigV4 `auth` for `GatewayTools`, Fargate image.
 - **2026-11-19 · control-plane** — M6 task 4. Two new ports with contract suites. `token/RunTokenSigner`:
   `LocalKeySigner` (the env key pair, unchanged behavior) and `KmsRunTokenSigner`
   (`RUN_TOKEN_KMS_KEY_ID`; signs the SHA-256 digest, DER transcoded to JOSE, public key read once

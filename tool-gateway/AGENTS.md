@@ -18,6 +18,9 @@ Run from `tool-gateway/`.
 | Owner login (acts_as owner) | add `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET` to `../.env` (`.env.example`); the App's redirect URI is `http://localhost:8090/oauth/github/callback`; an owner run's tool error gives the link to open; logins are lost on restart (memory store) |
 | Point a connector at a simulator | `CONNECTOR_<NAME>_BASE_URL=http://127.0.0.1:<port>` (evals and tests; loopback only; startup logs it) |
 | Stop a background gateway | `kill $(lsof -ti :8090)` (not `pkill -f gateway`: it matches the shell too) |
+| Lambda zip | `uv run python scripts/lambda_zip.py` (`build/gateway-lambda.zip`, arm64 wheels; ADR 0019) |
+| Lambda trial (AWS, ~2 min, ~$0) | `uv run python scripts/lambda_trial.py` (throwaway function with the Web Adapter layer: `/health`, 401, `initialize` with a KMS-signed token; deletes everything; profile `default`) |
+| GitHub App credential into SSM (AWS) | `uv run python scripts/put_app_credential.py --status`, then without `--status` (from `../.env`; never prints the key) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
 | Re-cut a connector's openapi.yaml | see the docstring of `scripts/cut_openapi.py` (download to its own folder, run with `python -I`) |
@@ -56,6 +59,11 @@ Run from `tool-gateway/`.
 - `tests/fake_control_plane.py`: answers `GET /internal/runs/{id}` from runs put with `put`;
   `fail_next`, `garbage`.
 - `contracts.py` loads every `../contracts/*.schema.json` together (`CONTRACTS_DIR` to move).
+- AWS (ADR 0018, 0019): `aws.py` (`aws_env` fills the environment from KMS and SSM before
+  `Settings.from_env`; `sigv4_signer`), `adapters/token_store_ssm.py`, `run.sh` (Lambda handler,
+  run by the Web Adapter layer), `scripts/lambda_zip.py`, `scripts/lambda_trial.py`,
+  `scripts/put_app_credential.py`. `tests/test_aws.py` and the SSM store's contract run against
+  moto (AWS imitated in process; no network).
 - `tests/gateway_testing.py`: keys, signed tokens, `LiveGateway` (the real app on a free port in a
   thread), `mcp_client` (the SDK's client with a bearer header). `tests/contract/`: one suite per
   port, parametrized over adapters.
@@ -105,3 +113,11 @@ Run from `tool-gateway/`.
   override receives the connector's credentials.
 - `Settings` fields holding secrets use `field(repr=False)`; `Settings.env` holds the whole
   environment and is hidden too.
+- AWS lookups happen only in `aws.aws_env` at startup, and only when their setting is given;
+  `Settings.from_env` stays pure. A new gateway secret: add it to `aws.SECRET_PARAMETERS` and to
+  `infra/envs/dev/ssm.tf`.
+- The SSM `TokenStore` never caches: another Lambda environment may have rotated a refresh token.
+  Values stay under 4 KB (standard tier); errors name the parameter, never the value.
+- moto tests set fake `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (monkeypatch) and build
+  clients inside `mock_aws()`. moto's KMS `GetPublicKey` answers only `CustomerMasterKeySpec`
+  (real KMS answers `KeySpec` too); `aws.kms_public_key` accepts either.

@@ -1,14 +1,18 @@
 """`uv run gateway`: serve the tool gateway with the connectors in CONNECTORS."""
 
 import logging
+import os
 
+import boto3
 import uvicorn
 
 from gateway.adapters.control_plane_http import HttpControlPlane
 from gateway.adapters.token_store_memory import MemoryTokenStore
+from gateway.adapters.token_store_ssm import SsmTokenStore
 from gateway.app import create_app
 from gateway.approvals import ApprovalCheck
 from gateway.auth.run_token import RunTokenVerifier
+from gateway.aws import aws_env, default_signer
 from gateway.config import Settings, connector_base_url
 from gateway.connectors.fake import FakeConnector
 from gateway.contracts import Contracts
@@ -53,6 +57,9 @@ def connectors(settings: Settings, contracts: Contracts, credentials: Credential
 
 def build(settings: Settings, store: TokenStore | None = None):
     contracts = Contracts(settings.contracts_dir)
+    if store is None and settings.token_store == "ssm":
+        store = SsmTokenStore(boto3.client("ssm"), settings.token_store_path)
+        log.info("Credentials in SSM under %s", settings.token_store_path)
     if store is None:
         store = MemoryTokenStore()
         for seeded in seed_from_env(store, dict(settings.env)):
@@ -68,7 +75,8 @@ def build(settings: Settings, store: TokenStore | None = None):
         verifier.key_id,
     )
     if settings.control_plane_url:
-        approvals = ApprovalCheck(HttpControlPlane(settings.control_plane_url))
+        signer = default_signer(settings.region) if settings.control_plane_sigv4 else None
+        approvals = ApprovalCheck(HttpControlPlane(settings.control_plane_url, signer=signer))
     else:
         approvals = ApprovalCheck(None)
         log.warning("CONTROL_PLANE_URL is not set: tools that need approval will be refused")
@@ -106,7 +114,7 @@ class HideLoginQueries(logging.Filter):
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     logging.getLogger("uvicorn.access").addFilter(HideLoginQueries())
-    settings = Settings.from_env()
+    settings = Settings.from_env(aws_env(dict(os.environ)))
     uvicorn.run(build(settings), host=settings.host, port=settings.port, log_level="info")
 
 

@@ -434,7 +434,16 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   (read first: pull requests refused, an already closed issue left as it is).
 - Runs on Lambda behind the shared API Gateway. `/mcp` requires IAM authorization (SigV4) and a
   valid run token. MCP uses stateless Streamable HTTP with JSON responses, so nothing depends on a
-  warm instance. The `/oauth/` routes are public (a browser calls them) and keep no state.
+  warm instance. The `/oauth/` routes are public (a browser calls them) and keep no state. The
+  unchanged uvicorn app runs under the Lambda Web Adapter layer
+  ([ADR 0019](adr/0019-gateway-on-lambda-web-adapter.md)): a zip (`scripts/lambda_zip.py`,
+  python3.12, arm64), handler `run.sh`, readiness `/health`; a cold start takes about 3.5 s.
+- On AWS (ADR 0018), startup reads the run-token public key from KMS (`RUN_TOKEN_KMS_KEY_ID`) and
+  the OAuth secrets from SSM (`SECRETS_SSM_PATH`); the `TokenStore` is SSM SecureString, one
+  parameter per credential at `<TOKEN_STORE_SSM_PATH>/<tenant>/<identity>/<provider>` (characters
+  outside `A-Z a-z 0-9 . -` escaped as `_XX`; at most 4 KB; read on every call, never cached, since
+  GitHub replaces refresh tokens). An operator puts the GitHub App credential with
+  `scripts/put_app_credential.py`.
 - Every `/mcp` request (`initialize` and `tools/list` too) needs a valid run token: ES256, `kid`
   equal to the configured public key's thumbprint, issuer, audience, expiry and issue time within
   30 s, claims valid against the contract. Otherwise HTTP 401 with a JSON-RPC error and no detail.
@@ -513,7 +522,8 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys) |
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
-| Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`, `KMS_KEY_ID`                 |
+| Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`; ssm: `TOKEN_STORE_SSM_PATH` (`/agent-platform/dev/gateway/tokens`) |
+| Gateway on AWS      | gateway                                | `RUN_TOKEN_KMS_KEY_ID` (instead of `RUN_TOKEN_PUBLIC_KEY`), `SECRETS_SSM_PATH` (`/agent-platform/dev/gateway`: `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`), `CONTROL_PLANE_SIGV4=true` with `AWS_REGION`; Lambda: `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`, `AWS_LWA_READINESS_CHECK_PATH=/health` |
 | GitHub App (local)  | gateway                                | With `TOKEN_STORE=memory`, all or none: `TENANT_ID`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_FILE` (path to the `.pem`, kept outside the repo); stored as the tenant's team-bot at startup. On AWS the `TokenStore` is written by an operator |
 | Owner login         | gateway                                | All three or none: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` (secret), `OAUTH_STATE_SECRET` (secret, 32+ characters); `GATEWAY_PUBLIC_URL` (default `http://localhost:8090`, where browsers reach the gateway). Unset: owner runs refused (ADR 0015) |
 | Gateway             | gateway                                | `CONNECTORS` (comma list: `fake`, `github` from M4), `GATEWAY_HOST` (default 127.0.0.1), `GATEWAY_PORT` (default 8090), `CONTRACTS_DIR` (default `../contracts`) |
@@ -569,7 +579,7 @@ AWS (one region)                                idle cost
 │   └── custom domain api.<domain>  ◄── CNAME in Cloudflare
 ├── Lambda (not in a VPC)
 │   ├── control-plane   Java 21 + SnapStart     $0    per request
-│   └── tool-gateway    Python (from M4)        $0    per request
+│   └── tool-gateway    Python + Web Adapter    $0    per request
 ├── ECS Fargate (public subnet, no NAT)
 │   └── worker service, 0..N tasks              $0 at 0 tasks, per second while running
 ├── DynamoDB on-demand
@@ -591,7 +601,8 @@ AWS (one region)                                idle cost
   published version (SnapStart only applies to those; each publish waits about 85 s for the
   snapshot). Code: the `lambdaZip` zip, handler `LambdaHandler::handleRequest`. EventBridge
   Scheduler invokes the same function with `{"sweep": "all"}` every 5 minutes. Not in a VPC.
-- **Tool gateway:** Lambda, Python, behind the same HTTP API. Not in a VPC.
+- **Tool gateway:** Lambda, Python 3.12, arm64, with the Lambda Web Adapter layer (ADR 0019),
+  behind the same HTTP API. Not in a VPC.
 - **Workers:** one ECS Fargate service, scaled on SQS queue depth, 0 tasks when idle. Public
   subnets with a public IP, no NAT gateway. Scaling from 0 takes a minute or more; a Lambda
   entrypoint can be added later if that is too slow.

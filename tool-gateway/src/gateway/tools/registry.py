@@ -12,6 +12,15 @@ class ToolFailure(Exception):
     in the message."""
 
 
+class ApiError(ToolFailure):
+    """The outside API answered with a client error (`status`); hooks may turn it into a clearer
+    message (a 404 into "#n does not exist")."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 @dataclass(frozen=True)
 class CallContext:
     claims: RunClaims
@@ -28,6 +37,8 @@ class Tool:
     read_only: bool = False
     idempotent: bool = False
     destructive: bool = False
+    # Extra description text for one run, computed at tools/list (may call the API); None = none.
+    describe: Callable[[RunClaims], str | None] | None = None
 
 
 class Connector(Protocol):

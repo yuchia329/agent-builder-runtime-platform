@@ -13,10 +13,11 @@ from typing import Any
 
 import httpx2
 
+from gateway.auth.run_token import RunClaims
 from gateway.credentials import Credentials
 from gateway.tools import rules
 from gateway.tools.openapi_to_mcp import ConnectorDefinition, Operation, ToolDefinition
-from gateway.tools.registry import CallContext, Tool, ToolFailure
+from gateway.tools.registry import ApiError, CallContext, Tool, ToolFailure
 
 ATTEMPTS = 3
 TIMEOUT_SECONDS = 10.0
@@ -32,6 +33,17 @@ class HookCall:
     context: CallContext
     send: Callable[[dict[str, Any]], Any]
     operation: Callable[[str, dict[str, Any]], Any]
+    settings: dict[str, list[str]]
+
+
+@dataclass
+class DescribeCall:
+    """What a hook's `describe` gets at tools/list: the settings and the declared hook operations,
+    with the run's credential. It returns extra description text, or None."""
+
+    claims: RunClaims
+    operation: Callable[[str, dict[str, Any]], Any]
+    settings: dict[str, list[str]]
 
 
 class ConnectorClient:
@@ -59,9 +71,33 @@ class ConnectorClient:
                 read_only=d.read_only,
                 idempotent=d.idempotent,
                 destructive=d.destructive,
+                describe=self._describer(d),
             )
             for d in self.connector.tools.values()
         ]
+
+    def _describer(self, tool: ToolDefinition) -> Callable[[RunClaims], str | None] | None:
+        describe = getattr(tool.hook, "describe", None)
+        if describe is None:
+            return None
+
+        def run(claims: RunClaims) -> str | None:
+            headers = self._credentials.headers(
+                self.connector.name, self.connector.credentials, claims
+            )
+            return describe(
+                DescribeCall(claims, self._hook_operation(headers), self.connector.settings)
+            )
+
+        return run
+
+    def _hook_operation(self, headers: dict[str, str]) -> Callable[[str, dict[str, Any]], Any]:
+        def operation(operation_id: str, values: dict[str, Any]) -> Any:
+            if operation_id not in self.connector.hook_operations:
+                raise ToolFailure(f"Operation {operation_id} is not allowed for hooks")
+            return self._request(self.connector.operations[operation_id], values, headers)
+
+        return operation
 
     @property
     def name(self) -> str:
@@ -86,13 +122,11 @@ class ConnectorClient:
         def send(values: dict[str, Any]) -> Any:
             return self._request(tool.operation, {**tool.fixed, **values}, headers)
 
-        def operation(operation_id: str, values: dict[str, Any]) -> Any:
-            if operation_id not in self.connector.hook_operations:
-                raise ToolFailure(f"Operation {operation_id} is not allowed for hooks")
-            return self._request(self.connector.operations[operation_id], values, headers)
-
         if tool.hook is not None:
-            response = tool.hook(HookCall(api_args, hook_args, context, send, operation))
+            call = HookCall(
+                api_args, hook_args, context, send, self._hook_operation(headers), settings
+            )
+            response = tool.hook(call)
         else:
             response = send(api_args)
         return rules.shape_result(response, tool.result)
@@ -137,7 +171,8 @@ class ConnectorClient:
             ):
                 raise ToolFailure(f"{name} rate limit reached; try again later")
             if response.status_code >= 400:
-                raise ToolFailure(f"{name} answered {response.status_code}: {_message(response)}")
+                status = response.status_code
+                raise ApiError(f"{name} answered {status}: {_message(response)}", status)
             return response.json() if response.content else {}
         raise AssertionError("unreachable")
 

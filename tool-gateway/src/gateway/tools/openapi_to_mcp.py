@@ -7,6 +7,7 @@ connector fails startup, never a call.
 """
 
 import copy
+import importlib.util
 import re
 import string
 from collections.abc import Callable, Mapping
@@ -79,6 +80,7 @@ def load_connector(
     env: Mapping[str, str],
     hooks: Mapping[str, Callable] | None = None,
 ) -> ConnectorDefinition:
+    """`hooks` defaults to `HOOKS` from the folder's hooks.py (none if it has no hooks.py)."""
     allowlist = _yaml(folder / "allowlist.yaml")
     errors = contracts.errors("connector-allowlist", allowlist)
     if errors:
@@ -86,7 +88,7 @@ def load_connector(
     spec = _yaml(folder / "openapi.yaml")
     all_operations = _operations(spec)
     name = allowlist["connector"]
-    hooks = hooks or {}
+    hooks = load_hooks(folder) if hooks is None else hooks
 
     hook_operations = frozenset(allowlist.get("hook_operations", []))
     missing = sorted(hook_operations - set(all_operations))
@@ -317,6 +319,17 @@ def _clean(spec: dict[str, Any], schema: Any, depth: int = 0) -> Any:
         elif key not in OPENAPI_ONLY:
             cleaned[key] = _clean(spec, value, depth + 1)
     return cleaned
+
+
+def load_hooks(folder: Path) -> dict[str, Callable]:
+    """`HOOKS` from the connector folder's hooks.py, if it has one (ADR 0014)."""
+    path = folder / "hooks.py"
+    if not path.is_file():
+        return {}
+    spec = importlib.util.spec_from_file_location(f"gateway_hooks_{folder.name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return dict(getattr(module, "HOOKS", {}))
 
 
 def _yaml(path: Path) -> Any:

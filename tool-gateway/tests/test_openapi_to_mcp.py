@@ -8,7 +8,7 @@ import yaml
 from gateway_testing import CONTRACTS
 
 from gateway.config import CONNECTORS_FOLDER
-from gateway.tools.openapi_to_mcp import ConnectorError, load_connector
+from gateway.tools.openapi_to_mcp import ConnectorError, load_connector, load_hooks
 
 GITHUB = CONNECTORS_FOLDER / "github"
 ENV = {"GITHUB_REPOS": "octocat/Hello-World"}
@@ -140,7 +140,7 @@ def test_bad_connector_fails_at_load(tmp_path, change, message):
     folder = copy_github(tmp_path, change)
 
     with pytest.raises(ConnectorError, match=message):
-        load_connector(folder, CONTRACTS, ENV, {"h": lambda call: None})
+        load_connector(folder, CONTRACTS, ENV, load_hooks(folder) | {"h": lambda call: None})
 
 
 def test_missing_setting_fails_at_load():

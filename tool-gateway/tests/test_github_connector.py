@@ -24,7 +24,9 @@ ENV = {"GITHUB_REPOS": f"{REPO},octocat/Other"}
 def github():
     with FakeGitHub() as server:
         server.on("GET", "/search/issues", fixture("search_issues"))
+        server.on("GET", f"/repos/{REPO}/labels", fixture("labels"))
         server.on("POST", LABELS, fixture("add_labels"))
+        server.on("GET", ISSUE, fixture("issue"))
         server.on("PATCH", ISSUE, fixture("issue_closed"))
         yield server
 
@@ -98,7 +100,7 @@ def test_search_result_keeps_only_the_listed_fields(github):
 def test_add_label_sends_githubs_own_body_and_lists_label_names(github):
     result = add_label(github)
 
-    request = github.requests[0]
+    request = github.requests[-1]  # after the hook listed the labels
     assert (request.method, request.path) == ("POST", LABELS)
     assert request.body == {"labels": ["bug"]}
     assert result == {"items": [{"name": label["name"]} for label in fixture("add_labels")]}
@@ -112,25 +114,28 @@ def test_other_repos_are_refused_before_any_request(github, owner, repo):
 
 
 def test_repo_check_ignores_case(github):
+    github.on("GET", "/repos/OctoCat/hello-world/labels", fixture("labels"))
     github.on("POST", "/repos/OctoCat/hello-world/issues/1/labels", fixture("add_labels"))
     add_label(github, "OctoCat", "hello-world")
 
-    assert github.requests[0].path == "/repos/OctoCat/hello-world/issues/1/labels"
+    assert github.requests[-1].path == "/repos/OctoCat/hello-world/issues/1/labels"
 
 
 def test_close_sends_the_fixed_state_and_the_reason(github):
     args = {"owner": OWNER, "repo": NAME, "issue_number": 7, "state_reason": "completed"}
     result = call(github, "github.close_issue", args)
 
-    request = github.requests[0]
+    request = github.requests[-1]  # after the hook read the issue
     assert (request.method, request.path) == ("PATCH", ISSUE)
     assert request.body == {"state": "closed", "state_reason": "completed"}
     recorded = fixture("issue_closed")
     assert result == {
-        "number": recorded["number"],
+        "issue_number": recorded["number"],
         "state": "closed",
         "state_reason": recorded["state_reason"],
+        "already_closed": False,
         "url": recorded["html_url"],
+        "duplicate_of": None,
     }
 
 

@@ -40,11 +40,13 @@ def build_server(registry: Registry, contracts: Contracts) -> Server:
 
     async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None):
         claims = _claims(ctx)
+        allowed = registry.allowed(claims)
+        descriptions = [await _description(tool, claims) for tool in allowed]
         return ListToolsResult(
             tools=[
                 McpTool(
                     name=tool.name,
-                    description=tool.description,
+                    description=description,
                     input_schema=tool.input_schema,
                     annotations=ToolAnnotations(
                         read_only_hint=tool.read_only,
@@ -52,7 +54,7 @@ def build_server(registry: Registry, contracts: Contracts) -> Server:
                         destructive_hint=tool.destructive,
                     ),
                 )
-                for tool in registry.allowed(claims)
+                for tool, description in zip(allowed, descriptions, strict=True)
             ]
         )
 
@@ -109,6 +111,24 @@ def build_server(registry: Registry, contracts: Contracts) -> Server:
         )
 
     return Server("tool-gateway", on_list_tools=list_tools, on_call_tool=call_tool)
+
+
+async def _description(tool, claims: RunClaims) -> str:
+    """The tool's description plus what its hook adds for this run. Listing never fails because
+    of the outside API: on any error the plain description is used."""
+    if tool.describe is None:
+        return tool.description
+    try:
+        extra = await anyio.to_thread.run_sync(tool.describe, claims)
+    except Exception as e:  # ToolFailure (no credential, API down) or a bug in a hook
+        log.warning(
+            "Description of %s for run %s not extended: %s",
+            tool.name,
+            claims.run_id,
+            type(e).__name__,
+        )
+        return tool.description
+    return f"{tool.description}\n\n{extra}" if extra else tool.description
 
 
 def _claims(ctx: ServerRequestContext) -> RunClaims:

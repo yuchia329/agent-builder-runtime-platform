@@ -1,5 +1,6 @@
 # GitHub connector (ADR 0014; format: contracts/connector-allowlist.schema.json).
-# Operations come from openapi.yaml (cut from GitHub's official description). Hooks: M4 task 5.
+# Operations come from openapi.yaml (cut from GitHub's official description); checks the rules
+# cannot express are hooks in hooks.py.
 connector: github
 base_url: https://api.github.com
 headers:
@@ -30,9 +31,12 @@ tools:
       list: items
       fields: { number: number, title: title, state: state, labels: "labels[].name", url: html_url }
     annotations: { readOnlyHint: true, idempotentHint: true }
+    hook: search_results_in_allowed_repos
   github.add_label:
     operation: issues/add-labels
-    description: Add one existing label to an issue. Returns the issue's labels.
+    description: >-
+      Add one existing label to an issue (labels holds exactly one name). Returns the issue's
+      labels.
     arguments:
       owner: {}
       repo: {}
@@ -46,12 +50,14 @@ tools:
     result:
       list: "."
       fields: { name: name }
-    annotations: { readOnlyHint: false, idempotentHint: true }
+    annotations: { readOnlyHint: false, idempotentHint: true }  # adding an existing label changes nothing
+    hook: existing_labels_only
   github.close_issue:
     operation: issues/update
     description: >-
       Close an issue. state_reason: completed (fixed or done), not_planned (won't do) or
-      duplicate.
+      duplicate (then give duplicate_of, the number of the original issue in the same
+      repository). Closing an issue that is already closed changes nothing.
     arguments:
       owner: {}
       repo: {}
@@ -64,5 +70,17 @@ tools:
         ignore_case: true
         message: "Repository '{value}' is not allowed."
     result:
-      fields: { number: number, state: state, state_reason: state_reason, url: html_url }
-    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true }
+      fields:
+        issue_number: number
+        state: state
+        state_reason: state_reason
+        already_closed: already_closed
+        url: html_url
+        duplicate_of: duplicate_of
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true }  # a closed issue is reported, not re-closed
+    hook: close_issue_checks
+    hook_arguments:
+      duplicate_of:
+        type: integer
+        minimum: 1
+        description: Number of the original issue in the same repository (state_reason duplicate only).

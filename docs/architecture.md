@@ -380,6 +380,9 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   `idempotent`), and an optional `hook`: a function in `connectors/<name>/hooks.py` for checks that
   need extra calls (GitHub: existing labels only, close reads the issue first, `duplicate_of` to
   issue id). Rules run first; a hook cannot widen them.
+- A hook may also add text to its tool's description at `tools/list`, using the run's credential
+  (GitHub: the existing labels of each allowed repo). If that fails, the plain description is
+  listed; listing never fails because of it.
 - Generation, at startup: the allowlist must follow the contract; tool names carry the connector
   prefix; operations, listed and fixed arguments, check templates, hooks and hook operations must
   exist; enum rules may only narrow the API's. Each tool's input schema is the operation's schema

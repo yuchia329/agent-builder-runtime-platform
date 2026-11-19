@@ -1,9 +1,6 @@
 """`uv run gateway`: serve the tool gateway with the connectors in CONNECTORS."""
 
-import importlib.util
 import logging
-from collections.abc import Callable
-from pathlib import Path
 
 import uvicorn
 
@@ -22,17 +19,6 @@ from gateway.tools.registry import Registry
 log = logging.getLogger("gateway")
 
 
-def load_hooks(folder: Path) -> dict[str, Callable]:
-    """`HOOKS` from the connector folder's hooks.py, if it has one (ADR 0014)."""
-    path = folder / "hooks.py"
-    if not path.is_file():
-        return {}
-    spec = importlib.util.spec_from_file_location(f"gateway_hooks_{folder.name}", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return dict(getattr(module, "HOOKS", {}))
-
-
 def connectors(settings: Settings, contracts: Contracts, store: TokenStore) -> list:
     loaded = []
     for name in settings.connectors:
@@ -42,7 +28,7 @@ def connectors(settings: Settings, contracts: Contracts, store: TokenStore) -> l
         folder = settings.connectors_dir / name
         if not (folder / "allowlist.yaml").is_file():
             raise ConnectorError(f"Unknown connector in CONNECTORS: {name} (no {folder})")
-        definition = load_connector(folder, contracts, dict(settings.env), load_hooks(folder))
+        definition = load_connector(folder, contracts, dict(settings.env))
         loaded.append(ConnectorClient(definition, Credentials(store)))
     return loaded
 

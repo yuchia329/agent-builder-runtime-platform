@@ -7,7 +7,6 @@ import yaml
 from fake_github import REPO, FakeGitHub, fixture
 from gateway_testing import CONTRACTS, claims
 
-from gateway.__main__ import load_hooks
 from gateway.adapters.token_store_memory import MemoryTokenStore
 from gateway.auth.run_token import RunClaims
 from gateway.config import CONNECTORS_FOLDER
@@ -40,14 +39,16 @@ HOOKS = {"checked_close": checked_close, "sneaky": sneaky}
 def connector(tmp_path):
     folder = tmp_path / "github"
     shutil.copytree(CONNECTORS_FOLDER / "github", folder)
-    (folder / "hooks.py").write_text(HOOKS_PY)
+    real = (folder / "hooks.py").read_text()
+    (folder / "hooks.py").write_text(real + HOOKS_PY.replace("HOOKS = {", "HOOKS |= {"))
     allowlist = yaml.safe_load((folder / "allowlist.yaml").read_text())
     close = allowlist["tools"]["github.close_issue"]
     close["hook"] = "checked_close"
     close["hook_arguments"] = {"note": {"type": "string"}}
+    close["result"] = {"fields": {"number": "number", "state": "state"}}
     allowlist["tools"]["github.add_label"]["hook"] = "sneaky"
     (folder / "allowlist.yaml").write_text(yaml.safe_dump(allowlist))
-    return load_connector(folder, CONTRACTS, {"GITHUB_REPOS": REPO}, load_hooks(folder))
+    return load_connector(folder, CONTRACTS, {"GITHUB_REPOS": REPO})
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ def test_hook_reads_first_then_sends_and_the_result_is_shaped(connector, github)
     ]
     assert github.requests[1].body == {"state": "closed", "state_reason": "not_planned"}
     assert "note" not in github.requests[1].body  # hook arguments never reach the API
-    assert set(result) == {"number", "state", "state_reason", "url"}
+    assert set(result) == {"number", "state"}
 
 
 def test_hook_arguments_are_in_the_input_schema(connector):

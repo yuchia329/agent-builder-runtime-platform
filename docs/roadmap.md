@@ -296,7 +296,7 @@ Work in this order:
   declarative rules: allowed repos, search scope (`repo:` added, `repo:`/`org:`/`user:` refused),
   enum limits, result fields kept (no issue bodies). Check: unit tests with recorded GitHub
   responses for each rule.
-- [ ] `[tool-gateway]` GitHub hooks (ADR 0014): existing labels only (listed in the tool
+- [x] `[tool-gateway]` GitHub hooks (ADR 0014): existing labels only (listed in the tool
   description, checked on the call), `close_issue` reads first (pull requests refused, an
   already closed issue not closed again), `duplicate_of` looked up to the issue id (same repo,
   not itself); retries, rate limits and error messages without the token, as in `tools_local.py`.
@@ -401,6 +401,20 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · tool-gateway** — M4 task 5: `connectors/github/hooks.py` with three hooks:
+  `search_results_in_allowed_repos` (drops results outside `GITHUB_REPOS`, a second guard after
+  the `repo:` qualifiers), `existing_labels_only` (exactly one string label; unknown name fails
+  listing the existing ones; `describe` adds each allowed repo's labels to the tool description at
+  `tools/list`, plain description kept if GitHub fails), `close_issue_checks` (reads first: pull
+  requests refused, missing issue named, already closed returns `already_closed: true` without a
+  second PATCH; `duplicate_of` only with `state_reason: duplicate`, not itself, turned into the
+  original's issue id). Executor: `ApiError(status)` for 4xx, `HookCall.settings`, `DescribeCall`;
+  `load_hooks` moved to `openapi_to_mcp`. `tests/test_github_parity.py` maps all 25
+  `test_tools_local.py` tests to gateway tests. 114 gateway tests pass; no live GitHub call yet.
+  Next: `[tool-gateway]` team bot as a GitHub App (M4 task 6; the user creates and installs the
+  App first). Gotchas: the label description costs one GitHub call per allowed repo on every
+  `tools/list`; add a worker test to `test_tools_local.py` and the parity map must follow.
 
 - **2026-11-18 · tool-gateway** — M4 task 4: generator `tools/openapi_to_mcp.py` (allowlist checked
   against the contract plus 12 load-time rules, input schemas from the operation's own parameters

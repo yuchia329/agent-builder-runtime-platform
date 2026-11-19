@@ -32,7 +32,7 @@ Run from `tool-gateway/`.
   functions), `tools/executor.py` (`ConnectorClient`: one per generated connector, `HookCall`),
   `credentials.py` (which stored credential a call uses).
 - `../connectors/<name>/`: `openapi.yaml` (cut, never edited by hand), `allowlist.yaml`, optional
-  `hooks.py` with a `HOOKS` dict (loaded by `__main__.load_hooks`).
+  `hooks.py` with a `HOOKS` dict (loaded by `openapi_to_mcp.load_hooks`).
 - `ports/` (`Protocol` only) and `adapters/`; `src/gateway/connectors/fake.py` (in code, a test
   double).
 - `tests/fake_github.py` + `tests/fixtures/github/`: recorded GitHub bodies copied from the
@@ -64,8 +64,14 @@ Run from `tool-gateway/`.
 - Every load-time rule the contract cannot express gets a case in
   `tests/test_openapi_to_mcp.py::BREAKS`.
 - Hooks get a `HookCall`: arguments after rules, `hook_arguments`, `send` (the tool's own request)
-  and `operation` (only `hook_operations`); they return the raw API response, and the result shape
-  is applied after. Model-readable failures raise `ToolFailure`.
+  and `operation` (only `hook_operations`), and `settings`; they return the raw API response, and
+  the result shape is applied after. Model-readable failures raise `ToolFailure`; catch
+  `ApiError` to act on a status (404 to "does not exist").
+- A hook function may carry a `describe` attribute (`DescribeCall`: claims, operation, settings)
+  returning text added to the tool description at `tools/list`. It must be safe to fail:
+  `app.py` logs and lists the plain description.
+- `tests/test_github_parity.py` maps every test in `worker/tests/unit/test_tools_local.py` to a
+  gateway test; a new worker test needs a map entry and a gateway equivalent.
 - Recorded fixtures are cleaned like the worker's (owner/repo `octocat/Hello-World`, no users,
   avatars, node ids or bodies); check with `grep -ri <your-login> tests/fixtures` before
   committing a new recording.

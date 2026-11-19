@@ -169,3 +169,26 @@ async def test_generated_github_tools_work_through_mcp(keys):
         "labels",
         "url",
     }
+
+
+async def test_listing_keeps_plain_descriptions_when_github_fails(keys):
+    from fake_github import REPO, FakeGitHub
+    from gateway_testing import CONTRACTS, LiveGateway
+
+    from gateway.adapters.token_store_memory import MemoryTokenStore
+    from gateway.config import CONNECTORS_FOLDER
+    from gateway.credentials import Credentials
+    from gateway.ports.token_store import CredentialKey
+    from gateway.tools.executor import ConnectorClient
+    from gateway.tools.openapi_to_mcp import load_connector
+
+    store = MemoryTokenStore()
+    store.put(CredentialKey("tenant-test", "team-bot", "github"), {"token": "t"})
+    definition = load_connector(CONNECTORS_FOLDER / "github", CONTRACTS, {"GITHUB_REPOS": REPO})
+    with FakeGitHub() as github:  # no labels route: the listing call gets 404
+        connector = ConnectorClient(definition, Credentials(store), base_url=github.url)
+        with LiveGateway(keys, connector) as gateway:
+            async with mcp_client(gateway, token(keys)) as client:
+                tools = {t.name: t for t in (await client.list_tools()).tools}
+
+    assert tools["github.add_label"].description == definition.tools["github.add_label"].description

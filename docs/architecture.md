@@ -519,11 +519,15 @@ the spec as `<provider>/<model id>`; config only defines the providers
 - **Smoke test:** `make up && make demo` runs the whole platform in Docker (control plane, tool
   gateway with the fake connector, worker) and one run of the example spec to `SUCCEEDED` with
   the stub model, its tool calls through the gateway with a locally generated run-token key pair.
-- **Evals** (`evals/`): each task is a trigger event, recorded tool responses, and success checks.
-  Deterministic checks first (right labels, duplicate found, nothing closed without approval); an
-  LLM judge only for free-text quality, checked against about 50 hand labels. GitHub Actions runs
-  the suite on every PR that changes a spec or prompt and fails it if success drops more than 2
-  points versus `main`. Start with about 30 tasks, grow toward 120 by mining failed runs.
+- **Evals** (`evals/`): measure an agent's decisions, not the platform. One harness serves every
+  spec: an agent's tasks (`tasks/<spec name>/`) give the trigger event, the starting state of the
+  outside world, and checks (tools called or not, end state, output, budget, an LLM judge on free
+  text against the author's rubric, checked against about 50 hand labels). `make eval` runs on the
+  host in one process: the worker's `handle_run` with in-memory adapters and the spec's real
+  model, tools through the real gateway pointed at simulated services (one per connector,
+  scripted responses otherwise). Each task runs 3 times; a regression is a task that passed in
+  the committed baseline failing, or the pass rate dropping more than 5 points. A CI gate on pull
+  requests comes later.
 - **Load and chaos** (`loadtest/`): a stub model returns scripted tool calls with fixed latency.
   Drive 1,000 concurrent runs and measure queue-to-start p95, runs per minute, worker CPU and
   memory. Stop random worker tasks mid-run and count lost runs and duplicate side effects against
@@ -607,7 +611,7 @@ tool-gateway/                   Python, MCP SDK (Starlette) + uvicorn (see tool-
   tests/
 
 specs/          issue-triage.yaml, meeting-prep.yaml
-evals/          tasks/, fixtures/, runner/ (run_suite, checks, judge, compare), labels/
+evals/          tasks/<spec>/, simulators/, runner/ (run_suite, checks, judge, compare), labels/, baselines/
 loadtest/       stub_model/, stub_tools/, drive.js, chaos.py, report.md
 infra/          modules/ (network, ecs-cluster, ecs-service, lambda, http-api, sqs, dynamodb, secrets, iam, observability)
                 envs/dev/

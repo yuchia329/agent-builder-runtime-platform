@@ -17,7 +17,7 @@ with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):
 goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
 from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
 the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
-(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), to be planned.
+(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; first task `[tool-gateway]` connector base URL setting.
 
 ## Approach
 
@@ -56,9 +56,9 @@ can run alongside 2 to 5. Start a session with
 | M2  | Crash safety   | Lease, checkpoints, idempotency; killing a worker mid-run causes no duplicate tool call                                                                       | Done        |
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
-| M5  | Evals          | Suite runs in GitHub Actions and blocks a PR that lowers success                                                                                              | Not started |
+| M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Planned     |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Not started |
-| M7  | Scale proof    | 1,000 concurrent runs on the stub model; chaos test report in `loadtest/report.md`                                                                            | Not started |
+| M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Not started |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
 ## MVP scope (M0 + M1)
@@ -76,129 +76,83 @@ Tasks are in build order. Each line is one work session; `[component]` is the na
 ## M0 tasks: walking skeleton (stub model, no AWS)
 
 - [x] `[contracts]` `agent-spec.schema.json`, `run-message.schema.json`, a valid and an invalid
-  ```
   example, one test that validates both. Check: test passes.
-  ```
 - [x] `[control-plane]` Spring Boot skeleton, `AgentStore` port with in-memory and DynamoDB
-  ```
   adapters and one contract suite, `POST /agents`, `POST /agents/{id}/versions` (schema
   validation), one hard-coded tenant. Check: contract suite passes on both adapters; publish
   `contracts/examples/agent-spec.valid.yaml` with curl; invalid spec is rejected.
-  ```
 - [x] `[local-stack]` `docker-compose.yml` with DynamoDB Local (control-plane table created on
-  ```
   start from `control-plane/dynamodb/control-plane-table.json`) and ElasticMQ (run queue + DLQ
   created on start), `.env.example`, `Makefile` with `up` / `down`. Check: `make up`, table and
   queue are listed.
-  ```
 - [x] `[contracts]` `internal-api.openapi.yaml`: `GET/PATCH /internal/runs/{id}` request and
-  ```
   response shapes, SigV4 security scheme, run statuses. Check: file passes an OpenAPI linter.
-  ```
 - [x] `[control-plane]` `RunStore` port (in-memory + DynamoDB, contract suite), `POST /runs`,
-  ```
   `GET /runs/{id}`, `RunQueuePublisher` (SQS + in-memory), internal
   `GET/PATCH /internal/runs/{id}`. Check: run item is `QUEUED` and a message is on the queue.
-  ```
 - [x] `[worker]` `core/handle_run.py`, ports, in-memory adapters, stub model, one fake tool,
-  ```
   budget (steps and seconds). Check: integration test runs a spec to `SUCCEEDED` with no
   network.
-  ```
 - [x] `[worker]` `queue_sqs.py`, `control_plane_http.py`, `poll_loop.py`, `config.py`, `wiring.py`.
-  ```
   Check: with the stack up, a run started by curl reaches `SUCCEEDED`.
-  ```
 - [x] `[local-stack]` add both services to compose, `make demo` script, README quickstart.
-  ```
   Check: fresh clone → `make up && make demo` passes. **M0 done.**
-  ```
 
 ## M1 tasks: real agent
 
 - [x] `[contracts]` spec `model` becomes `<provider>/<model id>` (ADR 0010): schema description and
-  ```
   a pattern requiring the `/`; examples use `stub/demo` (or `minimax/MiniMax-M3` where a real
   model is meant). Check: contracts tests pass; record under "Cross-service changes".
-  ```
 - [x] `[worker]` model router (ADR 0010): `Model.complete` takes the model string,
-  ```
   `adapters/model_router.py`, `MODEL_PROVIDERS` / `MODEL_<NAME>_*` config replacing
   `MODEL_PROVIDER`, stub as provider `stub`; `adapters/model_openai_compat.py` (httpx or the
   `openai` SDK; decide in session) with MiniMax as first provider; `core/pricing.py`, dollar
   budget, cost reporting. Check: stub tools, MiniMax model, run succeeds and reports cost;
   router and adapter pass the `Model` contract suite; recorded-response tests for MiniMax.
-  ```
 - [x] `[worker]` model retries (throttling, 5xx: backoff, then `ModelError`) in the model adapters,
-  ```
   and conversation trimming in core when the context nears the model's limit. Check: unit
   tests with a stub that throttles and a long scripted run.
-  ```
 - [x] `[worker]` `tools_local.py`: `github.search_issues`, `github.add_label` with a personal
-  ```
   token. Check: unit tests with recorded responses.
-  ```
 - [x] `[specs]` final `issue-triage.yaml`. Check: a manual run against a test repo labels a real
-  ```
   issue and finds a planted duplicate. **M1 done: MVP.**
-  ```
 - [x] `[worker]` (optional) `adapters/model_bedrock.py` (Converse API or Strands Bedrock provider,
-  ```
   ADR 0009, ADR 0010). Needs AWS credentials and Bedrock model access; keep them out of
   `.env`'s fake local keys. Check: same `Model` contract suite, one real run on Bedrock.
-  ```
 - [x] `[control-plane]` (optional) `POST /triggers/github` with HMAC check; deliver webhooks
-  ```
   locally with smee.io. Check: opening an issue starts a run.
-  ```
 
 ## M2 tasks: crash safety
 
 - [x] `[worker]` `RunStateStore` port (architecture → Ports and adapters) with in-memory and
-  ```
   DynamoDB adapters: lease (take with expiry, renew, release; refused while another worker's
   lease is live), checkpoint (step n only after n-1, read latest), idempotency (claim a key,
   store its result, read it). Table keys in one file, `worker/dynamodb/run-state-table.json`.
   Check: one contract suite passes on both adapters (DynamoDB Local), including two concurrent
   takers where exactly one wins.
-  ```
 - [x] `[local-stack]` create the run-state table from that file in `make stack` / `make up`;
-  ```
   worker gets `STATE_BACKEND=dynamodb`, `STATE_TABLE`. Check: `make up && make demo` passes.
-  ```
 - [x] `[worker]` lease in the poll loop: take on receive, renew with the heartbeat, release when
-  ```
   `handle_run` returns; a run leased by another live worker is left alone (message not deleted).
   Check: two workers given the same run, only one executes it.
-  ```
 - [x] `[worker]` checkpoints: write after every model turn and every tool result (messages,
-  ```
   usage, cost, `provider_data`); a picked-up run resumes from the latest. Check: integration
   test stops a run after step k, a second `handle_run` finishes it with no repeated model calls
   for steps 1..k and the same budget totals.
-  ```
 - [x] `[worker]` idempotent tool calls: key `hash(run_id, step, tool, arguments)`, claim before
-  ```
   calling, store the result after; a resumed run gets the stored result. Decide in session (ADR
   if it is a rule) what a claimed key without a result means after a crash: retry, fail the
   run, or per-tool. Check: crash between the tool call and the checkpoint, resume, the fake
   GitHub server sees one `add_label`.
-  ```
 - [x] `[control-plane]` re-enqueue sweep: a scheduled job finds runs left `QUEUED` longer than a
-  ```
   few minutes (saved, but the enqueue failed or was lost) and sends their message again.
   `POST /runs` already returns 503 and leaves the run `QUEUED` when enqueueing fails. Needs a
   query by status (new index or a scan). Check: a run whose enqueue failed reaches the queue.
-  ```
 - [x] `[control-plane]` webhook redelivery dedupe on `X-GitHub-Delivery` (conditional put, short
-  ```
   TTL). Check: the same delivery twice starts one run.
-  ```
 - [x] `[local-stack]` chaos demo: `make chaos` kills the worker container mid-run (stub model,
-  ```
   fake tools that count calls), restarts it, and checks the run succeeds with no duplicate tool
   call. **M2 done.**
-  ```
 
 ## M3 tasks: approvals and Slack
 
@@ -207,53 +161,37 @@ Work in this order. A `require_approval` tool pauses the run (the worker already
 make the call exactly once, rejected runs fail with `approval_rejected` (ADR 0002).
 
 - [x] `[contracts]` approval decision in the internal API: `GET /internal/runs/{id}` returns
-  ```
   `approval` (`step`, `tool`, `arguments`, `decision`, `decided_by`, `decided_at`) once a
   pending call was decided; failure reason `approval_expired`. Check: contracts tests pass;
   listed under "Cross-service changes" for control-plane and worker.
-  ```
 - [x] `[control-plane]` approval decisions: store the pending call when a run reports
-  ```
   `WAITING_APPROVAL`; `POST /runs/{id}/approval` (API key; web approval for development and
   tests) records the decision once (conditional), approved moves the run to `QUEUED` and
   enqueues it (the sweep covers a failed enqueue), rejected moves it to `FAILED`
   `approval_rejected`; the internal GET returns the decision. Check: integration tests,
   responses validated against the contract.
-  ```
 - [x] `[worker]` resume after approval: a resumed run whose pending `require_approval` call
-  ```
   matches an approved decision (step, tool, arguments) makes the call (idempotency key as
   usual) and continues; no or non-matching decision pauses again. Check: integration test
   pause, approve, resume runs the call once; a second resume does not repeat it.
-  ```
 - [x] `[worker]` `github.close_issue` in `tools_local.py` (reason `completed`, `not_planned` or
-  ```
   `duplicate`; repo allowlist; idempotent: closing a closed issue changes nothing). Check:
   recorded-response tests.
-  ```
 - [x] `[control-plane]` Slack `ApprovalChannel`: when a run reports `WAITING_APPROVAL`, post a
-  ```
   Block Kit message with the call and Approve / Reject buttons (`SLACK_BOT_TOKEN`,
   `SLACK_APPROVAL_CHANNEL`). A failed post does not fail the worker's PATCH; the sweep posts
   approvals not yet sent. Check: unit tests with recorded Slack responses; a message appears in
   a sandbox channel.
-  ```
 - [x] `[control-plane]` `POST /approvals/slack`: verify the signing secret (v0, 5-minute window),
-  ```
   read the button click, apply the same decision path as the web approval, update the message
   to show who decided. Answers within Slack's 3 seconds. Check: Slack's documented signature
   example; a real click in the sandbox through smee.io.
-  ```
 - [x] `[control-plane]` approval expiry: the sweep fails runs left `WAITING_APPROVAL` longer than
-  ```
   `APPROVAL_TIMEOUT_HOURS` (default 72; must stay under the worker's 15-day run-state retention,
   ADR 0011) with `approval_expired`. Check: unit tests.
-  ```
 - [x] `[specs]` issue-triage closes confirmed duplicates with `github.close_issue` under
-  ```
   `require_approval`. Check: a planted duplicate in the sandbox pauses the run, Approve in Slack
   closes it as duplicate, Reject leaves it open and fails the run. **M3 done.**
-  ```
 
 ## M4 tasks: tool gateway
 
@@ -338,16 +276,63 @@ Work in this order:
   worker's environment. Check: a planted duplicate is labeled and, after Approve in Slack, closed
   by `<app>[bot]`; the gateway access log shows both identities. **M4 done.**
 
+## M5 tasks: evals
+
+Evals measure an agent's decisions (its spec, prompt, model and the tool descriptions it reads),
+not the platform: platform correctness is covered by tests, `make demo` and `make chaos`, and
+performance by M7 on AWS. Decided when planning (2026-11-18):
+
+- One general harness for any spec: an agent's tasks live in `evals/tasks/<spec name>/`, no code.
+  issue-triage is the first user; a second, different spec proves the runner needs no change.
+- Runs on the host in one process, no Docker: the worker's `handle_run` with in-memory adapters
+  and the spec's real model; tools through the real gateway (subprocess, as in the worker's
+  tests) pointed at simulated services. Never a real outside API.
+- Simulated services per connector, shared by every agent using it. GitHub: issues, labels,
+  search by words, labeling and closing change the state. A connector without a simulator uses
+  scripted responses matched by tool and arguments.
+- Check kinds: tool called or not (argument patterns), simulated end state, final output
+  pattern, budget, LLM judge on free text against a rubric the agent's author writes. Approval
+  requests are approved automatically; checks decide whether they should have happened.
+- Each task runs 3 times and passes on 2 of 3. Regression: a task that passes in the baseline now
+  fails, or the pass rate drops more than 5 points. The baseline is a committed file per spec.
+- Judge model `minimax/MiniMax-M3`. Its score is reported but not counted until it agrees with
+  50 hand labels (by the user) at least 90% of the time.
+- The task format lives in `evals/` (only evals reads it), not `contracts/`.
+- Cost about $0.005 per issue-triage run: 30 tasks x 3 runs is about $0.45.
+- Later, not M5: a CI gate on pull requests (needs a GitHub secret and working through PRs), and
+  tenant-run evals before a version goes live (product change, after users and RBAC).
+
+Work in this order:
+
+- [ ] `[tool-gateway]` a connector's base URL from a setting (`CONNECTOR_<NAME>_BASE_URL`), so
+  evals and tests can point a real connector at a simulator. Startup logs the override; the
+  docs warn that real credentials would be sent there. Check: unit tests (override used, unset
+  keeps the allowlist's `base_url`).
+- [ ] `[evals]` scaffold: uv project (`AGENTS.md`, `CLAUDE.md`), task format as a JSON Schema in
+  `evals/` with valid and invalid examples, GitHub simulator (also answers the App token exchange
+  with throwaway credentials), runner for one task, deterministic checks. Draft an ADR: agent
+  evals run the worker's code in process (evals imports `worker`; judge calls go through the
+  worker's model adapters, so no second provider layer). Check: tests with `ScriptedModel` pass
+  a good task and fail a bad one for each check kind; one real task run by hand.
+- [ ] `[evals]` about 30 issue-triage tasks: plain bug, enhancement, question and docs issues;
+  true duplicates worded differently; near-misses (same topic, other problem); ambiguous label;
+  duplicate of a closed issue; prompt injection; non-English; a missing label. The user reviews
+  them. Check: all validate; a real run of each passes at least once or is explained.
+- [ ] `[evals]` suite run: 3 runs per task, report (per task and per check kind, cost),
+  comparison with the committed baseline, `make eval` (`SPEC=<name>` for one spec) and a way to
+  save a new baseline. Check: an unchanged spec shows no regression on a rerun; a weakened
+  prompt (near-miss guidance removed) shows one, naming the tasks.
+- [ ] `[evals]` judge: rubric per spec, a labels file where the user marks about 50 reasons good
+  or bad, agreement reported. Check: agreement printed; counted only at 90% or more.
+- [ ] `[specs]` second agent `needs-info` (labels a bug report `needs-info` when it lacks steps to
+  reproduce; other tools and output than issue-triage) with about 8 tasks in
+  `evals/tasks/needs-info/`. Check: `make eval SPEC=needs-info` runs with no change to the runner.
+  **M5 done.**
+
 ## Later milestones (draft)
 
 Rough lists so the path is visible. Each milestone's planning session rewrites its own list.
 
-- **M5 evals:** `[contracts]` eval task schema (trigger event, recorded tool responses, checks);
-  `[evals]` runner on the local stack replaying tool responses through the gateway's fake
-  connector; about 30 issue-triage tasks with deterministic checks (labels, duplicate found,
-  nothing closed without approval); an LLM judge for the summary, checked against about 50 hand
-  labels; a GitHub Actions job on PRs that change a spec or prompt, failing on a drop of more than
-  2 points versus `main`, cheapest capable model.
 - **M6 AWS deploy:** `[infra]` Budgets alert and Terraform state first; tables, queue and DLQ;
   ECR images; control plane on Lambda with SnapStart and the gateway on Lambda behind one API
   Gateway HTTP API on a custom domain (Cloudflare DNS); workers on Fargate scaled on queue depth
@@ -355,7 +340,8 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
   SigV4 like the worker's `sigv4_signer`); SSM `TokenStore` adapter and KMS run-token signing;
   EventBridge Scheduler for the sweeps; OpenTelemetry to X-Ray. Slack's Request URL moves to the
   real domain (no tunnel). Check: live triage on AWS and no hourly cost while idle.
-- **M7 scale proof:** `[loadtest]` driver (k6 or Locust, open question), stub model with fixed
+- **M7 scale proof:** against the M6 deployment on AWS (cold starts, scaling from 0 and SQS
+  exist only there). `[loadtest]` driver (k6 or Locust, open question), stub model with fixed
   latency, 1,000 concurrent runs (queue-to-start p95, runs per minute, worker CPU and memory),
   random worker stops counting lost runs and duplicate side effects (target 0);
   `loadtest/report.md`.
@@ -407,6 +393,12 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · planning** — M5 planned (task list under "M5 tasks: evals"). Evals became a
+  general harness for any spec, run on the host without Docker, with simulated services instead
+  of recorded responses; the 2-point CI gate was replaced by 3 runs per task and a 5-point or
+  per-task regression rule, and CI moved to later. M7 now names the AWS deployment. Stray code
+  fences removed from the M0 to M3 task lists. Next: `/start tool-gateway` (connector base URL).
 
 - **2026-11-19 · specs** — M4 task 11, **M4 done**. `specs/issue-triage.yaml` uses the gateway's
   argument names (GitHub's own: `q`, `owner`, `repo`, `issue_number`, `labels` as a one-item list,

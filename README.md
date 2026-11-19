@@ -10,7 +10,7 @@ the platform runs that agent reliably whenever its trigger fires.
   side effects.
 - **Tool gateway** (Python, MCP) exposes real APIs as tools and is the only component that holds
   credentials.
-- Risky actions wait for human approval in Slack. Every spec change is gated by an eval suite in CI.
+- Risky actions wait for human approval in Slack. Every spec can be scored by an eval suite (`make eval`) before a change goes live.
 
 Demo agent: a GitHub issue triage agent that labels new issues, finds duplicates, posts a summary
 to Slack, and asks a human before closing anything.

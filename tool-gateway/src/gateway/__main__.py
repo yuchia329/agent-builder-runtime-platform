@@ -9,7 +9,7 @@ from gateway.adapters.token_store_memory import MemoryTokenStore
 from gateway.app import create_app
 from gateway.approvals import ApprovalCheck
 from gateway.auth.run_token import RunTokenVerifier
-from gateway.config import Settings
+from gateway.config import Settings, connector_base_url
 from gateway.connectors.fake import FakeConnector
 from gateway.contracts import Contracts
 from gateway.credentials import Credentials
@@ -35,8 +35,19 @@ def connectors(settings: Settings, contracts: Contracts, credentials: Credential
         folder = settings.connectors_dir / name
         if not (folder / "allowlist.yaml").is_file():
             raise ConnectorError(f"Unknown connector in CONNECTORS: {name} (no {folder})")
-        definition = load_connector(folder, contracts, dict(settings.env))
-        loaded.append(ConnectorClient(definition, credentials))
+        env = dict(settings.env)
+        definition = load_connector(folder, contracts, env)
+        base_url = None
+        if override := connector_base_url(name, env):
+            setting, base_url = override
+            log.warning(
+                "Connector %s calls %s instead of %s (%s; evals and tests only)",
+                name,
+                base_url,
+                definition.base_url,
+                setting,
+            )
+        loaded.append(ConnectorClient(definition, credentials, base_url=base_url))
     return loaded
 
 

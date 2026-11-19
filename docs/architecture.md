@@ -390,6 +390,10 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   `maxItems` / `enum` from the rules. Settings an allowlist names (`GITHUB_REPOS`) are read then;
   a missing one fails startup. `openapi.yaml` is cut from the vendor's official description by
   `scripts/cut_openapi.py` (GitHub: 5 operations, about 120 KB of 14 MB) and committed.
+- `CONNECTOR_<NAME>_BASE_URL` replaces a connector's `base_url` at startup, for evals and tests
+  that point a real connector at a simulator. Only addresses on the same machine are accepted
+  (`127.0.0.1`, `localhost`, `::1`), because the override receives the connector's credentials
+  (GitHub: the App token exchange); startup logs every override.
 - A call: checks, then argument rules (refuse, append, scope qualifiers), then the hook or the
   request (path, query or JSON body as the operation says, connector `headers`, the credential),
   then the result shape (`fields`; with `list`, `{"items": [...]}`). 5xx and network errors are

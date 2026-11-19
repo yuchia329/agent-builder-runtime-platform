@@ -3,13 +3,46 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 REPO_CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
 CONNECTORS_FOLDER = Path(__file__).resolve().parents[2] / "connectors"
 
 
+# A connector's base URL may be overridden only to this machine (evals and tests point a real
+# connector at a simulator): the override receives the connector's credentials.
+LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
 OAUTH = ("GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "OAUTH_STATE_SECRET")
 MIN_STATE_SECRET = 32
+
+
+def connector_base_url(name: str, env: dict[str, str]) -> tuple[str, str] | None:
+    """The `CONNECTOR_<NAME>_BASE_URL` override for a connector, as (setting, URL), or None.
+
+    Only http(s) URLs on this machine are accepted: the connector's credentials (a GitHub App
+    token request, for example) go to that address.
+    """
+    setting = f"CONNECTOR_{name.upper().replace('-', '_')}_BASE_URL"
+    raw = env.get(setting, "").strip()
+    if not raw:
+        return None
+    try:
+        url = urlsplit(raw)
+        host = url.hostname
+        url.port  # noqa: B018 - raises on a bad port
+    except ValueError:
+        raise ValueError(f"{setting} is not a valid URL") from None
+    if url.scheme not in ("http", "https") or not host:
+        raise ValueError(f"{setting} must be an http:// or https:// URL")
+    if url.username or url.password or url.query or url.fragment:
+        raise ValueError(f"{setting} must not hold a user, query or fragment")
+    if host not in LOOPBACK:
+        raise ValueError(
+            f"{setting} must point at this machine (127.0.0.1, localhost or ::1), not {host}: "
+            "it would receive the connector's credentials"
+        )
+    return setting, raw.rstrip("/")
 
 
 @dataclass(frozen=True)

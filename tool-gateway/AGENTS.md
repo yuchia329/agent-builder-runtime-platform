@@ -16,6 +16,7 @@ Run from `tool-gateway/`.
 | Run locally | `RUN_TOKEN_PUBLIC_KEY=<public half of the control plane's pair> CONNECTORS=fake uv run gateway` (port 8090; `GATEWAY_PORT` to change) |
 | Run with GitHub | `set -a && . ../.env && set +a && CONNECTORS=github uv run gateway` (needs `RUN_TOKEN_PUBLIC_KEY`, `GITHUB_REPOS`, `TENANT_ID` and the `GITHUB_APP_*` settings; startup logs "Credential from the environment"; `CONTROL_PLANE_URL` from `.env` enables approval tools) |
 | Owner login (acts_as owner) | add `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET` to `../.env` (`.env.example`); the App's redirect URI is `http://localhost:8090/oauth/github/callback`; an owner run's tool error gives the link to open; logins are lost on restart (memory store) |
+| Point a connector at a simulator | `CONNECTOR_<NAME>_BASE_URL=http://127.0.0.1:<port>` (evals and tests; loopback only; startup logs it) |
 | Stop a background gateway | `kill $(lsof -ti :8090)` (not `pkill -f gateway`: it matches the shell too) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
@@ -99,5 +100,8 @@ Run from `tool-gateway/`.
   signed notes and the nonce cookie. A note's purpose (`ticket`, `state`) is checked; derived
   values use their own label. Never put a ticket, state, code or token in a page or a log line
   (uvicorn's request log goes through `HideLoginQueries`).
+- A connector's address comes from its allowlist's `base_url`; the only override is
+  `CONNECTOR_<NAME>_BASE_URL` (`config.connector_base_url`), loopback only. Do not widen it: the
+  override receives the connector's credentials.
 - `Settings` fields holding secrets use `field(repr=False)`; `Settings.env` holds the whole
   environment and is hidden too.

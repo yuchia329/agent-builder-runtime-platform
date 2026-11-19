@@ -17,7 +17,7 @@ with `approval_expired`); checked live in the sandbox. **M4 done (tool gateway):
 goes through the tool gateway over MCP with a signed run token; the GitHub connector is generated
 from GitHub's OpenAPI description; issue-triage labels and (after Approve) closes a duplicate as
 the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a user login
-(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; first task `[tool-gateway]` connector base URL setting.
+(ADR 0015); no other container holds a GitHub credential. Next: M5 (evals), planned below; next task `[evals]` scaffold.
 
 ## Approach
 
@@ -304,7 +304,7 @@ performance by M7 on AWS. Decided when planning (2026-11-18):
 
 Work in this order:
 
-- [ ] `[tool-gateway]` a connector's base URL from a setting (`CONNECTOR_<NAME>_BASE_URL`), so
+- [x] `[tool-gateway]` a connector's base URL from a setting (`CONNECTOR_<NAME>_BASE_URL`), so
   evals and tests can point a real connector at a simulator. Startup logs the override; the
   docs warn that real credentials would be sent there. Check: unit tests (override used, unset
   keeps the allowlist's `base_url`).
@@ -393,6 +393,16 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · tool-gateway** — M5 task 1: `CONNECTOR_<NAME>_BASE_URL` replaces a connector's
+  `base_url` at startup (`config.connector_base_url`, used in `__main__.connectors`). Loopback only
+  (`127.0.0.1`, `localhost`, `::1`; http or https; no user, query or fragment), because the
+  override receives the connector's credentials, including the GitHub App token exchange; error
+  messages never echo the value; startup logs a warning per override. Owner login (`oauth/github.py`)
+  keeps its fixed GitHub address. Tests in `tests/test_config.py`, including a live gateway whose
+  token exchange and search reach `FakeGitHub`; 224 pass. Next: `/start evals` (scaffold): start
+  the gateway subprocess with `CONNECTORS=github`, `GITHUB_REPOS`, throwaway `GITHUB_APP_*` (a
+  generated key file) and this setting pointing at the GitHub simulator.
 
 - **2026-11-18 · planning** — M5 planned (task list under "M5 tasks: evals"). Evals became a
   general harness for any spec, run on the host without Docker, with simulated services instead

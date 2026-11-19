@@ -21,7 +21,8 @@ the GitHub App's bot (`acts_as: team-bot`), and `acts_as: owner` works through a
 tasks in `evals/tasks/` on its real model against a simulated GitHub through the real gateway (ADR
 0016), 3 runs per task, compared with a committed baseline; an LLM judge (trusted at 99-100%
 agreement with 75 labels) grades issue-triage's answers. Baselines: issue-triage 29/30 tasks,
-needs-info 8/8. Next: M6 (AWS deploy), planned below; first task `[infra]` bootstrap.
+needs-info 8/8. **M6 (AWS deploy) in progress:** Terraform bootstrap applied (state bucket, two
+budgets); next `[control-plane]` Lambda packaging trial.
 
 ## Approach
 
@@ -61,7 +62,7 @@ can run alongside 2 to 5. Start a session with
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
-| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | Planned     |
+| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | In progress |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Not started |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
@@ -363,7 +364,7 @@ protection; one live triage at the end proves all of it. Decided when planning (
 
 Work in this order:
 
-- [ ] `[infra]` bootstrap: `infra/bootstrap/` (state bucket: versioned, encrypted, public access
+- [x] `[infra]` bootstrap: `infra/bootstrap/` (state bucket: versioned, encrypted, public access
   blocked) and `infra/envs/dev/` (provider with profile `default`, `us-east-1`, `default_tags`);
   the two budgets with email alerts; `infra/AGENTS.md`, `CLAUDE.md` and the Commands table.
   Check: `terraform plan` clean after apply; both budgets visible; the user has activated the tag.
@@ -463,6 +464,19 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-19 · infra** — M6 task 1. `infra/bootstrap/` applied (local state, git-ignored): state
+  bucket `agent-platform-tfstate-<random suffix>` (versioned, SSE-S3, public access blocked,
+  TLS-only policy, old versions expire after 90 days, `prevent_destroy`) and two budgets,
+  `agent-platform-monthly` ($10, filter `user:project$agent-platform`) and `account-monthly`
+  ($90), email at 50%/100% actual and 100% forecast. Budgets live in bootstrap so destroying an
+  environment keeps the alerts. `infra/envs/dev/`: S3 backend (`use_lockfile`), bucket name from
+  git-ignored `backend.hcl`; no resources yet, `plan` clean. AWS provider 6.73.0 locked. Open: the
+  user activates the `project` cost allocation tag once it appears (up to 24 h after the first
+  tagged resource; command in `infra/AGENTS.md`); until then the $10 budget reads $0. Gotchas:
+  budget emails need no confirmation (only SNS does); the lock files hold darwin_arm64 hashes only,
+  so CI on Linux later needs `terraform providers lock -platform=linux_amd64`; a dollar sign before
+  a brace is an escape in HCL, so the tag filter uses `format()`. Next: `[control-plane]` Lambda
+  packaging trial (ADR 0017).
 - **2026-11-19 · specs** — M5 task 6, **M5 done**. `specs/needs-info.yaml` (labels a bug report
   `needs-info` when it lacks steps to reproduce; only `github.add_label`, no approval, budget 6
   steps / $0.02 / 120 s; summary `Bug report / Steps to reproduce / Needs info`) and 8 tasks in

@@ -26,6 +26,10 @@ __pycache__/
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan
+# Local values (alert email, state bucket name); the .example files are committed
+*.tfvars
+backend.hcl
 
 # Local run-token key pair (make up generates it)
 .run-token-*.env

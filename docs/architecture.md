@@ -575,6 +575,11 @@ AWS (one region)                                idle cost
   subnets with a public IP, no NAT gateway. Scaling from 0 takes a minute or more; a Lambda
   entrypoint can be added later if that is too slow.
 - **Data:** two DynamoDB tables (control plane, run state), on-demand capacity.
+- **Terraform:** applied from the laptop with the AWS profile `default`. `infra/bootstrap/` (made
+  once, local state) holds the state bucket and the budgets ($10 a month on the `project` tag, $90
+  for the account), so destroying an environment leaves the alerts on; `infra/envs/dev/` keeps its
+  state in that bucket with Terraform's lock file. Every resource is tagged `project =
+  agent-platform`.
 - **Not used:** load balancer, NAT gateway, interface VPC endpoints, RDS, RDS Proxy, always-on EC2.
 - **Model providers:** billed per token, nothing when idle. Non-AWS providers (MiniMax, OpenAI,
   OpenRouter) are reached over the internet from the public subnet; their API keys are in SSM
@@ -620,8 +625,7 @@ tool-gateway/                   Python, MCP SDK (Starlette) + uvicorn (see tool-
 specs/          issue-triage.yaml, meeting-prep.yaml
 evals/          tasks/<spec>/, simulators/, runner/ (run_suite, checks, judge, compare), labels/, baselines/
 loadtest/       stub_model/, stub_tools/, drive.js, chaos.py, report.md
-infra/          modules/ (network, ecs-cluster, ecs-service, lambda, http-api, sqs, dynamodb, secrets, iam, observability)
-                envs/dev/
+infra/          bootstrap/ (state bucket, budgets; local state), envs/dev/ (see infra/AGENTS.md)
 ```
 
 Root files: `docker-compose.yml` (DynamoDB Local, ElasticMQ, and every service built from its own

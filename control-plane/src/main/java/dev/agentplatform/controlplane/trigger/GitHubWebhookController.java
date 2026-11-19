@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.trigger;
 
+import dev.agentplatform.controlplane.tenant.Principals;
 import dev.agentplatform.controlplane.config.PlatformProperties;
 import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.run.Run;
@@ -105,7 +106,7 @@ public class GitHubWebhookController {
 
         List<String> started;
         try {
-            started = runs.startForTrigger(tenantId, trigger, input).stream().map(Run::runId).toList();
+            started = runs.startForTrigger(tenantId, trigger, input, Principals.WEBHOOK_GITHUB).stream().map(Run::runId).toList();
         } catch (RunQueueException e) {
             throw e; // runs are saved QUEUED and the sweep sends them: keep the claim
         } catch (RuntimeException e) {

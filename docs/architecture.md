@@ -185,8 +185,12 @@ Public and internal JSON use snake_case field names and leave out empty fields.
 Internal endpoints, for workers and the gateway only. API Gateway requires IAM authorization
 (SigV4) on these routes:
 
-- `GET /internal/runs/{id}`: run, spec version, and a signed run token. Once a pending call is
-  decided, the run carries `approval` (the latest decision); the worker makes the paused call only
+- `GET /internal/runs/{id}`: run, spec version, and a signed run token: a new ES256 JWT on every
+  GET (claims in `contracts/run-token.schema.json`, `kid` = the public key's RFC 7638 thumbprint,
+  valid for the spec's `max_seconds` from issue). It names who published the version (`owner`)
+  and what started the run (`started_by`: `api:<tenant>` or `webhook:github`), both recorded by
+  the control plane; neither the token nor the keys are logged. Without keys configured, no
+  token. Once a pending call is decided, the run carries `approval` (the latest decision); the worker makes the paused call only
   if it is approved and matches step, tool and arguments.
 - `PATCH /internal/runs/{id}`: status, steps, cost, trace id, pending approval call, failure
   reason, output. Allowed status changes are listed in `contracts/internal-api.openapi.yaml`.
@@ -447,7 +451,7 @@ definition environment, with secrets from Secrets Manager.
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL` |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`, `KMS_KEY_ID`                 |
-| Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`         |
+| Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY` (secret, control plane), `RUN_TOKEN_PUBLIC_KEY` (control plane checks the pair and derives `kid`; gateway verifies); P-256 PEM or one-line base64 body; both unset = no tokens |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
 | Re-enqueue sweep    | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300) |

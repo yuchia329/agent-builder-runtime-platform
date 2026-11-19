@@ -90,6 +90,16 @@ abstract class AgentStoreContractTest {
     }
 
     @Test
+    void versionRecordsWhoPublishedIt() {
+        store.createAgent("t1", "triage");
+        store.publishVersion("t1", "triage", "github.issue.opened", SPEC_V1, "user:42");
+        store.publishVersion("t1", "triage", "github.issue.opened", SPEC_V1);
+
+        assertThat(store.findVersion("t1", "triage", 1).orElseThrow().owner()).isEqualTo("user:42");
+        assertThat(store.findVersion("t1", "triage", 2).orElseThrow().owner()).isEqualTo("api:t1");
+    }
+
+    @Test
     void publishedVersionIsStoredUnchanged() {
         store.createAgent("t1", "triage");
         store.publishVersion("t1", "triage", "github.issue.opened", SPEC_V1);

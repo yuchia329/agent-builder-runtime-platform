@@ -279,7 +279,7 @@ Work in this order:
   `idempotentHint` as the tool's `read_only` / `idempotent`, tool failures as MCP tool errors
   (`isError`). Check: contracts tests (valid and invalid examples); cross-service entries for
   control-plane, tool-gateway and worker.
-- [ ] `[control-plane]` record who published each version (`owner`) and who started each run
+- [x] `[control-plane]` record who published each version (`owner`) and who started each run
   (`started_by`: `webhook:github` or `api:<key>`); sign a run token on every
   `GET /internal/runs/{id}` (`RUN_TOKEN_PRIVATE_KEY`). Tokens are never logged. Check:
   integration test verifies the token with the public key and validates its claims against the
@@ -388,16 +388,28 @@ service has followed.
 - **Run token, connector allowlist, MCP call conventions** (M4). Declared in
   `contracts/run-token.schema.json`, `contracts/connector-allowlist.schema.json`,
   `contracts/mcp-tool-call.schema.json` and `run_token` in `contracts/internal-api.openapi.yaml`.
-  Must follow: `control-plane` (sign the token, record `owner` and `started_by`), `tool-gateway`
+  Must follow: `tool-gateway`
   (verify the token, load allowlists, read `_meta`), `worker` (`tools_mcp.py`: send the token
   and `_meta`, read annotations). Tool arguments become GitHub's own parameter names (`owner`,
   `repo`, `q`, `labels`, `state_reason`; hook extra `duplicate_of`) when the worker switches to
-  the gateway; specs keep their tool names.
+  the gateway; specs keep their tool names. `control-plane` done.
 
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · control-plane** — M4 task 2: versions record `owner` and runs `started_by`
+  (`tenant/Principals`: `api:<tenant>`, `webhook:github`; DynamoDB rows from before read as
+  `api:<tenant>`); `token/RunTokenIssuer` signs an ES256 run token on every
+  `GET /internal/runs/{id}` (Nimbus JOSE+JWT 10.3, `kid` = RFC 7638 thumbprint, `exp` = issue +
+  `max_seconds`, claims validated against the contract in tests). Keys `RUN_TOKEN_PRIVATE_KEY` and
+  `RUN_TOKEN_PUBLIC_KEY` (both: plain Java cannot derive the public key for `kid`; startup checks
+  the pair); neither set = no token, so `make up` / `make demo` are unchanged. 256 tests pass
+  (DynamoDB on Docker). Next: `[tool-gateway]` scaffold (M4 task 3). Gotchas: `.env` and
+  docker `env_file` take one-line values, so keys go in as the base64 body (or PEM with `\n`);
+  generate with the `openssl` commands in `control-plane/AGENTS.md`, checked to load. The
+  gateway gets `RUN_TOKEN_PUBLIC_KEY` only and must compute the same thumbprint as `kid`.
 
 - **2026-11-18 · contracts** — M4 task 1: `run-token.schema.json` (claims; ES256 and `kid`,
   per-GET issue, principals `kind:id`), `connector-allowlist.schema.json` (ADR 0014 format; its

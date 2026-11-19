@@ -21,7 +21,8 @@ public record PlatformProperties(
         GitHubProperties github,
         SweepProperties sweep,
         SlackProperties slack,
-        @Valid ApprovalProperties approval) {
+        @Valid ApprovalProperties approval,
+        RunTokenProperties runToken) {
 
     public enum StoreBackend { MEMORY, DYNAMODB }
 
@@ -52,6 +53,17 @@ public record PlatformProperties(
      * (ADR 0011), or an approved run would find its saved steps gone.
      */
     public record ApprovalProperties(@Min(1) @Max(359) Integer timeoutHours) {}
+
+    /** Run token signing keys (P-256, PEM or base64 body); both blank means no tokens. */
+    public record RunTokenProperties(String privateKey, String publicKey) {}
+
+    public String runTokenPrivateKey() {
+        return runToken == null ? null : blankToNull(runToken.privateKey());
+    }
+
+    public String runTokenPublicKey() {
+        return runToken == null ? null : blankToNull(runToken.publicKey());
+    }
 
     public Duration approvalTimeout() {
         return Duration.ofHours(approval == null || approval.timeoutHours() == null ? 72 : approval.timeoutHours());

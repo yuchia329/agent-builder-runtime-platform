@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.tenant.Principals;
 import dev.agentplatform.controlplane.agent.Agent;
 import dev.agentplatform.controlplane.agent.AgentVersion;
 import java.util.List;
@@ -29,7 +30,12 @@ public interface AgentStore {
      *
      * @throws AgentNotFoundException if the agent does not exist
      */
-    AgentVersion publishVersion(String tenantId, String name, String trigger, String specJson);
+    AgentVersion publishVersion(String tenantId, String name, String trigger, String specJson, String owner);
+
+    /** Publishes as the tenant's API key, the only publisher identity until users exist. */
+    default AgentVersion publishVersion(String tenantId, String name, String trigger, String specJson) {
+        return publishVersion(tenantId, name, trigger, specJson, Principals.api(tenantId));
+    }
 
     Optional<AgentVersion> findVersion(String tenantId, String name, int version);
 

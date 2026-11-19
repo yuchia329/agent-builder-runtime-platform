@@ -1,6 +1,7 @@
 package dev.agentplatform.controlplane.run;
 
 import dev.agentplatform.controlplane.approval.ApprovalMessage;
+import dev.agentplatform.controlplane.tenant.Principals;
 import java.math.BigDecimal;
 import java.time.Instant;
 
@@ -10,6 +11,7 @@ import java.time.Instant;
  * absent until reported. {@code approvalJson} is the latest decision on a pending call
  * (ApprovalDecision in contracts/internal-api.openapi.yaml). {@code approvalMessage} is where the
  * pending call was posted for a person (absent until posted; each new pause starts without one).
+ * {@code startedBy} is what started the run ({@code <kind>:<id>}, see {@link Principals}).
  */
 public record Run(
         String runId,
@@ -26,15 +28,22 @@ public record Run(
         Failure failure,
         String output,
         String inputJson,
+        String startedBy,
         Instant createdAt,
         Instant updatedAt) {
 
     public record Failure(String reason, String message) {}
 
     public static Run queued(String runId, String tenantId, String agentName, int agentVersion,
-                             String inputJson, Instant now) {
+                             String inputJson, String startedBy, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, RunStatus.QUEUED, 0, BigDecimal.ZERO,
-                null, null, null, null, null, null, inputJson, now, now);
+                null, null, null, null, null, null, inputJson, startedBy, now, now);
+    }
+
+    /** A run started through the API with the tenant's key. */
+    public static Run queued(String runId, String tenantId, String agentName, int agentVersion,
+                             String inputJson, Instant now) {
+        return queued(runId, tenantId, agentName, agentVersion, inputJson, Principals.api(tenantId), now);
     }
 
     /**
@@ -51,7 +60,7 @@ public record Run(
                 update.status() == RunStatus.WAITING_APPROVAL ? null : approvalMessage,
                 update.failure() != null ? update.failure() : failure,
                 update.output() != null ? update.output() : output,
-                inputJson, createdAt, now);
+                inputJson, startedBy, createdAt, now);
     }
 
     /**
@@ -61,18 +70,18 @@ public record Run(
     public Run decided(ApprovalDecision decision, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, decision.nextStatus(), steps, costUsd, traceId,
                 null, decision.toJson(), approvalMessage, decision.approved() ? failure : decision.failure(), output,
-                inputJson, createdAt, now);
+                inputJson, startedBy, createdAt, now);
     }
 
     /** Fails the run with {@code failure} ({@code approval_expired}) and clears the pending call. */
     public Run expired(Failure failure, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, RunStatus.FAILED, steps, costUsd, traceId, null,
-                approvalJson, approvalMessage, failure, output, inputJson, createdAt, now);
+                approvalJson, approvalMessage, failure, output, inputJson, startedBy, createdAt, now);
     }
 
     /** The run with its pending call posted at {@code message}. */
     public Run withApprovalMessage(ApprovalMessage message) {
         return new Run(runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId, pendingApprovalJson,
-                approvalJson, message, failure, output, inputJson, createdAt, updatedAt);
+                approvalJson, message, failure, output, inputJson, startedBy, createdAt, updatedAt);
     }
 }

@@ -28,6 +28,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("tools.jackson.dataformat:jackson-dataformat-yaml")
     implementation("com.networknt:json-schema-validator:3.0.9")
+    implementation("com.nimbusds:nimbus-jose-jwt:10.3")
     implementation("software.amazon.awssdk:dynamodb")
     implementation("software.amazon.awssdk:sqs")
 
@@ -40,7 +41,8 @@ dependencies {
 // Contracts live in contracts/; bundle them so the jar validates against the same files.
 tasks.processResources {
     from("../contracts") {
-        include("agent-spec.schema.json", "run-message.schema.json", "internal-api.openapi.yaml")
+        include("agent-spec.schema.json", "run-message.schema.json", "run-token.schema.json",
+                "internal-api.openapi.yaml")
         into("contracts")
     }
 }

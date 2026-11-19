@@ -71,6 +71,7 @@ class GitHubWebhookApiIntegrationTest {
         var started = runIds.stream().map(id -> runStore.find(id).orElseThrow()).toList();
         assertThat(started).extracting(r -> r.agentName()).contains("triage-a", "triage-b").doesNotContain("on-close");
         assertThat(queueSize()).isEqualTo(queued + runIds.size());
+        assertThat(started).extracting(r -> r.startedBy()).containsOnly("webhook:github");
 
         var run = started.stream().filter(r -> r.agentName().equals("triage-a")).findFirst().orElseThrow();
         var input = JSON.readTree(run.inputJson());

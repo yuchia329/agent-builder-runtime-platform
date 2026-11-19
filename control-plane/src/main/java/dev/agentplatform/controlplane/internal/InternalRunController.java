@@ -7,6 +7,7 @@ import dev.agentplatform.controlplane.run.RunService;
 import dev.agentplatform.controlplane.run.RunStatus;
 import dev.agentplatform.controlplane.run.RunUpdate;
 import dev.agentplatform.controlplane.run.RunViews;
+import dev.agentplatform.controlplane.token.RunTokenIssuer;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -29,15 +30,19 @@ public class InternalRunController {
 
     private final RunService service;
     private final ContractValidator contracts;
+    private final RunTokenIssuer tokens;
 
-    public InternalRunController(RunService service, ContractValidator contracts) {
+    public InternalRunController(RunService service, ContractValidator contracts, RunTokenIssuer tokens) {
         this.service = service;
         this.contracts = contracts;
+        this.tokens = tokens;
     }
 
+    /** The run, its spec and input, and a new run token for this attempt (when tokens are on). */
     @GetMapping("/{runId}")
     public RunViews.Internal get(@PathVariable String runId) {
-        return RunViews.internal(service.loadForWorker(runId));
+        var loaded = service.loadForWorker(runId);
+        return RunViews.internal(loaded, tokens.issue(loaded));
     }
 
     @PatchMapping(path = "/{runId}", consumes = MediaType.APPLICATION_JSON_VALUE)

@@ -28,3 +28,6 @@ platform:
     signing-secret: ${SLACK_SIGNING_SECRET:}
   approval:
     timeout-hours: ${APPROVAL_TIMEOUT_HOURS:72}
+  run-token:
+    private-key: ${RUN_TOKEN_PRIVATE_KEY:}
+    public-key: ${RUN_TOKEN_PUBLIC_KEY:}

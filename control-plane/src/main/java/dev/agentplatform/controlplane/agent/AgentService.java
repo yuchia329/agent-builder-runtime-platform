@@ -1,6 +1,7 @@
 package dev.agentplatform.controlplane.agent;
 
 import dev.agentplatform.controlplane.store.AgentStore;
+import dev.agentplatform.controlplane.tenant.Principals;
 import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,6 @@ public class AgentService {
                     "$.name: '%s' does not match agent '%s'".formatted(specName, agentName)));
         }
         var trigger = spec.path("trigger").asString();
-        return store.publishVersion(tenantId, agentName, trigger, validator.toJson(spec));
+        return store.publishVersion(tenantId, agentName, trigger, validator.toJson(spec), Principals.api(tenantId));
     }
 }

@@ -42,14 +42,15 @@ public class InMemoryAgentStore implements AgentStore {
     }
 
     @Override
-    public synchronized AgentVersion publishVersion(String tenantId, String name, String trigger, String specJson) {
+    public synchronized AgentVersion publishVersion(String tenantId, String name, String trigger, String specJson,
+                                                    String owner) {
         var key = new AgentKey(tenantId, name);
         var agent = agents.get(key);
         if (agent == null) {
             throw new AgentNotFoundException(tenantId, name);
         }
         int next = agent.latestVersion() + 1;
-        var version = new AgentVersion(tenantId, name, next, trigger, specJson, clock.instant());
+        var version = new AgentVersion(tenantId, name, next, trigger, specJson, owner, clock.instant());
         versions.put(new VersionKey(tenantId, name, next), version);
         agents.put(key, new Agent(tenantId, name, next, next, trigger, agent.createdAt()));
         return version;

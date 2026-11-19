@@ -66,6 +66,16 @@ abstract class RunStoreContractTest {
     }
 
     @Test
+    void runRecordsWhatStartedIt() {
+        var run = Run.queued("run_" + UUID.randomUUID(), "t1", "triage", 1, INPUT, "webhook:github", T0);
+        store.create(run);
+        store.update(run.runId(), to(RunStatus.RUNNING), T1);
+
+        assertThat(store.find(run.runId()).orElseThrow().startedBy()).isEqualTo("webhook:github");
+        assertThat(queuedRun().startedBy()).isEqualTo("api:t1");
+    }
+
+    @Test
     void missingRunIsEmpty() {
         assertThat(store.find("run_missing")).isEmpty();
     }

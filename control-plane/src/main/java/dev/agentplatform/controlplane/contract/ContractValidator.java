@@ -19,6 +19,7 @@ import tools.jackson.databind.JsonNode;
 public class ContractValidator {
 
     public static final String RUN_MESSAGE = "run-message.schema.json";
+    public static final String RUN_TOKEN = "run-token.schema.json";
     public static final String INTERNAL_RUN = "internal-api.openapi.yaml#/components/schemas/InternalRun";
     public static final String RUN_SUMMARY = "internal-api.openapi.yaml#/components/schemas/RunSummary";
     public static final String RUN_UPDATE = "internal-api.openapi.yaml#/components/schemas/RunUpdate";

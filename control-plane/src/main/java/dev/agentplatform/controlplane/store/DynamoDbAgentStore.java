@@ -1,5 +1,6 @@
 package dev.agentplatform.controlplane.store;
 
+import dev.agentplatform.controlplane.tenant.Principals;
 import dev.agentplatform.controlplane.agent.Agent;
 import dev.agentplatform.controlplane.agent.AgentVersion;
 import java.time.Clock;
@@ -73,7 +74,7 @@ public class DynamoDbAgentStore implements AgentStore {
     }
 
     @Override
-    public AgentVersion publishVersion(String tenantId, String name, String trigger, String specJson) {
+    public AgentVersion publishVersion(String tenantId, String name, String trigger, String specJson, String owner) {
         var pk = agentPk(tenantId, name);
         for (int attempt = 1; attempt <= MAX_PUBLISH_ATTEMPTS; attempt++) {
             var current = findAgent(tenantId, name).orElseThrow(() -> new AgentNotFoundException(tenantId, name));
@@ -87,6 +88,7 @@ public class DynamoDbAgentStore implements AgentStore {
             versionItem.put("version", n(next));
             versionItem.put("trigger", s(trigger));
             versionItem.put("spec", s(specJson));
+            versionItem.put("owner", s(owner));
             versionItem.put("createdAt", s(now.toString()));
 
             var bumpAgent = Update.builder().tableName(table).key(key(pk, "META"))
@@ -104,7 +106,7 @@ public class DynamoDbAgentStore implements AgentStore {
                 dynamo.transactWriteItems(r -> r.transactItems(
                         TransactWriteItem.builder().update(bumpAgent).build(),
                         TransactWriteItem.builder().put(putVersion).build()));
-                return new AgentVersion(tenantId, name, next, trigger, specJson, now);
+                return new AgentVersion(tenantId, name, next, trigger, specJson, owner, now);
             } catch (TransactionCanceledException e) {
                 if (!isConditionFailure(e)) {
                     throw e;
@@ -124,7 +126,9 @@ public class DynamoDbAgentStore implements AgentStore {
             return Optional.empty();
         }
         return Optional.of(new AgentVersion(tenantId, name, Integer.parseInt(item.get("version").n()),
-                item.get("trigger").s(), item.get("spec").s(), Instant.parse(item.get("createdAt").s())));
+                item.get("trigger").s(), item.get("spec").s(),
+                item.containsKey("owner") ? item.get("owner").s() : Principals.api(tenantId), // written before M4
+                Instant.parse(item.get("createdAt").s())));
     }
 
     @Override

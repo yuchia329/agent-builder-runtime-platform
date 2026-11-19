@@ -55,6 +55,16 @@ Request URL (a new URL on every tunnel start; DNS can take a minute). Start a ru
 `RUNNING` then `WAITING_APPROVAL` with a `pending_approval`, click in Slack. Use cloudflared, not
 smee.io: smee re-sends bodies as JSON, and Slack's form body must arrive byte for byte.
 
+Run tokens (`GET /internal/runs/{id}` → `run_token`): a P-256 key pair, both halves in `../.env`
+(one line each: the base64 body, or PEM with `\n`):
+
+```sh
+openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out run-token.pem
+openssl ec -in run-token.pem -pubout -out run-token.pub.pem
+echo "RUN_TOKEN_PRIVATE_KEY=$(grep -v -- ----- run-token.pem | tr -d '\n')"      # secret
+echo "RUN_TOKEN_PUBLIC_KEY=$(grep -v -- ----- run-token.pub.pem | tr -d '\n')"
+```
+
 Against the local stack (DynamoDB + SQS) instead of memory: `make stack` at the repo root (`make
 up` also starts a control-plane container on 8080), then
 `set -a && . ../.env && set +a && ./gradlew bootRun`.
@@ -73,7 +83,7 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 ## Conventions
 
 - Package `dev.agentplatform.controlplane`, one package per area (`agent`, `run`, `trigger`,
-  `internal`, `store`, `queue`, `contract`, `tenant`, `config`, `web`).
+  `internal`, `store`, `queue`, `contract`, `tenant`, `config`, `web`, `approval`, `token`).
 - Webhook routes (`/triggers/*`) have no API key; they trust only a valid signature. Keep the
   verification and payload rules in plain classes (`GitHubWebhooks`) so they test without HTTP.
 - Webhook deliveries are claimed in `DeliveryStore` before any run starts; tests send a unique
@@ -102,7 +112,7 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 - Config comes from env vars via `application.yml` (`STORE_BACKEND`, `CONTROL_PLANE_TABLE`,
   `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`,
   `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
-  `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`, `SLACK_SIGNING_SECRET`, `APPROVAL_TIMEOUT_HOURS`,
+  `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`, `SLACK_SIGNING_SECRET`, `APPROVAL_TIMEOUT_HOURS`, `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`,
   `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
 - Errors: throw domain exceptions; `web/ApiExceptionHandler` maps them to problem+json.
 - Scheduled work is a plain class with a `...Once()` method (`RunSweeper.sweepOnce`) plus a thin
@@ -123,6 +133,9 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   `decideApproval` (approved / rejected, sets `approval`) or `expireApproval` (`approval_expired`,
   no `approval`). A new way out of `WAITING_APPROVAL` gets the same condition and a race test
   against `decideApproval` in `RunStoreContractTest`.
+- Run tokens (`token/RunTokenIssuer`): never log a token, a key or a key's text in an error;
+  tests generate throwaway keys with `TestKeys`. Identities are `<kind>:<id>` from
+  `tenant/Principals` (`api:<tenant>`, `webhook:github`); a new trigger adds its own constant.
 - Posting approval requests never fails the worker's PATCH (`ApprovalNotifier` returns an
   outcome, does not throw); a missed post is the approval sweep's job.
 - Slack fixtures (`src/test/resources/fixtures/slack/`) are recorded response bodies with

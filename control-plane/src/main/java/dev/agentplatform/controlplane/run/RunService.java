@@ -10,6 +10,7 @@ import dev.agentplatform.controlplane.store.ApprovalConflictException;
 import dev.agentplatform.controlplane.store.IllegalTransitionException;
 import dev.agentplatform.controlplane.store.RunNotFoundException;
 import dev.agentplatform.controlplane.store.RunStore;
+import dev.agentplatform.controlplane.tenant.Principals;
 import dev.agentplatform.controlplane.agent.Agent;
 import java.time.Clock;
 import java.util.Comparator;
@@ -43,8 +44,8 @@ public class RunService {
         this.clock = clock;
     }
 
-    /** A run plus the spec of the version it is pinned to, for workers. */
-    public record RunWithSpec(Run run, String specJson) {}
+    /** A run plus the spec and publisher ({@code owner}) of the version it is pinned to, for workers. */
+    public record RunWithSpec(Run run, String specJson, String owner) {}
 
     /**
      * Stores a QUEUED run pinned to the agent's active version, then enqueues it. If enqueueing
@@ -52,12 +53,18 @@ public class RunService {
      * propagates (a later sweep re-enqueues such runs).
      */
     public Run start(String tenantId, String agentName, String inputJson) {
+        return start(tenantId, agentName, inputJson, Principals.api(tenantId));
+    }
+
+    /** {@link #start(String, String, String)} recording what started the run ({@code startedBy}). */
+    public Run start(String tenantId, String agentName, String inputJson, String startedBy) {
         var agent = agents.findAgent(tenantId, agentName)
                 .orElseThrow(() -> new AgentNotFoundException(tenantId, agentName));
         if (agent.activeVersion() == null) {
             throw new AgentNotPublishedException(agentName);
         }
-        var run = Run.queued(newRunId(), tenantId, agentName, agent.activeVersion(), inputJson, clock.instant());
+        var run = Run.queued(newRunId(), tenantId, agentName, agent.activeVersion(), inputJson, startedBy,
+                clock.instant());
         runs.create(run);
         queue.publish(new RunMessage(run.runId(), tenantId));
         return run;
@@ -69,11 +76,11 @@ public class RunService {
      * matches). If enqueueing fails partway, the runs saved so far stay QUEUED and the
      * {@link dev.agentplatform.controlplane.queue.RunQueueException} propagates.
      */
-    public List<Run> startForTrigger(String tenantId, String trigger, String inputJson) {
+    public List<Run> startForTrigger(String tenantId, String trigger, String inputJson, String startedBy) {
         return agents.findAgentsByTrigger(trigger).stream()
                 .filter(agent -> agent.tenantId().equals(tenantId))
                 .sorted(Comparator.comparing(Agent::name))
-                .map(agent -> start(tenantId, agent.name(), inputJson))
+                .map(agent -> start(tenantId, agent.name(), inputJson, startedBy))
                 .toList();
     }
 
@@ -89,7 +96,7 @@ public class RunService {
         var version = agents.findVersion(run.tenantId(), run.agentName(), run.agentVersion())
                 .orElseThrow(() -> new IllegalStateException(
                         "Run %s points at missing version %s v%d".formatted(runId, run.agentName(), run.agentVersion())));
-        return new RunWithSpec(run, version.specJson());
+        return new RunWithSpec(run, version.specJson(), version.owner());
     }
 
     /**

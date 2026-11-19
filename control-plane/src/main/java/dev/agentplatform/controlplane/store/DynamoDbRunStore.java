@@ -5,6 +5,7 @@ import dev.agentplatform.controlplane.run.ApprovalDecision;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunStatus;
 import dev.agentplatform.controlplane.run.RunUpdate;
+import dev.agentplatform.controlplane.tenant.Principals;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -27,7 +28,7 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionChe
  * Run  PK = RUN#&lt;id&gt;  SK = META
  *      runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId,
  *      pendingApproval (JSON), approval (JSON), approvalChannel, approvalMessageId, failureReason,
- *      failureMessage, output, input (JSON), createdAt, updatedAt
+ *      failureMessage, output, input (JSON), startedBy, createdAt, updatedAt
  *      GSI2PK = TENANT#&lt;t&gt;#AGENT#&lt;name&gt;  GSI2SK = &lt;createdAt&gt;#&lt;runId&gt;  (runs of an agent by time)
  *      GSI1PK = RUNS#QUEUED  GSI1SK = &lt;queued-at epoch millis, 13 digits&gt;#&lt;runId&gt;
  *        (only while QUEUED: a sparse index of queued runs for the re-enqueue sweep)
@@ -67,6 +68,7 @@ public class DynamoDbRunStore implements RunStore {
         item.put("steps", n(run.steps()));
         item.put("costUsd", AttributeValue.fromN(run.costUsd().toPlainString()));
         item.put("input", s(run.inputJson()));
+        item.put("startedBy", s(run.startedBy()));
         item.put("createdAt", s(run.createdAt().toString()));
         item.put("updatedAt", s(run.updatedAt().toString()));
         item.put("GSI2PK", s(DynamoDbAgentStore.agentPk(run.tenantId(), run.agentName())));
@@ -349,6 +351,8 @@ public class DynamoDbRunStore implements RunStore {
                 failureReason == null ? null : new Run.Failure(failureReason, str(item, "failureMessage")),
                 str(item, "output"),
                 item.get("input").s(),
+                item.containsKey("startedBy") ? item.get("startedBy").s()
+                        : Principals.api(item.get("tenantId").s()), // written before M4
                 Instant.parse(item.get("createdAt").s()),
                 Instant.parse(item.get("updatedAt").s()));
     }

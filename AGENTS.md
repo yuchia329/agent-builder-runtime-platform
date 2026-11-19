@@ -91,4 +91,4 @@ Filled in as each component is scaffolded.
 | worker        | `cd worker && uv sync` | `cd worker && uv run pytest` (needs Docker; `-m "not docker"` without) | `cd worker && set -a && . ../.env && set +a && uv run worker` |
 | tool-gateway  | `cd tool-gateway && uv sync` | `cd tool-gateway && uv run pytest` | `cd tool-gateway && RUN_TOKEN_PUBLIC_KEY=... CONNECTORS=fake uv run gateway` (port 8090; with GitHub: `tool-gateway/AGENTS.md`) |
 | specs         | — | validate: see `specs/AGENTS.md` | real run: `specs/README.md` |
-| local-stack   | `make up` (builds both images) | `make up && make demo`; crash safety: `make chaos` | `make up` / `make stack` / `make down` (repo root; see `local-stack/AGENTS.md`) |
+| local-stack   | `make up` (builds the three images, makes the run-token keys) | `make up && make demo`; crash safety: `make chaos` | `make up` / `make stack` / `make down` (repo root; see `local-stack/AGENTS.md`) |

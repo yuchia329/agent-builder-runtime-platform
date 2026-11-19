@@ -1,6 +1,7 @@
 #!/bin/sh
 # End-to-end smoke test against `make up`: publish the example spec, start a run, wait until the
-# worker finishes it. Exits non-zero unless the run reaches SUCCEEDED. Needs only sh and curl.
+# worker finishes it with its tools through the tool gateway. Exits non-zero unless the run
+# reaches SUCCEEDED and the gateway logged its calls. Needs sh, curl and docker.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -50,7 +51,14 @@ done
 
 echo "   $run"
 if [ "$status" = SUCCEEDED ]; then
-  echo "Demo passed: run $run_id SUCCEEDED in $(printf '%s' "$run" | field steps) steps."
+  # The worker has no tools of its own in the stack: each call must show in the gateway's log.
+  calls=$(docker compose logs tool-gateway 2>/dev/null | grep "gateway.access" | grep -c "$run_id" || true)
+  if [ "$calls" -lt 1 ]; then
+    echo "Demo failed: run $run_id SUCCEEDED but the tool gateway logged no call for it." >&2
+    exit 1
+  fi
+  echo "Demo passed: run $run_id SUCCEEDED in $(printf '%s' "$run" | field steps) steps," \
+    "$calls tool calls through the gateway."
 else
   echo "Demo failed: run $run_id is $status. Worker logs:" >&2
   docker compose logs --tail 30 worker >&2 || true

@@ -26,3 +26,6 @@ __pycache__/
 .terraform/
 *.tfstate
 *.tfstate.*
+
+# Local run-token key pair (make up generates it)
+.run-token-*.env

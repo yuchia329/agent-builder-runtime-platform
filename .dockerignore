@@ -2,6 +2,7 @@
 # need; never private notes or local credentials.
 notes/
 .env
+.run-token-*.env
 .git/
 **/.venv/
 **/build/

@@ -1,5 +1,5 @@
-# The whole platform locally: AWS stand-ins (DynamoDB Local, ElasticMQ) plus the control plane and
-# worker built from this repo. Start with `make up`; `make stack` starts only the AWS stand-ins.
+# The whole platform locally: AWS stand-ins (DynamoDB Local, ElasticMQ) plus the control plane,
+# tool gateway and worker built from this repo. Start with `make up`; `make stack` starts only the AWS stand-ins.
 # Data is in memory: `make down` (or a restart) wipes it.
 name: agent-platform
 
@@ -45,7 +45,8 @@ services:
     build:
       context: .
       dockerfile: control-plane/Dockerfile
-    env_file: .env
+    # Run-token key pair from `make` (local-stack/run-token-keys.sh); overrides any in .env.
+    env_file: [.env, .run-token-private.env, .run-token-public.env]
     environment:
       AWS_ENDPOINT_URL_DYNAMODB: http://dynamodb:8000
       AWS_ENDPOINT_URL_SQS: http://elasticmq:9324
@@ -74,7 +75,32 @@ services:
     volumes:
       - ./local-stack:/local-stack:ro
 
-  # Built from worker/Dockerfile: polls the run queue, stub model and fake tools (M0).
+  # Built from tool-gateway/Dockerfile. Gets only what it needs, never the whole .env (no
+  # GITHUB_TOKEN, Slack or model secrets): the public run-token key, the connectors, and the
+  # GitHub App settings (key file mounted read-only when GITHUB_APP_PRIVATE_KEY_FILE is set).
+  # CONNECTORS=fake (default) for `make demo`; CONNECTORS=github in .env for real runs.
+  tool-gateway:
+    build:
+      context: .
+      dockerfile: tool-gateway/Dockerfile
+    env_file: [.run-token-public.env]
+    environment:
+      CONNECTORS: ${CONNECTORS:-fake}
+      CONTROL_PLANE_URL: http://control-plane:8080
+      GITHUB_REPOS: ${GITHUB_REPOS:-}
+      TENANT_ID: ${TENANT_ID:-tenant-demo}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
+      GITHUB_APP_PRIVATE_KEY_FILE: ${GITHUB_APP_PRIVATE_KEY_FILE:+/run/secrets/github-app.pem}
+    volumes:
+      - ${GITHUB_APP_PRIVATE_KEY_FILE:-/dev/null}:/run/secrets/github-app.pem:ro
+    ports:
+      - "8090:8090"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+
+  # Built from worker/Dockerfile: polls the run queue; tools always through the gateway (M4).
   worker:
     build:
       context: .
@@ -85,6 +111,11 @@ services:
       AWS_ENDPOINT_URL_SQS: http://elasticmq:9324
       RUN_QUEUE_URL: http://elasticmq:9324/000000000000/runs
       CONTROL_PLANE_URL: http://control-plane:8080
+      TOOLS_PROVIDER: mcp
+      TOOL_GATEWAY_URL: http://tool-gateway:8090
+      GITHUB_TOKEN: "" # only the gateway holds credentials (ADR 0006); chaos sets a fake one
     depends_on:
       control-plane:
+        condition: service_healthy
+      tool-gateway:
         condition: service_healthy

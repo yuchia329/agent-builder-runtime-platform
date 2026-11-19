@@ -507,8 +507,9 @@ the spec as `<provider>/<model id>`; config only defines the providers
 
 - **Unit and contract tests** in each service. Contract tests run every port's suite against every
   adapter.
-- **Smoke test:** `make up && make demo` runs the whole platform in Docker and one run of the
-  example spec to `SUCCEEDED` with the stub model.
+- **Smoke test:** `make up && make demo` runs the whole platform in Docker (control plane, tool
+  gateway with the fake connector, worker) and one run of the example spec to `SUCCEEDED` with
+  the stub model, its tool calls through the gateway with a locally generated run-token key pair.
 - **Evals** (`evals/`): each task is a trigger event, recorded tool responses, and success checks.
   Deterministic checks first (right labels, duplicate found, nothing closed without approval); an
   LLM judge only for free-text quality, checked against about 50 hand labels. GitHub Actions runs

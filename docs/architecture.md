@@ -380,6 +380,18 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   `idempotent`), and an optional `hook`: a function in `connectors/<name>/hooks.py` for checks that
   need extra calls (GitHub: existing labels only, close reads the issue first, `duplicate_of` to
   issue id). Rules run first; a hook cannot widen them.
+- Generation, at startup: the allowlist must follow the contract; tool names carry the connector
+  prefix; operations, listed and fixed arguments, check templates, hooks and hook operations must
+  exist; enum rules may only narrow the API's. Each tool's input schema is the operation's schema
+  for the listed arguments (refs inlined, OpenAPI-only keywords dropped) plus `maxLength` /
+  `maxItems` / `enum` from the rules. Settings an allowlist names (`GITHUB_REPOS`) are read then;
+  a missing one fails startup. `openapi.yaml` is cut from the vendor's official description by
+  `scripts/cut_openapi.py` (GitHub: 5 operations, about 120 KB of 14 MB) and committed.
+- A call: checks, then argument rules (refuse, append, scope qualifiers), then the hook or the
+  request (path, query or JSON body as the operation says, connector `headers`, the credential),
+  then the result shape (`fields`; with `list`, `{"items": [...]}`). 5xx and network errors are
+  retried 3 times; rate limits are reported, not retried; 4xx answers reach the model as
+  "<connector> answered <status>: <message>". Calls run in a worker thread.
 - Identity: `acts_as: team-bot` uses the tenant's bot (GitHub App installation token, cached for
   its hour); `acts_as: owner` uses the publisher's OAuth token, stored after a one-time login
   (`/oauth/<provider>/start`, `/callback`).
@@ -561,12 +573,14 @@ tool-gateway/                   Python, MCP SDK (Starlette) + uvicorn (see tool-
   src/gateway/
     config.py  contracts.py  app.py  __main__.py  (lambda_handler.py in M6)
     auth/       run_token
-    tools/      registry, access_log (openapi_to_mcp, executor: M4)
+    tools/      registry, access_log, openapi_to_mcp (generator), rules, executor
+    credentials.py
     oauth/      routes, providers (M4)
     ports/      token_store
     adapters/   token_store_memory (token_store_ssm in M6)
     connectors/ fake (in code, a test double)
-  connectors/   github/ (M4), later slack/ notion/ gcal/   (openapi.yaml + allowlist.yaml each)
+  connectors/   github/, later slack/ notion/ gcal/   (openapi.yaml + allowlist.yaml [+ hooks.py])
+  scripts/      cut_openapi.py (cuts a connector's openapi.yaml from the vendor's description)
   tests/
 
 specs/          issue-triage.yaml, meeting-prep.yaml

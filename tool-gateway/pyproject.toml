@@ -4,9 +4,11 @@ version = "0.0.1"
 description = "Holds credentials and runs agent tool calls over MCP (ADR 0006)"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx2>=2.16",
     "jsonschema>=4.23",
     "mcp>=2.3.0",
     "pyjwt[crypto]>=2.15.1",
+    "pyyaml>=6.0",
     "starlette>=1.10.0",
     "uvicorn>=0.38",
 ]

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
+CONNECTORS_FOLDER = Path(__file__).resolve().parents[2] / "connectors"
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,8 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8090
     contracts_dir: Path = REPO_CONTRACTS
+    connectors_dir: Path = CONNECTORS_FOLDER
+    env: tuple[tuple[str, str], ...] = ()  # for settings an allowlist names (GITHUB_REPOS, ...)
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "Settings":
@@ -32,4 +35,6 @@ class Settings:
             host=env.get("GATEWAY_HOST", "127.0.0.1"),
             port=int(env.get("GATEWAY_PORT", "8090")),
             contracts_dir=Path(env.get("CONTRACTS_DIR", str(REPO_CONTRACTS))),
+            connectors_dir=Path(env.get("CONNECTORS_DIR", str(CONNECTORS_FOLDER))),
+            env=tuple(sorted(env.items())),
         )

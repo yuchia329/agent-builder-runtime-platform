@@ -74,9 +74,9 @@ def meta(step: int = 3, key: str = "a" * 64) -> dict[str, Any]:
 class LiveGateway:
     """The real app on 127.0.0.1 and a free port, in a thread."""
 
-    def __init__(self, keys: Keys, connector: FakeConnector) -> None:
+    def __init__(self, keys: Keys, *connectors: FakeConnector) -> None:
         verifier = RunTokenVerifier(keys.public_pem, CONTRACTS)
-        app = create_app(Registry([connector]), verifier, CONTRACTS)
+        app = create_app(Registry(connectors), verifier, CONTRACTS)
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             self.port = s.getsockname()[1]

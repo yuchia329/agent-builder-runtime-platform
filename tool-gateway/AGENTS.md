@@ -16,6 +16,7 @@ Run from `tool-gateway/`.
 | Run locally | `RUN_TOKEN_PUBLIC_KEY=<public half of the control plane's pair> CONNECTORS=fake uv run gateway` (port 8090; `GATEWAY_PORT` to change) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
+| Re-cut a connector's openapi.yaml | see the docstring of `scripts/cut_openapi.py` (download to its own folder, run with `python -I`) |
 | Tests hang at 0% CPU | iCloud evicted `.venv` files: `find .venv -flags +dataless \| wc -l`; if not 0, `rm -rf .venv && uv sync` |
 
 ## Layout
@@ -27,7 +28,15 @@ Run from `tool-gateway/`.
 - `auth/run_token.py`: `RunTokenVerifier`, `thumbprint` (RFC 7638; checked equal to Nimbus's,
   which the control plane uses).
 - `tools/registry.py`: `Tool`, `Connector`, `Registry`, `ToolFailure`; `tools/access_log.py`.
-- `ports/` (`Protocol` only) and `adapters/`; `connectors/fake.py` (in code, a test double).
+- `tools/openapi_to_mcp.py` (generator and load-time checks), `tools/rules.py` (pure rule
+  functions), `tools/executor.py` (`ConnectorClient`: one per generated connector, `HookCall`),
+  `credentials.py` (which stored credential a call uses).
+- `../connectors/<name>/`: `openapi.yaml` (cut, never edited by hand), `allowlist.yaml`, optional
+  `hooks.py` with a `HOOKS` dict (loaded by `__main__.load_hooks`).
+- `ports/` (`Protocol` only) and `adapters/`; `src/gateway/connectors/fake.py` (in code, a test
+  double).
+- `tests/fake_github.py` + `tests/fixtures/github/`: recorded GitHub bodies copied from the
+  worker's fixtures (see its README); routes with `on`, `fail_next` for retries.
 - `contracts.py` loads every `../contracts/*.schema.json` together (`CONTRACTS_DIR` to move).
 - `tests/gateway_testing.py`: keys, signed tokens, `LiveGateway` (the real app on a free port in a
   thread), `mcp_client` (the SDK's client with a bearer header). `tests/contract/`: one suite per
@@ -50,3 +59,13 @@ Run from `tool-gateway/`.
 - The fake connector mirrors the worker's `tools_fake.issue_triage_tools()` (names, schemas,
   flags, results); change both together.
 - A new adapter joins its port's `ADAPTERS` list and passes the suite.
+- Tools expose the API's own parameter names; never rename arguments in a connector. A rule
+  only narrows (an `enum` wider than the API's fails load).
+- Every load-time rule the contract cannot express gets a case in
+  `tests/test_openapi_to_mcp.py::BREAKS`.
+- Hooks get a `HookCall`: arguments after rules, `hook_arguments`, `send` (the tool's own request)
+  and `operation` (only `hook_operations`); they return the raw API response, and the result shape
+  is applied after. Model-readable failures raise `ToolFailure`.
+- Recorded fixtures are cleaned like the worker's (owner/repo `octocat/Hello-World`, no users,
+  avatars, node ids or bodies); check with `grep -ri <your-login> tests/fixtures` before
+  committing a new recording.

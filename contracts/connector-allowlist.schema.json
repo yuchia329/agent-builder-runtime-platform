@@ -12,6 +12,12 @@
       "pattern": "^[a-z][a-z0-9_]*$"
     },
     "base_url": { "description": "API base URL the operation paths are joined to.", "type": "string", "pattern": "^https://" },
+    "headers": {
+      "description": "Headers sent on every request of this connector (for example GitHub's Accept and X-GitHub-Api-Version). Never a credential: those come from the credential kind.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9-]+$", "not": { "pattern": "^([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee])$" } },
+      "additionalProperties": { "type": "string" }
+    },
     "credentials": {
       "description": "Credential kind per acts_as. A missing key means that acts_as cannot use this connector.",
       "type": "object",
@@ -94,7 +100,7 @@
         "max_length": { "type": "integer", "minimum": 1 },
         "max_items": { "type": "integer", "minimum": 1 },
         "refuse_pattern": {
-          "description": "Regular expression; a matching value is refused with refuse_message.",
+          "description": "Regular expression (Python syntax, searched anywhere in the value; `(?i)` at the start ignores case); a matching value is refused with refuse_message.",
           "type": "string",
           "minLength": 1
         },
@@ -130,7 +136,7 @@
       "additionalProperties": false,
       "required": ["fields"],
       "properties": {
-        "list": { "description": "Path to a list in the response (`.` when the response is the list); fields then apply to each item.", "type": "string", "minLength": 1 },
+        "list": { "description": "Path to a list in the response (`.` when the response is the list); fields then apply to each item, and the result is {\"items\": [...]}.", "type": "string", "minLength": 1 },
         "fields": {
           "description": "Output name to source path (`a.b`, `labels[].name` for a list of names).",
           "type": "object",

@@ -133,3 +133,39 @@ async def test_owner_runs_log_the_owner_as_identity(gateway, keys, caplog):
 
     line = json.loads(next(r.getMessage() for r in caplog.records if r.name == "gateway.access"))
     assert line["identity"] == "user:42"
+
+
+async def test_generated_github_tools_work_through_mcp(keys):
+    from fake_github import REPO, FakeGitHub, fixture
+    from gateway_testing import CONTRACTS, LiveGateway
+
+    from gateway.adapters.token_store_memory import MemoryTokenStore
+    from gateway.config import CONNECTORS_FOLDER
+    from gateway.credentials import Credentials
+    from gateway.ports.token_store import CredentialKey
+    from gateway.tools.executor import ConnectorClient
+    from gateway.tools.openapi_to_mcp import load_connector
+
+    store = MemoryTokenStore()
+    store.put(CredentialKey("tenant-test", "team-bot", "github"), {"token": "ghs_secret"})
+    definition = load_connector(CONNECTORS_FOLDER / "github", CONTRACTS, {"GITHUB_REPOS": REPO})
+    with FakeGitHub() as github:
+        github.on("GET", "/search/issues", fixture("search_issues"))
+        connector = ConnectorClient(definition, Credentials(store), base_url=github.url)
+        with LiveGateway(keys, connector) as gateway:
+            async with mcp_client(gateway, token(keys)) as client:
+                tools = {t.name: t for t in (await client.list_tools()).tools}
+                result = await client.call_tool(
+                    "github.search_issues", {"q": "refund"}, meta=meta()
+                )
+
+    assert set(tools) == {"github.search_issues", "github.add_label"}
+    assert tools["github.search_issues"].annotations.read_only_hint
+    assert not result.is_error
+    assert result.structured_content["items"][0].keys() == {
+        "number",
+        "title",
+        "state",
+        "labels",
+        "url",
+    }

@@ -1,6 +1,9 @@
 # The GitHub connector as planned for M4 (tool-gateway/connectors/github/allowlist.yaml).
 connector: github
 base_url: https://api.github.com
+headers:
+  Accept: application/vnd.github+json
+  X-GitHub-Api-Version: "2022-11-28"
 credentials:
   team-bot: github_app
   owner: oauth

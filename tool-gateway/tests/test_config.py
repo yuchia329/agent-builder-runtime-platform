@@ -29,3 +29,24 @@ def test_unknown_connector_fails_startup():
 
     with pytest.raises(ValueError, match="notion"):
         build(settings)
+
+
+def test_github_connector_loads_from_the_connectors_folder():
+    env = {
+        "RUN_TOKEN_PUBLIC_KEY": Keys().public_pem,
+        "CONNECTORS": "fake,github",
+        "GITHUB_REPOS": "octocat/Hello-World",
+    }
+
+    with pytest.raises(ValueError, match="defined twice"):  # fake and github share tool names
+        build(Settings.from_env(env))
+
+    env["CONNECTORS"] = "github"
+    assert build(Settings.from_env(env)) is not None
+
+
+def test_github_connector_without_repos_fails_startup():
+    env = {"RUN_TOKEN_PUBLIC_KEY": Keys().public_pem, "CONNECTORS": "github"}
+
+    with pytest.raises(ValueError, match="GITHUB_REPOS is not set"):
+        build(Settings.from_env(env))

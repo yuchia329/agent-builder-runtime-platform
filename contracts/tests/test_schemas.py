@@ -139,6 +139,9 @@ ALLOWLIST_BREAKS = {
     "unknown credential kind": lambda doc: doc["credentials"].update({"team-bot": "personal_token"}),
     "http base url": _set("base_url", "http://api.github.com"),
     "hook name with dash": _tool("github.close_issue", lambda t: t.update(hook="close-checks")),
+    "authorization header": lambda doc: doc["headers"].update(Authorization="Bearer x"),
+    "lowercase authorization header": lambda doc: doc["headers"].update(authorization="x"),
+    "non-string header": lambda doc: doc["headers"].update({"X-Number": 1}),
 }
 
 

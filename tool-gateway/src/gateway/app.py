@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any
 
+import anyio
 from jsonschema import Draft202012Validator
 from mcp.server import Server, ServerRequestContext
 from mcp.server.transport_security import TransportSecuritySettings
@@ -90,7 +91,10 @@ def build_server(registry: Registry, contracts: Contracts) -> Server:
             done("error", "invalid arguments")
             return _error("Invalid arguments: " + "; ".join(e.message for e in argument_errors[:5]))
         try:
-            result = tool.run(arguments, CallContext(claims, step, key))
+            # Tools make blocking HTTP calls; keep them off the event loop.
+            result = await anyio.to_thread.run_sync(
+                tool.run, arguments, CallContext(claims, step, key)
+            )
         except ToolFailure as e:
             done("error", "tool failure")
             return _error(str(e))

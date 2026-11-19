@@ -290,7 +290,7 @@ Work in this order:
   access log; `TokenStore` port with an in-memory adapter and contract suite; a fake connector.
   `AGENTS.md` and the Commands table. Check: tests including a forged token, an expired one, and
   a tool not in the token.
-- [ ] `[tool-gateway]` OpenAPI-to-MCP generator: `connectors/github/` (`openapi.yaml` trimmed
+- [x] `[tool-gateway]` OpenAPI-to-MCP generator: `connectors/github/` (`openapi.yaml` trimmed
   from GitHub's official description, `allowlist.yaml`) becomes MCP tools (name, description,
   input schema from parameters and body, annotations); the executor builds and sends requests;
   declarative rules: allowed repos, search scope (`repo:` added, `repo:`/`org:`/`user:` refused),
@@ -389,17 +389,32 @@ service has followed.
   `contracts/run-token.schema.json`, `contracts/connector-allowlist.schema.json`,
   `contracts/mcp-tool-call.schema.json` and `run_token` in `contracts/internal-api.openapi.yaml`.
   Must follow: `tool-gateway`
-  (load allowlists, M4 task 4; token and `_meta` done), `worker` (`tools_mcp.py`: send the token
+  done, `worker` (`tools_mcp.py`: send the token
   and `_meta`, read annotations). Tool arguments become GitHub's own parameter names (`owner`,
   `repo`, `q`, `labels`, `state_reason`; hook extra `duplicate_of`) when the worker switches to
   the gateway; specs keep their tool names. `control-plane` done. Results: the tool's JSON in
   `structuredContent` (also as text in `content[0]`), added to `mcp-tool-call.schema.json`'s
-  description; the worker reads `structuredContent`.
+  description; the worker reads `structuredContent`. Allowlist gained connector `headers` (never
+  a credential) and `{"items": [...]}` for `list` results; only `tool-gateway` reads it.
 
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-18 · tool-gateway** — M4 task 4: generator `tools/openapi_to_mcp.py` (allowlist checked
+  against the contract plus 12 load-time rules, input schemas from the operation's own parameters
+  with refs inlined and limits added), `tools/rules.py`, `tools/executor.py` (`ConnectorClient`,
+  `HookCall`), interim `credentials.py` (stored `{"token"}` per tenant / `team-bot` or owner /
+  connector). `connectors/github/`: `openapi.yaml` cut by `scripts/cut_openapi.py` from GitHub's
+  official description (5 operations, ~120 KB), `allowlist.yaml` (search, add label, close;
+  GitHub's own argument names). Contract: allowlist `headers`, `{"items"}` for list results.
+  88 gateway tests and 96 contracts tests pass; no live GitHub call (needs task 6). Next:
+  `[tool-gateway]` GitHub hooks with parity to `tools_local.py` (M4 task 5). Gotchas: GitHub's
+  add-labels body is a `oneOf` (the generator takes the object variant; label items may still be
+  objects, so the `existing_labels_only` hook must accept strings only); `state_reason` in
+  GitHub's enum includes `reopened`, narrowed by the allowlist; `(?i)` must lead a Python regex;
+  fake servers need `serve_forever(poll_interval=...)` small or each test waits 0.5 s.
 
 - **2026-11-18 · tool-gateway** — M4 task 3: `tool-gateway/` scaffold. MCP SDK 2.3 low-level
   `Server` (handlers as `on_*` constructor arguments), Streamable HTTP stateless with JSON

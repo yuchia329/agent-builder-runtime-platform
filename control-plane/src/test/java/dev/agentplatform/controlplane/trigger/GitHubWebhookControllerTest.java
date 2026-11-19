@@ -17,6 +17,9 @@ import dev.agentplatform.controlplane.store.InMemoryRunStore;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.List;
+import dev.agentplatform.controlplane.secret.EnvSecretSource;
+import dev.agentplatform.controlplane.secret.Secret;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +30,7 @@ class GitHubWebhookControllerTest {
     private static final String BODY = "{\"action\":\"opened\",\"issue\":{\"number\":1}}";
     private static final PlatformProperties PROPS = new PlatformProperties(
             PlatformProperties.StoreBackend.MEMORY, "t", PlatformProperties.QueueBackend.MEMORY, null,
-            new PlatformProperties.TenantProperties("t1", "key"), new PlatformProperties.GitHubProperties(SECRET), null, null, null, null);
+            new PlatformProperties.TenantProperties("t1", "key"), new PlatformProperties.GitHubProperties(SECRET), null, null, null, null, null);
 
     private final Clock clock = Clock.systemUTC();
     private final InMemoryRunStore runs = new InMemoryRunStore();
@@ -37,7 +40,8 @@ class GitHubWebhookControllerTest {
         agents.createAgent("t1", "triage");
         agents.publishVersion("t1", "triage", "github.issue.opened", "{}");
         return new GitHubWebhookController(new RunService(agents, runs, queue,
-                new ApprovalNotifier(new InMemoryApprovalChannel(), runs), clock), deliveries, clock, PROPS);
+                new ApprovalNotifier(new InMemoryApprovalChannel(), runs), clock), deliveries, clock, PROPS,
+                new EnvSecretSource(Map.of(Secret.TENANT_API_KEY, "key", Secret.GITHUB_WEBHOOK_SECRET, SECRET)));
     }
 
     private static GitHubWebhookController.Started deliver(GitHubWebhookController c, String delivery) {

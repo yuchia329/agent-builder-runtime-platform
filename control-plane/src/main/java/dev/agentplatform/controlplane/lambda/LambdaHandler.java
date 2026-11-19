@@ -9,6 +9,7 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
 import dev.agentplatform.controlplane.ControlPlaneApplication;
 import dev.agentplatform.controlplane.run.Sweeps;
+import dev.agentplatform.controlplane.secret.SecretSource;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,7 +35,8 @@ import org.springframework.web.context.support.WebApplicationContextUtils;
  * <p>Spring starts in the static initializer, so with SnapStart it starts once, before the
  * snapshot. Then {@link #beforeCheckpoint} sends a few requests that need no network through the
  * app ({@link Priming}), so the classes a first real request needs are loaded and in the snapshot.
- * {@code LAMBDA_PRIMING=off} skips that (for measuring, ADR 0017). The in-process sweep schedule is
+ * {@code LAMBDA_PRIMING=off} skips that (for measuring, ADR 0017). {@link #afterRestore} starts
+ * loading the secrets in the background (ADR 0018). The in-process sweep schedule is
  * always off here: a frozen function cannot keep time.
  */
 public class LambdaHandler implements RequestStreamHandler, Resource {
@@ -53,9 +55,7 @@ public class LambdaHandler implements RequestStreamHandler, Resource {
     }
 
     public LambdaHandler() {
-        if (!"off".equalsIgnoreCase(System.getenv("LAMBDA_PRIMING"))) {
-            Core.getGlobalContext().register(this);
-        }
+        Core.getGlobalContext().register(this);
     }
 
     @Override
@@ -84,6 +84,9 @@ public class LambdaHandler implements RequestStreamHandler, Resource {
 
     @Override
     public void beforeCheckpoint(org.crac.Context<? extends Resource> context) {
+        if ("off".equalsIgnoreCase(System.getenv("LAMBDA_PRIMING"))) {
+            return;
+        }
         log.info("Priming before the SnapStart snapshot");
         Priming.run(this);
     }
@@ -91,5 +94,8 @@ public class LambdaHandler implements RequestStreamHandler, Resource {
     @Override
     public void afterRestore(org.crac.Context<? extends Resource> context) {
         // Nothing to reopen: AWS SDK clients connect lazily, and priming opened no connection.
+        // Secrets (SSM, ADR 0018) start loading in the background, alongside the first request's
+        // own work, instead of when that request first needs one.
+        bean(SecretSource.class).prefetch();
     }
 }

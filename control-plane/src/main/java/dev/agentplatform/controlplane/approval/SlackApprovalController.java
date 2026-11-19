@@ -1,6 +1,8 @@
 package dev.agentplatform.controlplane.approval;
 
 import dev.agentplatform.controlplane.config.PlatformProperties;
+import dev.agentplatform.controlplane.secret.Secret;
+import dev.agentplatform.controlplane.secret.SecretSource;
 import dev.agentplatform.controlplane.trigger.WebhookRejectedException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -32,13 +34,13 @@ public class SlackApprovalController {
 
     private final ApprovalClicks clicks;
     private final Clock clock;
-    private final String signingSecret;
+    private final SecretSource secrets;
     private final String approvalChannel;
 
-    public SlackApprovalController(ApprovalClicks clicks, Clock clock, PlatformProperties props) {
+    public SlackApprovalController(ApprovalClicks clicks, Clock clock, PlatformProperties props, SecretSource secrets) {
         this.clicks = clicks;
         this.clock = clock;
-        this.signingSecret = props.slackSigningSecret();
+        this.secrets = secrets;
         this.approvalChannel = props.slackApprovalChannel();
     }
 
@@ -47,6 +49,7 @@ public class SlackApprovalController {
             @RequestHeader(value = "X-Slack-Request-Timestamp", required = false) String timestamp,
             @RequestHeader(value = "X-Slack-Signature", required = false) String signature,
             HttpServletRequest request) throws IOException {
+        var signingSecret = secrets.get(Secret.SLACK_SIGNING_SECRET);
         if (signingSecret == null) {
             throw new WebhookRejectedException(HttpStatus.SERVICE_UNAVAILABLE,
                     "Slack interactivity is not configured (SLACK_SIGNING_SECRET)");

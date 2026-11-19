@@ -2,6 +2,7 @@ package dev.agentplatform.controlplane.web;
 
 import dev.agentplatform.controlplane.agent.InvalidSpecException;
 import dev.agentplatform.controlplane.queue.RunQueueException;
+import dev.agentplatform.controlplane.secret.SecretUnavailableException;
 import dev.agentplatform.controlplane.run.AgentNotPublishedException;
 import dev.agentplatform.controlplane.run.InvalidRequestException;
 import dev.agentplatform.controlplane.store.AgentAlreadyExistsException;
@@ -51,6 +52,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         log.error("Run saved as QUEUED but not enqueued", e);
         return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
                 e.getMessage() + "; the run stays QUEUED and will be re-enqueued");
+    }
+
+    @ExceptionHandler
+    ProblemDetail secretsUnavailable(SecretUnavailableException e) {
+        log.warn("Secrets unavailable: {}", e.getMessage());
+        return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, "Try again shortly");
     }
 
     @ExceptionHandler

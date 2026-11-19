@@ -92,7 +92,7 @@ class RunTokenIssuerTest {
 
     @Test
     void withoutKeysTokensAreOff() {
-        var off = new RunTokenIssuer(null, null, clock);
+        var off = new RunTokenIssuer((String) null, null, clock);
 
         assertThat(off.enabled()).isFalse();
         assertThat(off.issue(LOADED)).isNull();

@@ -22,14 +22,18 @@ public record PlatformProperties(
         SweepProperties sweep,
         SlackProperties slack,
         @Valid ApprovalProperties approval,
-        RunTokenProperties runToken) {
+        RunTokenProperties runToken,
+        SecretsProperties secrets) {
 
     public enum StoreBackend { MEMORY, DYNAMODB }
 
     public enum QueueBackend { MEMORY, SQS }
 
-    /** The single hard-coded tenant used until tenants are stored (M0). */
-    public record TenantProperties(@NotBlank String id, @NotBlank String apiKey) {}
+    /**
+     * The single hard-coded tenant used until tenants are stored (M0). {@code apiKey} is
+     * {@code TENANT_API_KEY}; read it through {@code SecretSource}, which requires it locally.
+     */
+    public record TenantProperties(@NotBlank String id, String apiKey) {}
 
     /** {@code webhookSecret} signs GitHub webhooks; blank means the webhook route is off. */
     public record GitHubProperties(String webhookSecret) {}
@@ -54,8 +58,31 @@ public record PlatformProperties(
      */
     public record ApprovalProperties(@Min(1) @Max(359) Integer timeoutHours) {}
 
-    /** Run token signing keys (P-256, PEM or base64 body); both blank means no tokens. */
-    public record RunTokenProperties(String privateKey, String publicKey) {}
+    /**
+     * Run token signing: {@code kmsKeyId} (KMS key id, ARN or alias; AWS) or the local pair
+     * {@code privateKey} / {@code publicKey} (P-256, PEM or base64 body); none means no tokens.
+     */
+    public record RunTokenProperties(String privateKey, String publicKey, String kmsKeyId) {}
+
+    public enum SecretsSource { ENV, SSM }
+
+    /**
+     * Where secrets come from (ADR 0018): {@code source} env (default; the values above) or ssm
+     * (parameters under {@code ssmPath}, read on first use).
+     */
+    public record SecretsProperties(SecretsSource source, String ssmPath) {}
+
+    public SecretsSource secretsSource() {
+        return secrets == null || secrets.source() == null ? SecretsSource.ENV : secrets.source();
+    }
+
+    public String secretsSsmPath() {
+        return secrets == null ? null : blankToNull(secrets.ssmPath());
+    }
+
+    public String runTokenKmsKeyId() {
+        return runToken == null ? null : blankToNull(runToken.kmsKeyId());
+    }
 
     public String runTokenPrivateKey() {
         return runToken == null ? null : blankToNull(runToken.privateKey());

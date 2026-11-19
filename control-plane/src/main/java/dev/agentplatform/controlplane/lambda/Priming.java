@@ -1,7 +1,8 @@
 package dev.agentplatform.controlplane.lambda;
 
 import dev.agentplatform.controlplane.approval.SlackInteractions;
-import dev.agentplatform.controlplane.config.PlatformProperties;
+import dev.agentplatform.controlplane.secret.Secret;
+import dev.agentplatform.controlplane.secret.SecretSource;
 import dev.agentplatform.controlplane.trigger.GitHubWebhooks;
 import com.amazonaws.serverless.proxy.internal.LambdaContainerHandler;
 import java.io.ByteArrayInputStream;
@@ -19,8 +20,9 @@ import org.slf4j.LoggerFactory;
  * Requests sent through the app before the SnapStart snapshot, so the snapshot holds the classes
  * (filters, controllers, Jackson, HMAC, problem responses) a first real request needs. Every one
  * stops before a store, queue or Slack call: nothing opens a connection that a restore would find
- * dead, and nothing is written. Signed with the configured secrets when they are set (the request
- * then goes one step further), unsigned otherwise.
+ * dead, and nothing is written. Signed with the secrets the {@link SecretSource} already holds
+ * (env: the request then goes one step further); with SSM secrets nothing is loaded before the
+ * snapshot (ADR 0018), so the requests go unsigned and stop at 401.
  */
 final class Priming {
 
@@ -30,19 +32,19 @@ final class Priming {
 
     /** Sends the priming requests; returns their status codes in order (logged too). */
     static List<Integer> run(LambdaHandler handler) {
-        var props = handler.bean(PlatformProperties.class);
+        var secrets = handler.bean(SecretSource.class);
         var started = System.nanoTime();
-        var statuses = events(props).stream().map(event -> status(send(handler, event))).toList();
+        var statuses = events(secrets).stream().map(event -> status(send(handler, event))).toList();
         log.info("Priming done in {} ms, statuses {}", (System.nanoTime() - started) / 1_000_000, statuses);
         return statuses;
     }
 
-    private static List<byte[]> events(PlatformProperties props) {
+    private static List<byte[]> events(SecretSource secrets) {
         var now = Long.toString(Instant.now().getEpochSecond());
 
         // Slack: a verified interaction that is not a click answers 200 before any store call.
         var slackBody = "payload=%7B%22type%22%3A%22view_closed%22%7D";
-        var slackSecret = props.slackSigningSecret();
+        var slackSecret = secrets.peek(Secret.SLACK_SIGNING_SECRET);
         var slackSignature = slackSecret == null ? "v0=00"
                 : SlackInteractions.sign(slackSecret, now, slackBody.getBytes(StandardCharsets.UTF_8));
         var slack = HttpEvents.request("POST", "/approvals/slack", Map.of(
@@ -52,7 +54,7 @@ final class Priming {
 
         // GitHub: ping answers 200 before the delivery claim.
         var pingBody = "{\"zen\":\"priming\",\"hook_id\":0}";
-        var githubSecret = props.githubWebhookSecret();
+        var githubSecret = secrets.peek(Secret.GITHUB_WEBHOOK_SECRET);
         var githubSignature = githubSecret == null ? "sha256=00"
                 : GitHubWebhooks.sign(githubSecret, pingBody.getBytes(StandardCharsets.UTF_8));
         var github = HttpEvents.request("POST", "/triggers/github", Map.of(
@@ -61,9 +63,10 @@ final class Priming {
                 "X-Hub-Signature-256", githubSignature), pingBody);
 
         // Public API: an invalid body is rejected (400) before the store; no key gets 401.
+        var apiKey = secrets.peek(Secret.TENANT_API_KEY);
         var badRun = HttpEvents.request("POST", "/runs", Map.of(
                 "Content-Type", "application/json",
-                "X-Api-Key", props.tenant().apiKey()), "{\"agent\":\"priming\",\"input\":[]}");
+                "X-Api-Key", apiKey == null ? "priming" : apiKey), "{\"agent\":\"priming\",\"input\":[]}");
         var noKey = HttpEvents.request("GET", "/runs/priming", Map.of(), null);
 
         return List.of(slack, github, badRun, noKey);

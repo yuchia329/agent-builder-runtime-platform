@@ -5,6 +5,8 @@ import dev.agentplatform.controlplane.config.PlatformProperties;
 import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.run.Run;
 import dev.agentplatform.controlplane.run.RunService;
+import dev.agentplatform.controlplane.secret.Secret;
+import dev.agentplatform.controlplane.secret.SecretSource;
 import dev.agentplatform.controlplane.store.DeliveryStore;
 import java.time.Clock;
 import java.util.List;
@@ -43,14 +45,15 @@ public class GitHubWebhookController {
     private final DeliveryStore deliveries;
     private final Clock clock;
     private final String tenantId;
-    private final String secret;
+    private final SecretSource secrets;
 
-    public GitHubWebhookController(RunService runs, DeliveryStore deliveries, Clock clock, PlatformProperties props) {
+    public GitHubWebhookController(RunService runs, DeliveryStore deliveries, Clock clock, PlatformProperties props,
+            SecretSource secrets) {
         this.runs = runs;
         this.deliveries = deliveries;
         this.clock = clock;
         this.tenantId = props.tenant().id();
-        this.secret = props.githubWebhookSecret();
+        this.secrets = secrets;
     }
 
     /** Runs started for one delivery; {@code duplicate} is true (else absent) for a redelivery. */
@@ -66,6 +69,7 @@ public class GitHubWebhookController {
             @RequestHeader(value = "X-GitHub-Delivery", required = false) String delivery,
             @RequestHeader(value = "X-Hub-Signature-256", required = false) String signature,
             @RequestBody(required = false) byte[] body) {
+        var secret = secrets.get(Secret.GITHUB_WEBHOOK_SECRET);
         if (secret == null) {
             throw rejected(HttpStatus.SERVICE_UNAVAILABLE, "GitHub webhooks are not configured (GITHUB_WEBHOOK_SECRET)");
         }

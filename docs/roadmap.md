@@ -24,7 +24,8 @@ agreement with 75 labels) grades issue-triage's answers. Baselines: issue-triage
 needs-info 8/8. **M6 (AWS deploy) in progress:** Terraform bootstrap applied (state bucket, two
 budgets); control plane packaged for Lambda (ADR 0017: SnapStart with priming, 1769 MB arm64, a
 cold Slack click in about 2.2 s); dev data applied (tables, run queue, worker ECR, KMS signing key,
-SSM secret parameters; ADR 0018); next `[control-plane]` AWS adapters.
+SSM secret parameters; ADR 0018); control plane signs run tokens with KMS and reads secrets from SSM
+(`SECRETS_SOURCE=ssm`); next `[tool-gateway]` Lambda entry.
 
 ## Approach
 
@@ -378,7 +379,7 @@ Work in this order:
 - [x] `[infra]` data: both DynamoDB tables from their JSON definitions (with TTL), SQS run queue
   and dead-letter queue, ECR repositories, the KMS signing key (ECC_NIST_P256), SSM parameters
   (values put by the user, never in Terraform files). Check: apply; tables match the local ones.
-- [ ] `[control-plane]` AWS adapters: run tokens signed with KMS (ES256, JOSE signature from
+- [x] `[control-plane]` AWS adapters: run tokens signed with KMS (ES256, JOSE signature from
   KMS's DER), secrets read from SSM. Check: tests with a fake KMS; a token verifies with the
   public key and validates against `run-token.schema.json`.
 - [ ] `[tool-gateway]` Lambda entry, SSM `TokenStore` adapter (passes the contract suite),
@@ -466,6 +467,25 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-19 · control-plane** — M6 task 4. Two new ports with contract suites. `token/RunTokenSigner`:
+  `LocalKeySigner` (the env key pair, unchanged behavior) and `KmsRunTokenSigner`
+  (`RUN_TOKEN_KMS_KEY_ID`; signs the SHA-256 digest, DER transcoded to JOSE, public key read once
+  on first use; `kid` = thumbprint as before, no contract change). `secret/SecretSource`:
+  `EnvSecretSource` (default; `TENANT_API_KEY` still required) and `SsmSecretSource`
+  (`SECRETS_SOURCE=ssm`, `SECRETS_SSM_PATH`; one `GetParameters` with decryption on first use,
+  kept per environment, failures not kept). API key filter, both webhook controllers and the Slack
+  channel ask the source per request; SSM unreachable gives 503. Lambda `afterRestore` prefetches
+  secrets in the background; priming uses `peek` only. 302 tests (2 skipped: `LiveAwsCheckTest`,
+  run with `LIVE_AWS=1`; passed against dev: KMS-signed token verifies and matches the schema, all
+  4 parameters readable, still placeholders). Fakes `FakeSsm` / `FakeKms` implement the SDK client
+  interfaces (no Docker). Gotchas: the Lambda zip is now 47.4 MB (the SSM SDK jar is 6 MB), near
+  the 50 MB direct-upload limit, so `[infra]` compute uploads it through S3; with SSM secrets
+  `SLACK_APPROVAL_CHANNEL` is required (every secret counts as configured). For `[infra]` compute:
+  control-plane role `kms:Sign` + `kms:GetPublicKey` on the run-token key, `ssm:GetParameters` on
+  `/agent-platform/dev/control-plane/*`; env `SECRETS_SOURCE=ssm`, `SECRETS_SSM_PATH`,
+  `RUN_TOKEN_KMS_KEY_ID`, `SLACK_APPROVAL_CHANNEL`. For `[tool-gateway]`: get the public key with
+  `kms:GetPublicKey` and compute `kid` as the RFC 7638 thumbprint, as today. Re-measure the cold
+  Slack click with SSM in M7. Next: `[tool-gateway]` Lambda entry.
 - **2026-11-19 · infra** — M6 task 3. `infra/envs/dev/` applied, 16 resources: DynamoDB
   `agent-platform-dev-control-plane` (from `control-plane/dynamodb/*.json`, GSI1/GSI2, TTL,
   deletion protection, point-in-time restore) and `agent-platform-dev-run-state` (TTL); SQS

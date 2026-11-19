@@ -31,6 +31,9 @@ dependencies {
     implementation("com.nimbusds:nimbus-jose-jwt:10.3")
     implementation("software.amazon.awssdk:dynamodb")
     implementation("software.amazon.awssdk:sqs")
+    // Secrets from SSM Parameter Store, run tokens signed by KMS (ADR 0018).
+    implementation("software.amazon.awssdk:ssm")
+    implementation("software.amazon.awssdk:kms")
     // Lambda entry (ADR 0017): API Gateway HTTP API events into the same Spring MVC app.
     implementation("com.amazonaws.serverless:aws-serverless-java-container-springboot4:3.0.5")
     implementation("org.crac:crac:1.5.0")

@@ -35,3 +35,10 @@ platform:
   run-token:
     private-key: ${RUN_TOKEN_PRIVATE_KEY:}
     public-key: ${RUN_TOKEN_PUBLIC_KEY:}
+    # On AWS: sign with this KMS key instead of the pair above (ADR 0018).
+    kms-key-id: ${RUN_TOKEN_KMS_KEY_ID:}
+  # Secrets (TENANT_API_KEY, GITHUB_WEBHOOK_SECRET, SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET): from the
+  # values above (env), or on AWS from SSM parameters under the path, read on first use (ssm).
+  secrets:
+    source: ${SECRETS_SOURCE:env}
+    ssm-path: ${SECRETS_SSM_PATH:}

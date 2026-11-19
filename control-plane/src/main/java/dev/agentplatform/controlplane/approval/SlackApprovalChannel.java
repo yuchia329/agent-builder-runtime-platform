@@ -7,6 +7,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.function.Supplier;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -35,17 +36,29 @@ public class SlackApprovalChannel implements ApprovalChannel {
 
     private final HttpClient http;
     private final URI api;
-    private final String botToken;
+    private final Supplier<String> botToken;
     private final String channel;
 
     public SlackApprovalChannel(String apiUrl, String botToken, String channel) {
-        if (botToken == null || botToken.isBlank() || channel == null || channel.isBlank()) {
+        this(apiUrl, constant(botToken), channel);
+    }
+
+    /** The token is asked for on every call (from the {@code SecretSource}: SSM on AWS, ADR 0018). */
+    public SlackApprovalChannel(String apiUrl, Supplier<String> botToken, String channel) {
+        if (channel == null || channel.isBlank()) {
             throw new IllegalArgumentException("A Slack bot token and channel are required");
         }
         this.http = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
         this.api = URI.create(apiUrl.replaceAll("/+$", "") + "/");
         this.botToken = botToken;
         this.channel = channel;
+    }
+
+    private static Supplier<String> constant(String botToken) {
+        if (botToken == null || botToken.isBlank()) {
+            throw new IllegalArgumentException("A Slack bot token and channel are required");
+        }
+        return () -> botToken;
     }
 
     @Override
@@ -62,9 +75,18 @@ public class SlackApprovalChannel implements ApprovalChannel {
 
     /** Calls a Web API method; returns the reply if {@code ok}, else throws. */
     private tools.jackson.databind.JsonNode call(String method, String body, Duration timeout) {
+        String token;
+        try {
+            token = botToken.get();
+        } catch (RuntimeException e) {
+            throw new ApprovalChannelException("Slack bot token could not be read (" + e.getClass().getSimpleName() + ")");
+        }
+        if (token == null || token.isBlank()) {
+            throw new ApprovalChannelException("Slack bot token is not set");
+        }
         var httpRequest = HttpRequest.newBuilder(api.resolve(method))
                 .timeout(timeout)
-                .header("Authorization", "Bearer " + botToken)
+                .header("Authorization", "Bearer " + token)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();

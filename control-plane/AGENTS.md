@@ -13,6 +13,7 @@ Run from `control-plane/`.
 | Run locally | `./gradlew bootRun` (profile `local`, in-memory store, API key `local-dev-key`, port 8080) |
 | Build jar | `./gradlew bootJar` |
 | Lambda zip | `./gradlew lambdaZip` (`build/distributions/control-plane-lambda.zip`, ADR 0017) |
+| Live check against dev AWS (one KMS signature, one SSM read; ~$0) | `LIVE_AWS=1 ./gradlew test --tests '*LiveAwsCheckTest'` (profile `default`; prints no secret) |
 | Lambda trial (AWS, about 5 min per memory size, ~$0) | `uv run --with boto3 python scripts/lambda_trial.py --configs 1769:on` (makes and deletes its own function, table, role; profile `default`) |
 | Image (from repo root) | `docker build -f control-plane/Dockerfile .` (or `make up`) |
 
@@ -85,7 +86,8 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 ## Conventions
 
 - Package `dev.agentplatform.controlplane`, one package per area (`agent`, `run`, `trigger`,
-  `internal`, `store`, `queue`, `contract`, `tenant`, `config`, `web`, `approval`, `token`).
+  `internal`, `store`, `queue`, `contract`, `tenant`, `config`, `web`, `approval`, `token`,
+  `secret`, `lambda`).
 - Webhook routes (`/triggers/*`) have no API key; they trust only a valid signature. Keep the
   verification and payload rules in plain classes (`GitHubWebhooks`) so they test without HTTP.
 - Webhook deliveries are claimed in `DeliveryStore` before any run starts; tests send a unique
@@ -95,7 +97,7 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   `127.0.0.1`, never `localhost`: `localhost` can resolve to `::1`, where another process (a Gradle
   daemon) may hold the same random port; symptom: every request 404 or "Invalid status line".
 - Ports: `AgentStore`, `RunStore` (in `store/`), `RunQueuePublisher` (in `queue/`),
-  `ApprovalChannel` (in `approval/`). Each port has
+  `ApprovalChannel` (in `approval/`), `RunTokenSigner` (in `token/`), `SecretSource` (in `secret/`). Each port has
   an abstract `*ContractTest`; every adapter has a subclass of it. New adapters must pass it.
   DynamoDB tests share one container through `DynamoDbLocal`.
 - Shapes from `contracts/` are checked with `ContractValidator` against the bundled files, never
@@ -111,11 +113,17 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 - The agent spec schema is copied from `../contracts/` into the jar at build time; never keep a
   second copy.
 - Jackson 3 (`tools.jackson.*`), not Jackson 2 (`com.fasterxml.jackson.*`).
+- Secrets (ADR 0018): never keep a copy in a field or read one from `PlatformProperties`; ask
+  `SecretSource.get(Secret.X)` on each use (SSM on AWS loads on first use). A new secret: add it to
+  `Secret`, to the env map in `SecretConfig`, and as a parameter in `infra/envs/dev/ssm.tf`. Code
+  that runs before the SnapStart snapshot (priming) uses `peek` only. AWS fakes for tests:
+  `FakeSsm`, `FakeKms` (implement the SDK client interfaces; no Docker).
 - Config comes from env vars via `application.yml` (`STORE_BACKEND`, `CONTROL_PLANE_TABLE`,
   `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`,
   `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
   `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`, `SLACK_SIGNING_SECRET`, `APPROVAL_TIMEOUT_HOURS`, `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`,
-  `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`). No network calls at startup (Lambda SnapStart).
+  `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`, `SECRETS_SOURCE`, `SECRETS_SSM_PATH`,
+  `RUN_TOKEN_KMS_KEY_ID`). No network calls at startup (Lambda SnapStart).
 - Lambda (ADR 0017): `lambda/LambdaHandler` is the entry; Spring starts in its static
   initializer, before the SnapStart snapshot, and `lambda/Priming` sends network-free requests
   before it. A snapshot is shared by every restored environment: make ids, secrets and seeds only

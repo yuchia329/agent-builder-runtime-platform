@@ -1,44 +1,36 @@
 package dev.agentplatform.controlplane.token;
 
-import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.ECDSASigner;
-import com.nimbusds.jose.crypto.ECDSAVerifier;
-import com.nimbusds.jose.jwk.Curve;
-import com.nimbusds.jose.jwk.ECKey;
+import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import dev.agentplatform.controlplane.config.PlatformProperties;
 import dev.agentplatform.controlplane.run.RunService;
-import java.security.GeneralSecurityException;
-import java.security.KeyFactory;
-import java.security.interfaces.ECPrivateKey;
-import java.security.interfaces.ECPublicKey;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import software.amazon.awssdk.services.kms.KmsClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Signs run tokens (ADR 0003, contracts/run-token.schema.json): an ES256 JWT per
+ * Issues run tokens (ADR 0003, contracts/run-token.schema.json): an ES256 JWT per
  * {@code GET /internal/runs/{id}}, with {@code kid} = the public key's RFC 7638 thumbprint (the
  * gateway computes the same from its public key), valid for the spec's {@code budget.max_seconds}.
  *
- * <p>Keys: {@code RUN_TOKEN_PRIVATE_KEY} (PKCS#8, secret) and {@code RUN_TOKEN_PUBLIC_KEY} (X.509
- * SubjectPublicKeyInfo), P-256, as PEM or the base64 body on one line. Both unset: no tokens (the
- * worker needs none until it calls the gateway, M4). One without the other, an unreadable key or a
- * pair that does not match fails startup. Keys and tokens are never logged.
+ * <p>The {@link RunTokenSigner} comes from configuration: {@code RUN_TOKEN_KMS_KEY_ID} signs with
+ * KMS (AWS, ADR 0018); {@code RUN_TOKEN_PRIVATE_KEY} with {@code RUN_TOKEN_PUBLIC_KEY} signs with
+ * that pair (local); neither means no tokens. Both kinds, or half a pair, fail startup. Keys and
+ * tokens are never logged.
  */
 @Component
 public class RunTokenIssuer {
@@ -48,40 +40,62 @@ public class RunTokenIssuer {
     static final String ISSUER = "control-plane";
     static final String AUDIENCE = "tool-gateway";
 
-    private final ECKey key; // null when off
+    private final RunTokenSigner signer; // null when off
     private final Clock clock;
 
     @Autowired
-    public RunTokenIssuer(PlatformProperties props, Clock clock) {
-        this(props.runTokenPrivateKey(), props.runTokenPublicKey(), clock);
+    public RunTokenIssuer(PlatformProperties props, ObjectProvider<KmsClient> kms, Clock clock) {
+        this(signer(props, kms), clock);
     }
 
+    /** Local key pair (PEM or base64 body); both null means off. */
     public RunTokenIssuer(String privateKeyPem, String publicKeyPem, Clock clock) {
+        this(localSigner(privateKeyPem, publicKeyPem), clock);
+    }
+
+    public RunTokenIssuer(RunTokenSigner signer, Clock clock) {
+        this.signer = signer;
         this.clock = clock;
+    }
+
+    private static RunTokenSigner signer(PlatformProperties props, ObjectProvider<KmsClient> kms) {
+        var kmsKey = props.runTokenKmsKeyId();
+        if (kmsKey != null) {
+            if (props.runTokenPrivateKey() != null || props.runTokenPublicKey() != null) {
+                throw new IllegalStateException(
+                        "Set RUN_TOKEN_KMS_KEY_ID or the RUN_TOKEN_PRIVATE_KEY / RUN_TOKEN_PUBLIC_KEY pair, not both");
+            }
+            log.info("Run tokens on, signed by KMS key {} (public key read on first use)", kmsKey);
+            return new KmsRunTokenSigner(kms.getObject(), kmsKey);
+        }
+        return localSigner(props.runTokenPrivateKey(), props.runTokenPublicKey());
+    }
+
+    private static RunTokenSigner localSigner(String privateKeyPem, String publicKeyPem) {
         if (privateKeyPem == null && publicKeyPem == null) {
-            this.key = null;
-            log.info("Run tokens off: RUN_TOKEN_PRIVATE_KEY and RUN_TOKEN_PUBLIC_KEY not set");
-            return;
+            log.info("Run tokens off: no RUN_TOKEN_KMS_KEY_ID and no RUN_TOKEN_PRIVATE_KEY / RUN_TOKEN_PUBLIC_KEY");
+            return null;
         }
         if (privateKeyPem == null || publicKeyPem == null) {
             throw new IllegalStateException("Set both RUN_TOKEN_PRIVATE_KEY and RUN_TOKEN_PUBLIC_KEY, or neither");
         }
-        this.key = keyPair(privateKeyPem, publicKeyPem);
-        log.info("Run tokens on, key id {}", key.getKeyID());
+        var signer = new LocalKeySigner(privateKeyPem, publicKeyPem);
+        log.info("Run tokens on, key id {}", signer.keyId());
+        return signer;
     }
 
     public boolean enabled() {
-        return key != null;
+        return signer != null;
     }
 
-    /** The key id tokens carry ({@code kid}); null when off. */
+    /** The key id tokens carry ({@code kid}); null when off. May call KMS on first use. */
     public String keyId() {
-        return key == null ? null : key.getKeyID();
+        return signer == null ? null : signer.keyId();
     }
 
     /** A signed token for this run and its spec, or null when tokens are off. */
     public String issue(RunService.RunWithSpec loaded) {
-        if (key == null) {
+        if (signer == null) {
             return null;
         }
         var run = loaded.run();
@@ -102,54 +116,15 @@ public class RunTokenIssuer {
                 .issueTime(new Date(now * 1000))
                 .expirationTime(new Date((now + spec.path("budget").path("max_seconds").asLong()) * 1000))
                 .build();
-        var header = new JWSHeader.Builder(JWSAlgorithm.ES256).keyID(key.getKeyID()).type(JOSEObjectType.JWT).build();
-        var jwt = new SignedJWT(header, claims);
-        try {
-            jwt.sign(new ECDSASigner(key));
-        } catch (JOSEException e) {
-            throw new IllegalStateException("Could not sign the run token of " + run.runId(), e);
-        }
-        return jwt.serialize();
+        var header = new JWSHeader.Builder(JWSAlgorithm.ES256).keyID(signer.keyId()).type(JOSEObjectType.JWT).build();
+        var signingInput = new SignedJWT(header, claims).getSigningInput();
+        var signature = Base64URL.encode(signer.sign(signingInput));
+        return new String(signingInput, StandardCharsets.US_ASCII) + "." + signature;
     }
 
     private static List<String> strings(JsonNode array) {
         var values = new ArrayList<String>();
         array.forEach(item -> values.add(item.asString()));
         return values;
-    }
-
-    private static ECKey keyPair(String privatePem, String publicPem) {
-        ECPrivateKey privateKey;
-        ECPublicKey publicKey;
-        try {
-            var factory = KeyFactory.getInstance("EC");
-            privateKey = (ECPrivateKey) factory.generatePrivate(new PKCS8EncodedKeySpec(der(privatePem)));
-            publicKey = (ECPublicKey) factory.generatePublic(new X509EncodedKeySpec(der(publicPem)));
-        } catch (GeneralSecurityException | IllegalArgumentException | ClassCastException e) {
-            // Never include the key text in the message.
-            throw new IllegalStateException("RUN_TOKEN_PRIVATE_KEY / RUN_TOKEN_PUBLIC_KEY is not a P-256 key in"
-                    + " PKCS#8 / X.509 form (" + e.getClass().getSimpleName() + ")");
-        }
-        try {
-            if (!Curve.forECParameterSpec(publicKey.getParams()).equals(Curve.P_256)) {
-                throw new IllegalStateException("Run token keys must be on curve P-256 (ES256)");
-            }
-            var key = new ECKey.Builder(Curve.P_256, publicKey).privateKey(privateKey).keyIDFromThumbprint().build();
-            // The pair must match: sign a probe with the private key, verify with the public one.
-            var probe = new SignedJWT(new JWSHeader(JWSAlgorithm.ES256), new JWTClaimsSet.Builder().build());
-            probe.sign(new ECDSASigner(key));
-            if (!probe.verify(new ECDSAVerifier(publicKey))) {
-                throw new IllegalStateException("RUN_TOKEN_PUBLIC_KEY does not match RUN_TOKEN_PRIVATE_KEY");
-            }
-            return key;
-        } catch (JOSEException e) {
-            throw new IllegalStateException("Run token keys could not be used (" + e.getClass().getSimpleName() + ")");
-        }
-    }
-
-    /** PEM (any header) or a bare base64 body; literal "\n" (from .env files) counts as a line break. */
-    static byte[] der(String pem) {
-        var body = pem.replace("\\n", "\n").replaceAll("-----(BEGIN|END) [A-Z ]+-----", "").replaceAll("\\s", "");
-        return Base64.getDecoder().decode(body);
     }
 }

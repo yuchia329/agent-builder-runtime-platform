@@ -189,8 +189,10 @@ Internal endpoints, for workers and the gateway only. API Gateway requires IAM a
   GET (claims in `contracts/run-token.schema.json`, `kid` = the public key's RFC 7638 thumbprint,
   valid for the spec's `max_seconds` from issue). It names who published the version (`owner`)
   and what started the run (`started_by`: `api:<tenant>` or `webhook:github`), both recorded by
-  the control plane; neither the token nor the keys are logged. Without keys configured, no
-  token. Once a pending call is decided, the run carries `approval` (the latest decision); the worker makes the paused call only
+  the control plane; neither the token nor the keys are logged. The signer is a port
+  (`RunTokenSigner`): a key pair from env locally, a KMS key on AWS (`kms:Sign` on the SHA-256
+  digest, DER transcoded to JOSE; public key read once with `kms:GetPublicKey`, never at startup;
+  [ADR 0018](adr/0018-secrets-in-ssm-signing-in-kms.md)). Without a key configured, no token. Once a pending call is decided, the run carries `approval` (the latest decision); the worker makes the paused call only
   if it is approved and matches step, tool and arguments.
 - `PATCH /internal/runs/{id}`: status, steps, cost, trace id, pending approval call, failure
   reason, output. Allowed status changes are listed in `contracts/internal-api.openapi.yaml`.
@@ -482,6 +484,8 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock Converse (M1) |
 | `ToolClient`        | worker        | `describe(names, context)` returns tool schemas; `call(name, args, context)` returns a result or raises `ToolError`; `context` is the run id, run token, step and idempotency key | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
+| `RunTokenSigner`    | control plane | `keyId()` (RFC 7638 thumbprint), `publicKey()`, `sign(input)` returns an ES256 signature in JOSE form; no network call at construction | Local key pair, KMS |
+| `SecretSource`      | control plane | `get(secret)` (null = not set; may load on first use, never at startup), `peek` (only what is held), `configured`, `prefetch` | Env, SSM Parameter Store |
 | `ApprovalChannel`   | control plane | Post an approval request, return where it went; show its outcome on that message; failures raise `ApprovalChannelException` | Slack, in-memory (logs only)               |
 | `TokenStore`        | gateway       | Store and load encrypted tokens per identity and provider                                            | SSM Parameter Store SecureString (M6), in-memory |
 
@@ -513,7 +517,8 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | GitHub App (local)  | gateway                                | With `TOKEN_STORE=memory`, all or none: `TENANT_ID`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_FILE` (path to the `.pem`, kept outside the repo); stored as the tenant's team-bot at startup. On AWS the `TokenStore` is written by an operator |
 | Owner login         | gateway                                | All three or none: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` (secret), `OAUTH_STATE_SECRET` (secret, 32+ characters); `GATEWAY_PUBLIC_URL` (default `http://localhost:8090`, where browsers reach the gateway). Unset: owner runs refused (ADR 0015) |
 | Gateway             | gateway                                | `CONNECTORS` (comma list: `fake`, `github` from M4), `GATEWAY_HOST` (default 127.0.0.1), `GATEWAY_PORT` (default 8090), `CONTRACTS_DIR` (default `../contracts`) |
-| Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY` (secret, control plane), `RUN_TOKEN_PUBLIC_KEY` (control plane checks the pair and derives `kid`; gateway verifies); P-256 PEM or one-line base64 body; both unset = no tokens |
+| Run token key       | control plane signs, gateway verifies  | `RUN_TOKEN_PRIVATE_KEY` (secret, control plane), `RUN_TOKEN_PUBLIC_KEY` (control plane checks the pair and derives `kid`; gateway verifies); P-256 PEM or one-line base64 body; both unset = no tokens. On AWS instead: `RUN_TOKEN_KMS_KEY_ID` (key id, ARN or alias; not together with the pair) |
+| Control-plane secrets | control plane                        | `SECRETS_SOURCE=env\|ssm` (default env: `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`); ssm: `SECRETS_SSM_PATH` (`/agent-platform/dev/control-plane`), read on first use and kept per environment; with ssm, `SLACK_APPROVAL_CHANNEL` is required |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
 | Re-enqueue sweep    | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300) |
@@ -626,7 +631,7 @@ control-plane/                  Java 21, Spring Boot 4, Gradle (see control-plan
   dynamodb/                     control-plane table definition
   src/main/java/dev/agentplatform/controlplane/
                                 one package per area: agent, run, trigger, internal, store,
-                                queue, contract, tenant, config, web, approval, token, lambda
+                                queue, contract, tenant, config, web, approval, token, secret, lambda
 
 worker/                         Python 3.12, uv, own agent loop (see worker/AGENTS.md)
   src/worker/                   core/ (no vendor imports), ports/, adapters/, entrypoints/,

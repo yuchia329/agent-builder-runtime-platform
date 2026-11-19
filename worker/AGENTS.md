@@ -22,6 +22,8 @@ Run from `worker/`.
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
 | Image (from repo root) | `docker build -f worker/Dockerfile .` (or `make up`) |
+| Fargate image (from repo root) | `make worker-image` (linux/arm64, tag `agent-platform-worker:<commit>`) |
+| Push to ECR (from repo root; in the infra compute task) | `url=$(terraform -chdir=infra/envs/dev output -raw worker_repository_url)`, `aws ecr get-login-password --profile default \| docker login --username AWS --password-stdin ${url%%/*}`, `docker tag agent-platform-worker:<commit> $url:<commit>`, `docker push $url:<commit>` (tags are immutable: a new commit, a new tag) |
 
 ## Layout
 
@@ -123,6 +125,13 @@ Run from `worker/`.
   committing a new recording.
 - Tool adapters get a `ToolContext` on every `describe` / `call`; only `tools_mcp.py` uses it.
   Never log the run token: `RunRecord` and `ToolContext` reprs leave it out.
+- The run token goes in `X-Run-Token` (contract). `Authorization` belongs to SigV4 when
+  `TOOL_GATEWAY_SIGV4=true` (`SignedAuth`, which signs `host`, `content-type`, `x-run-token` and the
+  body with `control_plane_http`'s signer); unsigned, the token also goes as `Authorization:
+  Bearer` until every gateway reads `X-Run-Token` (roadmap, Cross-service changes).
+- On Fargate, model API keys come from SSM through the task definition's `secrets` as
+  `MODEL_<NAME>_API_KEY`: no code reads SSM. AWS credentials come from the task role (boto3's
+  default chain); never put keys in the task definition.
 - `GatewayTools` maps every failure to `ToolError` (the MCP SDK wraps errors in exception
   groups; unwrap with `_first`) and does not retry: repeats are core's decision (ADR 0013).
 - The fake tools and scripted model are shared test infrastructure (later: chaos and load tests);

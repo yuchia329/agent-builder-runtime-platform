@@ -1,4 +1,4 @@
-.PHONY: up stack demo chaos down status logs keys service-env eval eval-baseline
+.PHONY: up stack demo chaos down status logs keys service-env eval eval-baseline worker-image
 
 AWS = docker compose run --rm --no-deps --entrypoint aws aws-init
 STACK = dynamodb elasticmq aws-init
@@ -6,6 +6,10 @@ STACK = dynamodb elasticmq aws-init
 ## up: build and start everything (AWS stand-ins, control plane, gateway, worker); returns when ready
 up: .env keys service-env
 	docker compose up -d --build --wait
+
+## worker-image: build the worker image for Fargate (linux/arm64), tagged with the current commit
+worker-image:
+	docker build --platform linux/arm64 -f worker/Dockerfile -t agent-platform-worker:$$(git rev-parse --short HEAD) .
 
 ## stack: start only DynamoDB Local and ElasticMQ, to run a service on your machine instead
 stack: .env keys service-env

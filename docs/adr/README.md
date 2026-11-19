@@ -32,6 +32,7 @@ Rules:
 | [0017](0017-control-plane-on-lambda-snapstart.md) | Control plane on Lambda: serverless-java-container, SnapStart with priming, 1769 MB arm64 | Proposed |
 | [0018](0018-secrets-in-ssm-signing-in-kms.md) | Secrets in SSM Parameter Store, run-token signing in KMS, values outside Terraform | Proposed |
 | [0019](0019-gateway-on-lambda-web-adapter.md) | Tool gateway on Lambda through the Lambda Web Adapter | Proposed |
+| [0020](0020-run-token-in-its-own-header.md) | The run token travels in X-Run-Token; Authorization belongs to SigV4 | Proposed |
 
 ## Template
 

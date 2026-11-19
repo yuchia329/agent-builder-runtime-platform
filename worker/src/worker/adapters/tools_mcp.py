@@ -1,7 +1,8 @@
 """Tools through the tool gateway over MCP (ADR 0006, contracts/mcp-tool-call.schema.json).
 
-Every request carries the run's token as `Authorization: Bearer` (ADR 0003); a call also sends
-`_meta` `agentplatform/step` and `agentplatform/idempotency_key`. `readOnlyHint` and
+Every request carries the run's token in the `X-Run-Token` header (ADR 0003,
+contracts/mcp-tool-call.schema.json); a call also sends `_meta` `agentplatform/step` and
+`agentplatform/idempotency_key`. `readOnlyHint` and
 `idempotentHint` become `ToolSpec.read_only` / `idempotent`; a result is the call's
 `structuredContent` (`{"result": x}` unwrapped to `x`); `isError` becomes a `ToolError` with the
 gateway's text, which the model may read.
@@ -9,8 +10,10 @@ gateway's text, which the model may read.
 Uses the official MCP SDK client (stateless Streamable HTTP, JSON responses). The worker is
 synchronous, so each request opens a short session in its own event loop. No retries here: the
 gateway retries the outside API, and whether a tool may be repeated is core's decision
-(ADR 0013). On AWS the gateway sits behind API Gateway with IAM: `auth` is where the SigV4 signer
-plugs in (M6); locally requests go unsigned. Errors never contain the token.
+(ADR 0013). On AWS the gateway sits behind API Gateway with IAM: `auth=SignedAuth(signer)` puts
+a SigV4 signature in `Authorization` (TOOL_GATEWAY_SIGV4). Unsigned (locally), the token also goes
+as `Authorization: Bearer`, until every gateway reads `X-Run-Token` (roadmap, Cross-service
+changes). Errors never contain the token.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from mcp.client.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 
+from worker.adapters.control_plane_http import Signer
 from worker.core.errors import ToolError
 from worker.core.types import ToolContext, ToolSpec
 
@@ -34,6 +38,29 @@ STEP = "agentplatform/step"
 IDEMPOTENCY_KEY = "agentplatform/idempotency_key"
 UNAUTHORIZED = -32001  # the gateway's JSON-RPC code for a refused run token (HTTP 401)
 TIMEOUT_SECONDS = 60.0  # the gateway retries the outside API itself
+RUN_TOKEN_HEADER = "X-Run-Token"
+# Headers the signature covers; the token is among them, so it cannot be swapped in transit.
+SIGNED_HEADERS = ("host", "content-type", "x-run-token")
+SIGNATURE_HEADERS = ("authorization", "x-amz-date", "x-amz-security-token")
+
+
+class SignedAuth(httpx2.Auth):
+    """SigV4 for every request to the gateway (service execute-api), signing method, URL, body and
+    `SIGNED_HEADERS` with the signer the control-plane client uses (fresh credentials each time)."""
+
+    requires_request_body = True
+
+    def __init__(self, signer: Signer) -> None:
+        self._signer = signer
+
+    def auth_flow(self, request: httpx2.Request):
+        headers = {k: v for k, v in request.headers.items() if k.lower() in SIGNED_HEADERS}
+        headers.setdefault("host", request.url.netloc.decode())
+        signed = self._signer(request.method, str(request.url), headers, request.content)
+        for name, value in signed.items():
+            if name.lower() in SIGNATURE_HEADERS:
+                request.headers[name] = value
+        yield request
 
 
 class GatewayTools:
@@ -93,7 +120,9 @@ class GatewayTools:
                 "This run has no run token, so the tool gateway cannot be used "
                 "(the control plane issues one when RUN_TOKEN_PRIVATE_KEY is set)"
             )
-        headers = {"Authorization": f"Bearer {context.run_token}"}
+        headers = {RUN_TOKEN_HEADER: context.run_token}
+        if self._auth is None:  # unsigned: also where gateways before X-Run-Token look
+            headers["Authorization"] = f"Bearer {context.run_token}"
 
         async def session() -> Any:
             async with (

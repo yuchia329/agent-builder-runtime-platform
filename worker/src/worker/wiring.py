@@ -16,7 +16,7 @@ from worker.adapters.run_state_dynamodb import DynamoDbRunStateStore
 from worker.adapters.run_state_memory import InMemoryRunStateStore
 from worker.adapters.tools_fake import issue_triage_tools
 from worker.adapters.tools_local import GitHubTools
-from worker.adapters.tools_mcp import GatewayTools
+from worker.adapters.tools_mcp import GatewayTools, SignedAuth
 from worker.config import Config
 from worker.core.handle_run import Deps
 from worker.ports.model import Model
@@ -70,7 +70,8 @@ def build(config: Config) -> App:
         tools = GitHubTools(config.github_token, config.github_repos, api_url=config.github_api_url)
     elif config.tools_provider == "mcp":
         assert config.tool_gateway_url  # checked by Config
-        tools = GatewayTools(config.tool_gateway_url)  # SigV4 `auth` in M6
+        auth = SignedAuth(default_signer(config.aws_region)) if config.tool_gateway_sigv4 else None
+        tools = GatewayTools(config.tool_gateway_url, auth=auth)
     else:
         tools = issue_triage_tools()
     return App(queue, Deps(control_plane, model, tools, clock, state=state), state)

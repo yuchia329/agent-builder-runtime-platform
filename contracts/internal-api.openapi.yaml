@@ -220,8 +220,8 @@ components:
           type: object
         run_token:
           description: |
-            Signed JWT (ES256) the worker sends as `Authorization: Bearer` on every tool gateway
-            call (ADR 0003). Its claims follow run-token.schema.json. A new token on every GET,
+            Signed JWT (ES256) the worker sends in the `X-Run-Token` header on every tool gateway
+            call (ADR 0003; `Authorization` carries the SigV4 signature on AWS). Its claims follow run-token.schema.json. A new token on every GET,
             valid for the spec's budget.max_seconds from issue. Issued from M4; absent before
             then.
           type: string

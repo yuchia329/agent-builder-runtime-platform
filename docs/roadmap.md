@@ -26,7 +26,9 @@ budgets); control plane packaged for Lambda (ADR 0017: SnapStart with priming, 1
 cold Slack click in about 2.2 s); dev data applied (tables, run queue, worker ECR, KMS signing key,
 SSM secret parameters; ADR 0018); control plane signs run tokens with KMS and reads secrets from SSM
 (`SECRETS_SOURCE=ssm`); gateway runs on Lambda with the Web Adapter (ADR 0019), SSM `TokenStore`,
-KMS public key, SigV4 to the control plane; next `[worker]` SigV4 and image.
+KMS public key, SigV4 to the control plane; worker signs gateway calls (run token moved to
+`X-Run-Token`), arm64 Fargate image; next `[tool-gateway]` reads `X-Run-Token`, then `[infra]`
+compute.
 
 ## Approach
 
@@ -386,8 +388,11 @@ Work in this order:
 - [x] `[tool-gateway]` Lambda entry, SSM `TokenStore` adapter (passes the contract suite),
   SigV4 `signer` for `HttpControlPlane`, run-token public key from KMS. Check: tests; the
   gateway answers `/health` on Lambda.
-- [ ] `[worker]` SigV4 `auth` for `GatewayTools` (like `sigv4_signer`); image for Fargate; the
+- [x] `[worker]` SigV4 `auth` for `GatewayTools` (like `sigv4_signer`); image for Fargate; the
   model key from SSM through the ECS task definition. Check: tests; image runs locally.
+- [ ] `[tool-gateway]` read the run token from `X-Run-Token` (contract change, see Cross-service
+  changes), `Authorization: Bearer` as a fallback while unsigned workers send both. Check: tests
+  with both headers; `make demo`.
 - [ ] `[infra]` compute: Lambdas (control plane alias with SnapStart, gateway), one HTTP API
   (public routes: agents API, webhooks, Slack; IAM-authorized routes: `/internal/*`, `/mcp`),
   custom domain with an ACM certificate validated in Cloudflare (records added by the user),
@@ -459,15 +464,44 @@ service has followed.
   check `ttl` themselves).
 
 - **Internal API and gateway auth is IAM (SigV4) through API Gateway** (ADR 0007). Declared in
-  `contracts/internal-api.openapi.yaml`. Must follow: `worker` (`control_plane_http.py` done;
-  `tools_mcp.py` takes an `auth` hook, signer in M6), `tool-gateway` (`HttpControlPlane` takes a
-  `signer`, signer in M6). Nothing checks signatures locally.
+  `contracts/internal-api.openapi.yaml`. Code done: `worker` signs the control plane and (with
+  `TOOL_GATEWAY_SIGV4=true`) the gateway, `tool-gateway` signs the control plane
+  (`CONTROL_PLANE_SIGV4=true`). Must follow: `infra` (IAM authorization on `/internal/*` and
+  `/mcp`, `execute-api:Invoke` for the worker and gateway roles). Nothing checks signatures locally.
+
+- **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
+  on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
+  `contracts/mcp-tool-call.schema.json` and `internal-api.openapi.yaml` (`run_token`). `worker`
+  done: always sends `X-Run-Token`, and `Authorization: Bearer` too when unsigned. Must follow:
+  `tool-gateway` (`RunTokenAuth` reads `X-Run-Token`, Bearer as a fallback). Then `worker` drops
+  the Bearer copy and the gateway its fallback, and this entry goes.
 
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-19 · worker** — M6 task 6. The run token moved to `X-Run-Token` (user chose this over
+  dropping IAM on `/mcp` or SigV4 in the query string): SigV4 and the token both used
+  `Authorization`, so ADR 0007's "IAM and run token on `/mcp`" could not work. Contracts edited
+  (descriptions only; 96 contract tests pass); Cross-service entry added; the gateway follows in a
+  short session before `[infra]` compute (task added). `tools_mcp.SignedAuth` (an `httpx2.Auth`)
+  signs every gateway request for `execute-api` with `control_plane_http`'s signer, covering
+  `host`, `content-type`, `x-run-token` and the body; on with `TOOL_GATEWAY_SIGV4=true`. Unsigned
+  requests also send `Authorization: Bearer` for gateways not yet updated. `make worker-image`
+  builds the linux/arm64 image (93 MB, tag = commit); ECR push commands in `worker/AGENTS.md`.
+  The model key needs no code: the task definition's `secrets` maps
+  `/agent-platform/dev/worker/model/minimax/api-key` to `MODEL_MINIMAX_API_KEY`. 316 tests pass;
+  `make up && make demo` passed with the rebuilt images. Gotchas: the MCP SDK 2.x client's first
+  request is `server/discover`, not `initialize`; a Bash heredoc with `<<'EOF'` tripped the
+  removal safety check (use the Edit tool or a script file). For `[infra]` compute: worker task
+  env `TOOLS_PROVIDER=mcp`, `TOOL_GATEWAY_URL`, `TOOL_GATEWAY_SIGV4=true`, `CONTROL_PLANE_URL`,
+  `QUEUE_BACKEND=sqs`, `RUN_QUEUE_URL`, `STATE_BACKEND=dynamodb`, `STATE_TABLE`, `AWS_REGION`,
+  `MODEL_PROVIDERS` and the `MODEL_MINIMAX_*` settings; secrets
+  `MODEL_MINIMAX_API_KEY` from SSM; execution role `ssm:GetParameters` on
+  `/agent-platform/dev/worker/*`, ECR pull, logs; task role SQS receive/delete/change visibility,
+  DynamoDB on the run-state table, `execute-api:Invoke` on `/internal/*` and `/mcp`; runtime
+  platform `ARM64`. Next: `[tool-gateway]` `X-Run-Token`.
 - **2026-11-19 · tool-gateway** — M6 task 5. Lambda through the AWS Lambda Web Adapter layer (ADR
   0019, Proposed): Mangum is out because MCP's `StreamableHTTPSessionManager.run()` works once per
   instance and Mangum runs the lifespan per invocation. `run.sh` (handler) starts the unchanged

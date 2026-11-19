@@ -59,6 +59,28 @@ def test_wiring_builds_sqs_queue_in_configured_region(monkeypatch):
     assert app.state._table == "run-state"
 
 
+def test_gateway_signing_is_off_unless_asked():
+    gateway = {"QUEUE_BACKEND": "memory", "TOOLS_PROVIDER": "mcp", "TOOL_GATEWAY_URL": "http://g"}
+
+    assert Config.from_env(gateway).tool_gateway_sigv4 is False
+    assert Config.from_env({**gateway, "TOOL_GATEWAY_SIGV4": "true"}).tool_gateway_sigv4 is True
+    with pytest.raises(ConfigError, match="TOOL_GATEWAY_SIGV4"):
+        Config.from_env({**gateway, "TOOL_GATEWAY_SIGV4": "yes"})
+
+
+def test_wiring_signs_gateway_requests_when_asked():
+    from worker.adapters.tools_mcp import SignedAuth
+    from worker.wiring import build
+
+    env = {"QUEUE_BACKEND": "memory", "STATE_BACKEND": "memory", "TOOLS_PROVIDER": "mcp"}
+    env["TOOL_GATEWAY_URL"] = "http://g"
+    signed = build(Config.from_env({**env, "TOOL_GATEWAY_SIGV4": "true"}))
+    unsigned = build(Config.from_env(env))
+
+    assert isinstance(signed.deps.tools._auth, SignedAuth)
+    assert unsigned.deps.tools._auth is None
+
+
 def test_wiring_builds_memory_state_store():
     from worker.adapters.run_state_memory import InMemoryRunStateStore
     from worker.wiring import build

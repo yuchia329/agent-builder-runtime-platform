@@ -444,6 +444,10 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   outside `A-Z a-z 0-9 . -` escaped as `_XX`; at most 4 KB; read on every call, never cached, since
   GitHub replaces refresh tokens). An operator puts the GitHub App credential with
   `scripts/put_app_credential.py`.
+- The run token travels in the `X-Run-Token` header, because on AWS `Authorization` carries the
+  caller's SigV4 signature, which API Gateway checks on `/mcp` first (contract
+  `mcp-tool-call.schema.json`, [ADR 0020](adr/0020-run-token-in-its-own-header.md)). Gateways before this change read `Authorization: Bearer`; unsigned
+  workers send both until every gateway reads `X-Run-Token`.
 - Every `/mcp` request (`initialize` and `tools/list` too) needs a valid run token: ES256, `kid`
   equal to the configured public key's thumbprint, issuer, audience, expiry and issue time within
   30 s, claims valid against the contract. Otherwise HTTP 401 with a JSON-RPC error and no detail.
@@ -518,7 +522,7 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | SQS run queue       | control plane (send), worker (receive) | `QUEUE_BACKEND=sqs\|memory`, `RUN_QUEUE_URL`            |
 | Run-state table     | worker                                 | `STATE_BACKEND=dynamodb\|memory`, `STATE_TABLE`         |
 | Control plane URL   | worker, gateway                        | `CONTROL_PLANE_URL` (custom domain; SigV4-signed)       |
-| Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (custom domain; SigV4-signed)        |
+| Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (custom domain); `TOOL_GATEWAY_SIGV4=true` signs requests (AWS; default false) |
 | Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys) |
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
@@ -603,7 +607,10 @@ AWS (one region)                                idle cost
   Scheduler invokes the same function with `{"sweep": "all"}` every 5 minutes. Not in a VPC.
 - **Tool gateway:** Lambda, Python 3.12, arm64, with the Lambda Web Adapter layer (ADR 0019),
   behind the same HTTP API. Not in a VPC.
-- **Workers:** one ECS Fargate service, scaled on SQS queue depth, 0 tasks when idle. Public
+- **Workers:** one ECS Fargate service (linux/arm64 image from `worker/Dockerfile`, `make
+  worker-image`; ECR tag = git commit), scaled on SQS queue depth, 0 tasks when idle. Model API
+  keys reach the container through the task definition's `secrets` from SSM
+  (`/agent-platform/dev/worker/model/<provider>/api-key` as `MODEL_<NAME>_API_KEY`). Public
   subnets with a public IP, no NAT gateway. Scaling from 0 takes a minute or more; a Lambda
   entrypoint can be added later if that is too slow.
 - **Data:** two DynamoDB tables (control plane, run state), on-demand capacity, built from the

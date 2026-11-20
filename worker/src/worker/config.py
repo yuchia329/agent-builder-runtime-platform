@@ -21,6 +21,8 @@ TRACING_EXPORTERS = ("none", "logging", "xray")  # ADR 0022
 PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
 BUILT_IN_PROVIDERS = ("stub",)
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# CloudWatch namespace rules (ADR 0023); "AWS/" is reserved for AWS's own metrics.
+METRICS_NAMESPACE = re.compile(r"^(?!AWS/)[A-Za-z0-9.\-_/#: ]{1,255}$")
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class Config:
     tool_gateway_url: str | None
     tool_gateway_sigv4: bool  # sign gateway requests with SigV4 (AWS: API Gateway IAM on /mcp)
     tracing_exporter: str  # where spans go: none, logging, xray (OTLP to X-Ray, SigV4)
+    metrics_namespace: str | None  # CloudWatch namespace of the EMF lines; None: no metrics
     aws_region: str
     concurrency: int
     visibility_seconds: int
@@ -95,6 +98,7 @@ class Config:
             tool_gateway_url=env.get("TOOL_GATEWAY_URL", "").strip() or None,
             tool_gateway_sigv4=choice("TOOL_GATEWAY_SIGV4", ("true", "false"), "false") == "true",
             tracing_exporter=choice("TRACING_EXPORTER", TRACING_EXPORTERS, "none"),
+            metrics_namespace=env.get("METRICS_NAMESPACE", "").strip() or None,
             aws_region=env.get("AWS_REGION", "us-east-1"),
             concurrency=positive_int("WORKER_CONCURRENCY", 4),
             visibility_seconds=positive_int("RUN_VISIBILITY_SECONDS", 60),
@@ -112,6 +116,11 @@ class Config:
             errors.append("TOOL_GATEWAY_URL is required when TOOLS_PROVIDER=mcp")
         if "MODEL_PROVIDER" in env:
             errors.append("MODEL_PROVIDER was replaced by MODEL_PROVIDERS (ADR 0010); remove it")
+        if config.metrics_namespace and not METRICS_NAMESPACE.match(config.metrics_namespace):
+            errors.append(
+                f"METRICS_NAMESPACE={config.metrics_namespace!r}: expected 1-255 letters, digits"
+                " and . - _ / # : or space, not starting with AWS/"
+            )
         if config.queue_backend == "sqs" and not config.run_queue_url:
             errors.append("RUN_QUEUE_URL is required when QUEUE_BACKEND=sqs")
         if errors:

@@ -202,6 +202,39 @@ def test_cost_is_reported_from_token_usage(clock):
     world.assert_updates_match_contract()
 
 
+class RecordedMetrics:
+    def __init__(self) -> None:
+        self.model_costs: list[float] = []
+
+    def model_cost(self, usd: float) -> None:
+        self.model_costs.append(usd)
+
+
+def test_every_model_call_reports_its_cost_as_a_metric(clock):
+    world = World(
+        clock,
+        [tool_turn(SEARCH), tool_turn(LABEL), final_turn("done")],
+        run_changes=_with_model("minimax/MiniMax-M3"),
+    )
+    metrics = RecordedMetrics()
+    world.deps = replace(world.deps, metrics=metrics)
+
+    assert world.run() is RunStatus.SUCCEEDED
+
+    assert metrics.model_costs == pytest.approx([0.000054] * 3)  # one per model call, not tools
+    assert sum(metrics.model_costs) == pytest.approx(world.stored["cost_usd"])
+
+
+def test_a_free_model_still_reports_zero(clock):
+    world = World(clock, [final_turn("done")])  # the example spec's model is priced 0
+    metrics = RecordedMetrics()
+    world.deps = replace(world.deps, metrics=metrics)
+
+    world.run()
+
+    assert metrics.model_costs == [0.0]
+
+
 def test_dollar_budget_fails_the_run(clock):
     expensive = ModelTurn(
         StopReason.TOOL_USE,

@@ -237,3 +237,29 @@ def test_wiring_builds_gateway_tools():
     app = build(Config.from_env({**env, "QUEUE_BACKEND": "memory"}))
 
     assert isinstance(app.deps.tools, GatewayTools)
+
+
+def test_metrics_off_unless_a_namespace_is_given():
+    assert Config.from_env(LOCAL).metrics_namespace is None
+    assert Config.from_env({**LOCAL, "METRICS_NAMESPACE": " "}).metrics_namespace is None
+    assert (
+        Config.from_env({**LOCAL, "METRICS_NAMESPACE": "AgentPlatform/dev"}).metrics_namespace
+        == "AgentPlatform/dev"
+    )
+
+
+@pytest.mark.parametrize("namespace", ["AWS/Lambda", "bad,name", "x" * 256, "émoji"])
+def test_bad_metrics_namespace(namespace):
+    with pytest.raises(ConfigError, match="METRICS_NAMESPACE"):
+        Config.from_env({**LOCAL, "METRICS_NAMESPACE": namespace})
+
+
+def test_wiring_picks_metrics_from_the_namespace():
+    from worker.adapters.metrics_emf import EmfMetrics
+    from worker.core.metrics import NoopMetrics
+    from worker.wiring import build
+
+    env = {"QUEUE_BACKEND": "memory", "STATE_BACKEND": "memory"}
+    assert isinstance(build(Config.from_env(env)).deps.metrics, NoopMetrics)
+    with_namespace = build(Config.from_env({**env, "METRICS_NAMESPACE": "AgentPlatform/dev"}))
+    assert isinstance(with_namespace.deps.metrics, EmfMetrics)

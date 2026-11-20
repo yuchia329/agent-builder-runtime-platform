@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from worker.adapters.clock_system import SystemClock
 from worker.adapters.control_plane_http import HttpControlPlane, default_signer
+from worker.adapters.metrics_emf import EmfMetrics
 from worker.adapters.model_bedrock import BedrockConverseModel
 from worker.adapters.model_openai_compat import OpenAICompatModel
 from worker.adapters.model_router import ModelRouter
@@ -20,6 +21,8 @@ from worker.adapters.tools_mcp import GatewayTools, SignedAuth
 from worker.adapters.tracing_otel import OtelTracer, build_tracer, trace_headers
 from worker.config import Config
 from worker.core.handle_run import Deps
+from worker.core.metrics import NoopMetrics
+from worker.ports.metrics import Metrics
 from worker.ports.model import Model
 from worker.ports.queue import RunQueue
 from worker.ports.run_state import RunStateStore
@@ -80,5 +83,10 @@ def build(config: Config) -> App:
         tools = GatewayTools(config.tool_gateway_url, auth=auth, trace_headers=headers)
     else:
         tools = issue_triage_tools()
-    deps = Deps(control_plane, model, tools, clock, state=state, tracer=tracer)
+    metrics: Metrics = (
+        EmfMetrics(config.metrics_namespace, clock=clock)
+        if config.metrics_namespace
+        else NoopMetrics()
+    )
+    deps = Deps(control_plane, model, tools, clock, state=state, tracer=tracer, metrics=metrics)
     return App(queue, deps, state, tracer)

@@ -502,6 +502,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock Converse (M1) |
 | `ToolClient`        | worker        | `describe(names, context)` returns tool schemas; `call(name, args, context)` returns a result or raises `ToolError`; `context` is the run id, run token, step and idempotency key | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `Tracer`            | worker        | `span(name, attributes, parent=traceparent)` as a context manager, `annotate` the current span, `traceparent()` of the current span; failures mark the span with the exception type only | No-op (core default), OpenTelemetry |
+| `Metrics`           | worker        | `model_cost(usd)` per model call; never raises (a lost value must not fail the run); safe from many threads | No-op (core default), CloudWatch EMF on stdout |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
 | `RunTokenSigner`    | control plane | `keyId()` (RFC 7638 thumbprint), `publicKey()`, `sign(input)` returns an ES256 signature in JOSE form; no network call at construction | Local key pair, KMS |
 | `SecretSource`      | control plane | `get(secret)` (null = not set; may load on first use, never at startup), `peek` (only what is held), `configured`, `prefetch` | Env, SSM Parameter Store |
@@ -589,8 +590,9 @@ Metrics ([ADR 0023](adr/0023-route-throttling-and-model-spend-alarm.md)): the wo
 cost of every model call (US dollars, from `core/models.py` prices) as a CloudWatch embedded
 metric format line on stdout: namespace `METRICS_NAMESPACE`, metric `ModelCostUsd`, no
 dimensions (nothing written when unset). The `awslogs` driver ships it and CloudWatch extracts the
-metric; the model spend alarm (Deployment) sums it. Not built yet in the worker (roadmap,
-Cross-service changes).
+metric; the model spend alarm (Deployment) sums it. A free model (the stub) writes 0, so every
+model call shows as a sample. The line goes to stdout and logs to stderr; a failed write is
+logged and never fails the run.
 
 ## Testing
 

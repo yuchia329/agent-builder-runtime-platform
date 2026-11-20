@@ -48,6 +48,7 @@ from jsonschema import Draft202012Validator
 
 from worker.core.budget import BudgetExceeded, BudgetTracker
 from worker.core.errors import LeaseLost, RunConflict, StateError, ToolError
+from worker.core.metrics import NoopMetrics
 from worker.core.models import MODELS, ModelInfo, UnknownModel, model_info
 from worker.core.tracing import NoopTracer
 from worker.core.trim import ContextTooLarge, fit_context, message_chars
@@ -68,6 +69,7 @@ from worker.core.types import (
 )
 from worker.ports.clock import Clock
 from worker.ports.control_plane import ControlPlane
+from worker.ports.metrics import Metrics
 from worker.ports.model import Model
 from worker.ports.run_state import Checkpoint, RunStateStore
 from worker.ports.tools import ToolClient
@@ -89,6 +91,7 @@ class Deps:
     models: Mapping[str, ModelInfo] = field(default_factory=lambda: MODELS)
     state: RunStateStore | None = None  # checkpoints; None: nothing is saved
     tracer: Tracer = field(default_factory=NoopTracer)
+    metrics: Metrics = field(default_factory=NoopMetrics)  # model spend (ADR 0023)
 
 
 @dataclass(frozen=True)
@@ -260,6 +263,7 @@ class _AgentLoop:
                 span.set("gen_ai.usage.output_tokens", turn.usage.output_tokens)
                 span.set("cost.usd", round(cost, 6))
                 span.set("stop_reason", turn.stop_reason.value)
+            self._deps.metrics.model_cost(cost)
             self._learn_token_ratio(turn.usage.input_tokens)
             self._budget.record_step(cost)
             message = Message.assistant(turn)

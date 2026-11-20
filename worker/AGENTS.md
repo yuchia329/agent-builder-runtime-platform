@@ -20,6 +20,8 @@ Run from `worker/`.
 | Real model locally | In `../.env`: `MODEL_PROVIDERS=minimax` and the `MODEL_MINIMAX_*` lines from `../.env.example` with your key; publish a spec with `model: minimax/MiniMax-M3` |
 | Real Bedrock locally | In `../.env`: add `bedrock` to `MODEL_PROVIDERS` and the `MODEL_BEDROCK_*` lines from `../.env.example` (profile from `~/.aws`, no keys in `.env`); run the worker on the host (the image has no `~/.aws`); spec `model: bedrock/amazon.nova-lite-v1:0` |
 | See spans locally | `TRACING_EXPORTER=logging` (each span printed as JSON on stdout) |
+| See metric lines locally | `METRICS_NAMESPACE=AgentPlatform/local` (one `ModelCostUsd` JSON line on stdout per model call) |
+| Metric on AWS (after a run) | `aws cloudwatch get-metric-statistics --namespace AgentPlatform/dev --metric-name ModelCostUsd --statistics Sum SampleCount --period 3600 --start-time <ISO> --end-time <ISO> --profile default` |
 | Live X-Ray check (dev AWS, fraction of a cent) | `LIVE_AWS=1 uv run pytest tests/unit/test_live_xray.py -s` (profile `default`; one span through the OTLP endpoint, found in `aws/spans` in about 20-30 s; needs Transaction Search on) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
@@ -34,7 +36,7 @@ Run from `worker/`.
   library, `worker.core` / `worker.ports`, and `jsonschema`. `tests/unit/test_core_boundary.py`
   fails on any other import.
 - `src/worker/ports/`: `Protocol` interfaces only (`ControlPlane`, `Model`, `ToolClient`, `Clock`,
-  `RunQueue`, `RunStateStore`, `Tracer`).
+  `RunQueue`, `RunStateStore`, `Tracer`, `Metrics`).
 - `src/worker/adapters/`: implementations. Vendor SDKs (boto3, httpx, Strands) live only here.
   Models: `model_router.py` (picks the provider from `<provider>/<model id>`),
   `model_openai_compat.py` (OpenAI Chat Completions format: MiniMax, OpenAI, OpenRouter, vLLM,
@@ -59,6 +61,8 @@ Run from `worker/`.
 - `adapters/tools_mcp.py` (`GatewayTools`): tools through the gateway over MCP (SDK client).
 - `adapters/tracing_otel.py`: `OtelTracer`, `build_tracer` (`TRACING_EXPORTER`), the SigV4-signed
   X-Ray OTLP exporter; `core/tracing.py`: `NoopTracer`, the `Deps` default.
+- `adapters/metrics_emf.py`: `EmfMetrics`, one CloudWatch embedded metric format line per value
+  on stdout (`METRICS_NAMESPACE`; ADR 0023); `core/metrics.py`: `NoopMetrics`, the `Deps` default.
 - `tests/live_gateway.py`: the real tool gateway as a subprocess (fake connector, minimal env,
   throwaway P-256 key) and `RunTokens` signing run tokens like the control plane; session
   fixtures `live_gateway` and `run_tokens` in `conftest.py`.
@@ -146,5 +150,9 @@ Run from `worker/`.
   on the caller's thread, before its event loop.
 - Tracing tests use `build_tracer("none", ..., span_exporter=InMemorySpanExporter())`; the
   exporter drops spans after `shutdown()`, so read them before.
+- Metrics (ADR 0023): `Deps.metrics.model_cost(cost)` after every model call, 0 included. The EMF
+  line carries the value only: no dimensions, run ids, model names or anything from the run
+  (each dimension combination is a billed metric). It goes to stdout, logs to stderr; keep it
+  that way so a metric line is never part of a log record. `config.py` owns the namespace rule.
 - The fake tools and scripted model are shared test infrastructure (later: chaos and load tests);
   keep them deterministic.

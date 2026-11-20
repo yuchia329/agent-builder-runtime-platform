@@ -445,7 +445,9 @@ Work in this order:
   call, namespace `METRICS_NAMESPACE` (unset = none), metric `ModelCostUsd` in US dollars, no
   dimensions; push a new image tag and deploy it (`worker_image_tag`). Check: tests; a real
   MiniMax call on AWS (or the stub with a nonzero test price) shows the value in CloudWatch
-  (`aws cloudwatch get-metric-statistics`).
+  (`aws cloudwatch get-metric-statistics`). Code done (`ports/metrics.py`, `EmfMetrics`; the
+  stub writes 0, so a stub run shows samples); 355 tests pass. AWS check pending: image at the
+  commit, deploy, `aws_demo.py`.
 - [ ] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL, its OAuth
   callback URL and Slack's Request URL moved to the API's `execute-api` address (no tunnels;
   `terraform output api_url`); `gateway_connectors = "github"` and `github_repos` in
@@ -504,11 +506,6 @@ service has followed.
   done: reads `X-Run-Token` (alone when present), Bearer only as a fallback. Must follow, in any
   later session: `worker` drops the Bearer copy (`tools_mcp._run`), then `tool-gateway` drops the
   fallback (`app._run_token`) and its test; then this entry goes.
-- **Model spend metric** (2026-11-20, ADR 0023; no `contracts/` file, the shared name is in
-  `docs/architecture.md` → Observability). `infra` done: task definition sets
-  `METRICS_NAMESPACE=AgentPlatform/dev`; alarm `agent-platform-dev-model-spend` on
-  `ModelCostUsd`. Must follow: `worker` writes one EMF line per model call (next roadmap task);
-  then this entry goes.
 
 ## Handoff notes
 

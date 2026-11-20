@@ -33,8 +33,8 @@ resource "aws_apigatewayv2_stage" "default" {
   # Per API, not per caller: a flood also delays Slack clicks and GitHub webhooks (GitHub does not
   # retry a 429; redeliver from the App's settings).
   default_route_settings {
-    throttling_rate_limit  = var.api_throttle_rate
-    throttling_burst_limit = var.api_throttle_burst
+    throttling_rate_limit  = local.api_throttle_rate # load_test.tf: higher in load-test mode
+    throttling_burst_limit = local.api_throttle_burst
   }
 
   access_log_settings {

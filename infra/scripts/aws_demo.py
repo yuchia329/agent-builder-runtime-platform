@@ -1,6 +1,12 @@
-"""End-to-end check on AWS, like `make demo` locally: publish the example spec (stub model), start
-a run, wait for SUCCEEDED, find the run's trace in X-Ray (its spans in the `aws/spans` log group,
-Transaction Search; ADR 0022), then wait for the workers to scale back to 0.
+"""End-to-end check on AWS, like `make demo` locally: publish the example spec (stub model) as its
+own agent `demo-stub`, start a run, wait for SUCCEEDED, find the run's trace in X-Ray (its spans in
+the `aws/spans` log group, Transaction Search; ADR 0022), then wait for the workers to scale back
+to 0.
+
+The live agent `issue-triage` is never touched: the spec's name becomes `demo-stub` and its
+trigger `manual.demo.run`, which no webhook sends. The stub's tool calls need the gateway's fake
+connector, so the script refuses unless `gateway_connectors` (terraform output) includes `fake`:
+set `load_test = true` (or `gateway_connectors = "fake"`) and apply first.
 
     cd infra
     uv run --with boto3 python scripts/aws_demo.py   # --no-trace, --no-scale-in to skip those
@@ -27,7 +33,8 @@ TRACE_WAIT_SECONDS = 240
 
 INFRA = Path(__file__).resolve().parent.parent
 SPEC = INFRA.parent / "contracts" / "examples" / "agent-spec.valid.yaml"
-AGENT = "issue-triage"
+AGENT = "demo-stub"
+TRIGGER = "manual.demo.run"  # no webhook sends it: GitHub events never start this agent
 RUN_INPUT = {
     "repository": {"full_name": "acme/payments"},
     "issue": {"number": 42, "title": "Refund fails for EUR cards"},
@@ -72,6 +79,11 @@ def main() -> int:
     if args.profile == "prod":
         sys.exit("This project never uses the prod profile.")
 
+    connectors = [c.strip() for c in output("gateway_connectors").split(",")]
+    if "fake" not in connectors:
+        sys.exit(f"The gateway runs {', '.join(connectors)}: the stub's tool calls need the fake "
+                 "connector. Set load_test = true (or gateway_connectors = \"fake\") in "
+                 "terraform.tfvars and apply, then run this again.")
     session = boto3.Session(profile_name=args.profile, region_name=args.region)
     key_name = output("secret_parameters")["TENANT_API_KEY"]
     key = session.client("ssm").get_parameter(Name=key_name, WithDecryption=True)["Parameter"]
@@ -82,10 +94,10 @@ def main() -> int:
     ecs = session.client("ecs")
 
     print(f"API {api.url}")
-    print("1. Create agent issue-triage (409 if it already exists)")
+    print(f"1. Create agent {AGENT} (409 if it already exists)")
     api.call("POST", "/agents", json.dumps({"name": AGENT}).encode(), ok=(201, 409))
-    print(f"2. Publish {SPEC.relative_to(INFRA.parent)}")
-    _, published = api.call("POST", f"/agents/{AGENT}/versions", SPEC.read_bytes(), "application/yaml")
+    print(f"2. Publish {SPEC.relative_to(INFRA.parent)} as {AGENT} (trigger {TRIGGER})")
+    _, published = api.call("POST", f"/agents/{AGENT}/versions", demo_spec(), "application/yaml")
     print(f"   version {published.get('version')}")
     print("3. Start a run")
     started = time.monotonic()
@@ -128,6 +140,17 @@ def main() -> int:
         if time.monotonic() - finished > 1200:
             sys.exit("Workers still running 20 minutes after the run")
         time.sleep(30)
+
+
+def demo_spec() -> bytes:
+    """The example spec with this script's agent name and a trigger no webhook sends."""
+    text = SPEC.read_text()
+    for key, value in (("name", AGENT), ("trigger", TRIGGER)):
+        lines = [line for line in text.splitlines() if line.startswith(f"{key}: ")]
+        if len(lines) != 1:
+            sys.exit(f"{SPEC.name}: expected one top-level '{key}:' line, found {len(lines)}")
+        text = text.replace(lines[0], f"{key}: {value}")
+    return text.encode()
 
 
 def find_trace(logs, trace_id: str, since_ms: int) -> None:

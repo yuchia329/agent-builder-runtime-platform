@@ -14,13 +14,14 @@ Terraform for every AWS resource (ADR 0007: scale to zero, no hourly cost while 
   (`use_lockfile`, no lock table); bucket name from `backend.hcl` (git-ignored). One file per kind
   of resource: data (`dynamodb.tf`, `sqs.tf`, `ecr.tf`, `kms.tf`, `ssm.tf`) and compute
   (`artifacts.tf` Lambda zips in S3, `lambda.tf`, `api.tf`, `network.tf`, `ecs.tf`, `scaling.tf`,
-  `scheduler.tf`, `iam.tf`, `logs.tf`) and alerts (`alarms.tf`: SNS email topic, model spend
-  alarm; ADR 0023). Names `agent-platform-dev-<name>` (`local.name`); names
+  `scheduler.tf`, `iam.tf`, `logs.tf`), alerts (`alarms.tf`: SNS email topic, model spend
+  alarm; ADR 0023) and load-test mode (`load_test.tf`: one switch, ADR 0024). Names `agent-platform-dev-<name>` (`local.name`); names
   other components need in `outputs.tf`. Personal values in `terraform.tfvars` (git-ignored; copy
   `terraform.tfvars.example`).
 - `scripts/put_secrets.py`: puts secret values into the SSM parameters (ADR 0018).
-- `scripts/aws_demo.py`: `make demo` on AWS. Publishes the example spec (stub model), runs it to
-  `SUCCEEDED`, reports the wait for a worker, finds the run's trace in `aws/spans` (worker span
+- `scripts/aws_demo.py`: `make demo` on AWS. Publishes the example spec (stub model) as its own
+  agent `demo-stub` (trigger `manual.demo.run`, never `issue-triage`; needs the gateway's fake
+  connector: load-test mode), runs it to `SUCCEEDED`, reports the wait for a worker, finds the run's trace in `aws/spans` (worker span
   names and counts, never attributes), then waits for 0 workers. A few cents.
 - `scripts/throttle_check.py`: 80 requests to `GET /agents` without a key, 8 at a time; passes
   when some answer 429. A few free-tier Lambda invocations.
@@ -58,6 +59,8 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
 | Read one back | `aws ssm get-parameter --with-decryption --name <name> --query Parameter.Value --output text --profile default` |
 | API address | `terraform -chdir=envs/dev output -raw api_url` |
 | End-to-end check on AWS (a few cents) | `uv run --with boto3 python scripts/aws_demo.py` (`--no-trace` skips the trace lookup, `--no-scale-in` the wait for 0 workers) |
+| Load-test mode on / off | `load_test = true` (or `false`) in `envs/dev/terraform.tfvars`, then `plan` and `apply`; `terraform -chdir=envs/dev output load_test` shows the mode |
+| Lambda concurrency quota | `aws service-quotas get-service-quota --service-code lambda --quota-code L-B99A9384 --profile default` (10 until the increase to 1,000 is granted) |
 | Route throttling (some 429s) | `uv run python scripts/throttle_check.py` (keep `--concurrency` under 10: the account's Lambda limit) |
 | Spend alarm state | `aws cloudwatch describe-alarms --alarm-names agent-platform-dev-model-spend --query 'MetricAlarms[0].StateValue' --profile default` |
 | Test the spend alarm (stays in ALARM 24 h) | `aws cloudwatch put-metric-data --namespace AgentPlatform/dev --metric-name ModelCostUsd --value 2 --profile default` |
@@ -100,6 +103,12 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
   patterns cannot select JSON keys with dots (span attributes like `cost.usd`).
 - Emails and other personal values in variables are `sensitive = true`, so plans show
   `(sensitive value)`.
+- Load-test mode is one switch (`load_test`, ADR 0024): change load values in
+  `load_test_settings`, never by editing the normal variables for a test. Turn it off right after
+  a test and confirm `plan` shows no changes; `aws_demo.py` refuses while the gateway runs only
+  `github` (dev live).
+- `worker_model_env` in tfvars replaces the whole default map; per-mode worker settings go in
+  `local.worker_load_env`, merged in `ecs.tf`.
 - Check a new worker image before pushing it: tags are immutable, so a bad push costs a new tag
   (`docker run --rm --entrypoint /app/.venv/bin/python <image> -c "import worker..."`).
 - Nothing that bills by the hour (ADR 0007): no NAT gateway, load balancer, interface endpoints,

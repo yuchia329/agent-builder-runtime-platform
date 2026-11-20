@@ -41,7 +41,7 @@ resource "aws_ecs_task_definition" "worker" {
       WORKER_CONCURRENCY = "4"
       TRACING_EXPORTER   = "xray"                  # spans to the X-Ray OTLP endpoint (ADR 0022)
       METRICS_NAMESPACE  = local.metrics_namespace # model spend metric (alarms.tf, ADR 0023)
-    }) : { name = k, value = v }]
+    }, local.worker_load_env) : { name = k, value = v }]
     # ECS reads these from SSM when the task starts; the container sees plain env vars.
     secrets = [{
       name      = "MODEL_MINIMAX_API_KEY"

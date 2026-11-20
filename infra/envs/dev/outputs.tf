@@ -48,6 +48,16 @@ output "secret_parameters" {
   value       = { for k, p in aws_ssm_parameter.secret : local.secrets[k] => p.name }
 }
 
+output "load_test" {
+  description = "Whether load-test mode is on (load_test.tf); set load_test = false after a test."
+  value       = local.load_test
+}
+
+output "gateway_connectors" {
+  description = "Connectors the gateway runs now (fake in load-test mode); aws_demo.py needs fake."
+  value       = local.gateway_connectors
+}
+
 output "model_spend_alarm" {
   description = "Alarm on the day's model spend, and the metric the worker writes (namespace, name)."
   value = {

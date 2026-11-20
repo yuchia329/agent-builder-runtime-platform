@@ -678,9 +678,10 @@ AWS (one region)                                idle cost
   keys reach the container through the task definition's `secrets` from SSM
   (`/agent-platform/dev/worker/model/<provider>/api-key` as `MODEL_<NAME>_API_KEY`). Public
   subnets with a public IP, no NAT gateway; the security group allows only outbound 443. Step
-  scaling on two CloudWatch alarms: a message waiting in the run queue for one minute adds a task
-  (up to `worker_max_tasks`, 2 in dev; 2-minute cooldown), and five minutes with nothing waiting
-  or in flight sets the service to 0. Measured on dev (2026-11-19): a stub run after idle finished
+  scaling on two CloudWatch alarms: messages waiting in the run queue for one minute add tasks
+  sized to the backlog (1-9 waiting: +1, 10-49: +5, 50 or more: +10; up to `worker_max_tasks`, 2
+  in dev; 2-minute cooldown; [ADR 0024](adr/0024-load-test-mode-and-backlog-sized-scale-out.md)),
+  and five minutes with nothing waiting or in flight sets the service to 0. Measured on dev (2026-11-19): a stub run after idle finished
   207 s after it was started, nearly all of it a worker starting; the service was back at 0 tasks
   458 s after the run. A Lambda entrypoint, or starting the service on enqueue, can be added if
   scale-out is too slow. The task definition sets `TRACING_EXPORTER=xray`: workers send spans
@@ -697,6 +698,11 @@ AWS (one region)                                idle cost
   evaluation, not at midnight), and emails again on OK. It is an email, not a stop: per-run
   budgets cap each run; stopping everything is setting the worker service to 0. AWS's own bill
   has the budgets in `bootstrap/`.
+- **Load-test mode** (ADR 0024): `load_test = true` in `terraform.tfvars` switches, for one
+  test, to `load_test_settings`: throttle 200 per second (burst 400), up to 20 workers, the
+  gateway on the fake connector, the stub model at 2,000 ms a call (`MODEL_STUB_LATENCY_MS`);
+  `false` restores the normal values with one apply. `aws_demo.py` runs its own agent
+  `demo-stub` (trigger `manual.demo.run`) and needs the fake connector.
 - **Logs:** every log group keeps 14 days (`log_retention_days`), including the two Transaction
   Search made (`aws/spans`, `/aws/application-signals/data`), imported with `skip_destroy`.
 - **Network:** one VPC with two public subnets (two availability zones) and an internet gateway;

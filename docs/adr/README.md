@@ -36,6 +36,7 @@ Rules:
 | [0021](0021-default-api-endpoint-no-custom-domain.md) | The default execute-api endpoint, no custom domain | Proposed |
 | [0022](0022-run-traces-start-in-the-control-plane.md) | Run traces start in the control plane; Lambda uploads no spans | Proposed |
 | [0023](0023-route-throttling-and-model-spend-alarm.md) | Route throttling at the API, a model spend alarm on a metric the worker writes | Proposed |
+| [0024](0024-load-test-mode-and-backlog-sized-scale-out.md) | Load-test mode as one Terraform switch; scale-out sized to the backlog | Proposed |
 
 ## Template
 

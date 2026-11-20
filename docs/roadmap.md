@@ -488,13 +488,19 @@ planning (2026-11-20):
 
 Work in this order:
 
-- [ ] `[infra]` load-test mode: tfvars switches used only during a test (API throttle limits,
+- [x] `[infra]` load-test mode: tfvars switches used only during a test (API throttle limits,
   `worker_max_tasks` 20, `gateway_connectors = "fake"`); scale-out sized to the backlog (step
   scaling on queue depth, more tasks for a deeper queue, instead of one per alarm);
   `aws_demo.py` publishes and runs its own agent (for example `demo-stub`), never
   `issue-triage`, and refuses with a clear message when the gateway's connectors cannot serve
   the stub's tools. Needs the Lambda quota above 10. Check: `aws_demo.py` passes in load mode;
   `plan` back to normal settings restores them; the live `issue-triage` version is unchanged.
+  Done (ADR 0024): `load_test` switch (`load_test.tf`, `load_test_settings`: 200/400, 20
+  workers, 2,000 ms); scale-out steps +1/+5/+10 by queue depth; `aws_demo.py` runs `demo-stub`
+  and refuses without `fake`. In load mode its run `SUCCEEDED` (259 s waiting for a worker, model
+  calls 2,000 ms); back to normal, `plan` shows no changes, gateway `github`; the control plane
+  log shows no `issue-triage` publish after version 4. Worker image `c53f4c6` deployed. The
+  Lambda quota is still 10 (request open), needed before the 100-run test.
 - [x] `[worker]` stub model latency: a setting (for example `MODEL_STUB_LATENCY_MS`) that makes
   each stub model call take a fixed time, so runs last like real ones; the stub's tool calls
   stay the demo script. Check: tests; image pushed. Done: `MODEL_STUB_LATENCY_MS` (0 to 60000,
@@ -563,6 +569,19 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · infra** — M7 task 1 (load-test mode, ADR 0024). `load_test` switch with
+  `load_test_settings` (throttle, workers, gateway `fake`, stub latency via
+  `local.worker_load_env`); backlog-sized scale-out steps; outputs `load_test`,
+  `gateway_connectors`; `aws_demo.py` publishes `demo-stub` (trigger `manual.demo.run`) and
+  refuses unless the gateway runs `fake`. Checked on AWS: load mode on, `aws_demo.py` passed
+  (model calls 2,000 ms), load mode off, `plan` clean, `issue-triage` still version 4. Worker
+  image `c53f4c6` deployed (latency 0 in normal mode). Next: `[loadtest]` driver once the Lambda
+  quota is granted (`infra/AGENTS.md` has the check; the AWS case was open on 2026-11-20).
+  Gotchas: the control plane has no read route for agents (versions checked from its request
+  log); `specs/README.md`'s gotcha "do not run `aws_demo.py` while live" is now outdated (it no
+  longer touches `issue-triage` and refuses without `fake`): the next specs session should update
+  it; while load mode is on, real issues still run `issue-triage` with fake tools.
 
 - **2026-11-20 · worker** — M7 task 2 (stub latency). `StubModel` waits `latency_seconds` before
   each reply (injectable `sleep`; negative refused); `config.py` reads `MODEL_STUB_LATENCY_MS`

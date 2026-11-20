@@ -1,5 +1,6 @@
-# Workers follow the run queue: one more task while messages wait (up to worker_max_tasks), back
-# to 0 after 5 minutes with nothing waiting or in flight. A run in progress keeps its message in
+# Workers follow the run queue: more tasks while messages wait, sized to the backlog (1-9
+# waiting: +1, 10-49: +5, 50 or more: +10; up to worker_max_tasks, more in load-test mode), back
+# to 0 after 5 minutes with nothing waiting or in flight. One run still adds exactly one task. A run in progress keeps its message in
 # flight (the worker extends its visibility), so scale-in never cuts a run short. SQS metrics are
 # per minute, and a queue idle for hours can take several minutes to report again: the first run
 # after a long idle waits for that (ADR 0007).
@@ -9,7 +10,7 @@ resource "aws_appautoscaling_target" "worker" {
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.worker.name}"
   scalable_dimension = "ecs:service:DesiredCount"
   min_capacity       = 0
-  max_capacity       = var.worker_max_tasks
+  max_capacity       = local.worker_max_tasks
 }
 
 resource "aws_appautoscaling_policy" "worker_out" {
@@ -24,9 +25,20 @@ resource "aws_appautoscaling_policy" "worker_out" {
     cooldown                = 120
     metric_aggregation_type = "Maximum"
 
+    # Bounds are relative to the alarm threshold (1 waiting): +0 is 1 waiting, +9 is 10, +49 is 50.
     step_adjustment {
       metric_interval_lower_bound = 0
+      metric_interval_upper_bound = 9
       scaling_adjustment          = 1
+    }
+    step_adjustment {
+      metric_interval_lower_bound = 9
+      metric_interval_upper_bound = 49
+      scaling_adjustment          = 5
+    }
+    step_adjustment {
+      metric_interval_lower_bound = 49
+      scaling_adjustment          = 10
     }
   }
 }

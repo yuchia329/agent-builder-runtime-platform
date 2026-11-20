@@ -73,11 +73,11 @@ resource "aws_lambda_function" "gateway" {
         SECRETS_SSM_PATH             = "/${var.project}/${local.environment}/gateway"
         CONTROL_PLANE_URL            = local.api_url
         CONTROL_PLANE_SIGV4          = "true"
-        CONNECTORS                   = var.gateway_connectors
+        CONNECTORS                   = local.gateway_connectors # fake in load-test mode
         GITHUB_OAUTH_CLIENT_ID       = var.github_oauth_client_id
         GATEWAY_PUBLIC_URL           = local.api_url
       },
-      var.github_repos == "" ? {} : { GITHUB_REPOS = var.github_repos },
+      local.gateway_github_repos == "" ? {} : { GITHUB_REPOS = local.gateway_github_repos },
     )
   }
 

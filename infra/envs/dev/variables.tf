@@ -127,6 +127,33 @@ variable "api_throttle_rate" {
   default     = 5
 }
 
+variable "load_test" {
+  description = "Load-test mode (M7, load_test.tf): load_test_settings replace the throttle and worker limit, the gateway runs the fake connector, the stub model waits. Set back to false after a test."
+  type        = bool
+  default     = false
+}
+
+variable "load_test_settings" {
+  description = "Values used while load_test is true."
+  type = object({
+    api_throttle_rate  = number # requests per second per route (/mcp needs about 100 at 80 runs at once)
+    api_throttle_burst = number
+    worker_max_tasks   = number # 0.5 vCPU each; the account's Fargate limit is 64 vCPU
+    stub_latency_ms    = number # MODEL_STUB_LATENCY_MS: each stub model call waits this long
+  })
+  default = {
+    api_throttle_rate  = 200
+    api_throttle_burst = 400
+    worker_max_tasks   = 20
+    stub_latency_ms    = 2000
+  }
+
+  validation {
+    condition     = var.load_test_settings.worker_max_tasks <= 100 && var.load_test_settings.stub_latency_ms <= 60000
+    error_message = "worker_max_tasks at most 100 (Fargate quota), stub_latency_ms at most 60000 (the worker's limit)."
+  }
+}
+
 variable "api_throttle_burst" {
   description = "Requests each API route accepts at once before answering 429."
   type        = number

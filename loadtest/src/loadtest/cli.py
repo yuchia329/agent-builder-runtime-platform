@@ -8,6 +8,7 @@ Refuses otherwise. Reads the API address from `terraform output` and the tenant 
 
     cd loadtest
     uv run loadtest --runs 100 --rate 10
+    uv run loadtest --runs 100 --rate 10 --chaos-every 20   # stop a worker every 20 s
 
 Results (every run, the summary, task samples; no secrets) go to results/<time>.json.
 """
@@ -27,7 +28,14 @@ import httpx
 
 from loadtest import aws
 from loadtest.api import Api
-from loadtest.driver import Outcome, poll_until_final, start_runs
+from loadtest.chaos import (
+    Stop,
+    chaos_loop,
+    parse_access_line,
+    repeated_calls,
+    stopped_exit_codes,
+)
+from loadtest.driver import STOP_POLLING, Outcome, poll_until_final, start_runs
 from loadtest.spec import AGENT, EXAMPLE_SPEC, RUN_INPUT, load_spec
 from loadtest.stats import RunRecord, Summary, parse_time, summarize
 
@@ -47,6 +55,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--span-wait", type=float, default=300.0, help="seconds to wait for run.attempt spans"
     )
+    parser.add_argument(
+        "--chaos-every",
+        type=float,
+        default=None,
+        help="stop a random worker task every S seconds while runs are open (off by default)",
+    )
+    parser.add_argument("--chaos-max", type=int, default=10, help="most tasks to stop")
     parser.add_argument("--profile", default="default")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR)
@@ -55,6 +70,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("this project never uses the prod profile")
     if args.runs < 1 or args.rate <= 0 or args.poll <= 0:
         parser.error("--runs must be 1 or more; --rate and --poll above 0")
+    if args.chaos_every is not None and (args.chaos_every <= 0 or args.chaos_max < 1):
+        parser.error("--chaos-every must be above 0 and --chaos-max 1 or more")
     return args
 
 
@@ -75,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"{args.runs} runs of {AGENT} at {args.rate:g}/s against {target.api_url}")
     began = datetime.now(UTC)
-    outcome, samples, retries = asyncio.run(drive(args, target, key, session.client("ecs")))
+    outcome, samples, retries, stops = asyncio.run(drive(args, target, key, session.client("ecs")))
     ended = datetime.now(UTC)
 
     print("Reading run.attempt spans from aws/spans")
@@ -84,10 +101,36 @@ def main(argv: list[str] | None = None) -> int:
     metrics = aws.wait_for_worker_metrics(
         session.client("cloudwatch"), target.cluster, target.service, began, ended
     )
+    print("Reading tool calls from the gateway's access log")
+    entries = [
+        e
+        for m in aws.log_messages(
+            session.client("logs"), target.gateway_log_group, '"tool_call"', began, ended
+        )
+        if (e := parse_access_line(m)) is not None
+    ]
+    run_ids = set(outcome.runs)
+    calls_ok = sum(1 for e in entries if e.get("run_id") in run_ids and e.get("outcome") == "ok")
+    repeated = repeated_calls(entries, run_ids)
     records = to_records(outcome, attempts)
     summary = summarize(records, start_errors=len(outcome.start_errors))
     max_running = max((s.running for s in samples), default=0)
     print(format_report(summary, metrics, max_running, retries, outcome.timed_out))
+    exit_codes = (
+        stopped_exit_codes(session.client("ecs"), target.cluster, [s.task_id for s in stops])
+        if stops
+        else {}
+    )
+    print(
+        format_chaos(
+            summary,
+            stops,
+            calls_ok,
+            repeated,
+            chaos=args.chaos_every is not None,
+            exit_codes=exit_codes,
+        )
+    )
 
     path = save_results(
         args.results_dir,
@@ -98,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
                 "poll_s": args.poll,
                 "agent": AGENT,
                 "lambda_concurrency": quota,
+                "chaos_every_s": args.chaos_every,
+                "chaos_max": args.chaos_max,
             },
             "began": began.isoformat(),
             "ended": ended.isoformat(),
@@ -111,11 +156,27 @@ def main(argv: list[str] | None = None) -> int:
                 {"at": s.at.isoformat(), "desired": s.desired, "running": s.running}
                 for s in samples
             ],
+            "chaos_stops": [
+                {
+                    "at": s.at.isoformat(),
+                    "task_id": s.task_id,
+                    "open_runs": s.open_runs,
+                    "exit_code": exit_codes.get(s.task_id),
+                }
+                for s in stops
+            ],
+            "tool_calls_ok": calls_ok,
+            "repeated_calls_by_tool": repeated,
             "runs": [record_json(r) for r in records],
         },
     )
     print(f"Results: {path}")
-    ok = summary.succeeded == summary.runs and not outcome.start_errors and not outcome.timed_out
+    ok = (
+        summary.succeeded == summary.runs
+        and not outcome.start_errors
+        and not outcome.timed_out
+        and not repeated
+    )
     return 0 if ok else 1
 
 
@@ -157,12 +218,32 @@ async def drive(args, target: aws.Target, key: str, ecs):
                 print(f"   t+{time.monotonic() - started:4.0f} s {line.strip()}")
                 last["line"] = line
 
+        chaos = None
+        stops: list[Stop] = []
+        if args.chaos_every is not None:
+            chaos = asyncio.create_task(
+                chaos_loop(
+                    ecs,
+                    target.cluster,
+                    target.service,
+                    lambda: sum(
+                        1 for r in outcome.runs.values() if r.get("status") not in STOP_POLLING
+                    ),
+                    every_s=args.chaos_every,
+                    max_stops=args.chaos_max,
+                    stops=stops,
+                )
+            )
         await poll_until_final(
             api, outcome, poll_s=args.poll, timeout_s=args.timeout, on_round=progress
         )
+        if chaos is not None:
+            chaos.cancel()  # no effect if it already ended; stops stay in `stops`
+            with contextlib.suppress(asyncio.CancelledError):
+                await chaos
         stop.set()
         await sampler
-        return outcome, samples, dict(api.retries.by_status)
+        return outcome, samples, dict(api.retries.by_status), stops
 
 
 def wait_for_spans(logs, outcome: Outcome, began: datetime, wait_s: float):
@@ -200,6 +281,7 @@ def to_records(outcome: Outcome, attempts: dict[str, aws.FirstAttempt]) -> list[
                 failure_reason=failure.get("reason"),
                 first_attempt_at=first.started_at if first else None,
                 attempts=first.attempts if first else 0,
+                receives=first.receives if first else 0,
             )
         )
     return records
@@ -217,6 +299,7 @@ def record_json(record: RunRecord) -> dict:
         if record.first_attempt_at
         else None,
         "attempts": record.attempts,
+        "receives": record.receives,
         "queue_to_start_s": record.queue_to_start_s,
     }
 
@@ -261,12 +344,39 @@ def format_report(
             if summary.working_runs_per_minute is not None
             else "-"
         ),
-        f"Redelivered runs  {summary.redelivered} (more than one run.attempt)",
+        f"Redelivered runs  {summary.redelivered} (queue receive count above 1)",
         f"Workers           at most {max_running} running",
         f"Worker CPU        avg {pct(metrics.cpu_avg)}, max {pct(metrics.cpu_max)}",
         f"Worker memory     avg {pct(metrics.memory_avg)}, max {pct(metrics.memory_max)}",
         "Retried answers   "
         + (", ".join(f"{k} x{v}" for k, v in sorted(retries.items())) or "none"),
+    ]
+    return "\n".join(lines)
+
+
+def format_chaos(
+    summary: Summary,
+    stops: list[Stop],
+    calls_ok: int,
+    repeated: dict[str, int],
+    *,
+    chaos: bool,
+    exit_codes: dict[str, int | None] | None = None,
+) -> str:
+    lost = summary.runs - summary.succeeded
+    codes = list((exit_codes or {}).values())
+    killed = sum(1 for c in codes if c == 137)
+    drained = sum(1 for c in codes if c == 0)
+    other = len(stops) - killed - drained
+    stopped = (
+        f"Chaos             {len(stops)} worker tasks stopped: {killed} killed mid-run (exit 137), "
+        f"{drained} finished their runs (exit 0)" + (f", {other} other" if other else "")
+    )
+    lines = [
+        stopped if chaos else "Chaos             off",
+        f"Lost runs         {lost} (not SUCCEEDED)",
+        f"Tool calls        {calls_ok} ok in the gateway log, repeated: "
+        + (", ".join(f"{tool} x{n}" for tool, n in repeated.items()) or "none"),
     ]
     return "\n".join(lines)
 

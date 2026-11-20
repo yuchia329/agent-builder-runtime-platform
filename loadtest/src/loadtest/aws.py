@@ -16,9 +16,13 @@ REPO = Path(__file__).resolve().parents[3]
 DEV_ENV = REPO / "infra" / "envs" / "dev"
 SPANS_LOG_GROUP = "aws/spans"
 LAMBDA_CONCURRENCY_QUOTA = "L-B99A9384"  # Lambda "Concurrent executions"
+# `queue.receive_count` is the run message's receive count on each attempt: above 1 means the run
+# was taken over (a worker died or lost its lease). Counting spans is not enough: a killed worker
+# never uploads the spans it still holds, so its attempt leaves none.
 ATTEMPTS_QUERY = (
     'filter name = "run.attempt" '
-    "| stats min(startTimeUnixNano) as first_start, count(*) as attempts by traceId "
+    "| stats min(startTimeUnixNano) as first_start, count(*) as attempts, "
+    "max(`attributes.queue.receive_count`) as receives by traceId "
     "| limit 10000"
 )
 
@@ -43,6 +47,7 @@ class Target:
     key_parameter: str
     cluster: str
     service: str
+    gateway_log_group: str
 
 
 def read_target(output: Callable[[str], object] = terraform_output) -> Target:
@@ -65,6 +70,7 @@ def read_target(output: Callable[[str], object] = terraform_output) -> Target:
         key_parameter=output("secret_parameters")["TENANT_API_KEY"],
         cluster=service["cluster"],
         service=service["service"],
+        gateway_log_group=f"/aws/lambda/{output('functions')['gateway']}",
     )
 
 
@@ -88,7 +94,8 @@ def lambda_concurrency(quotas) -> float | None:
 @dataclass(frozen=True)
 class FirstAttempt:
     started_at: datetime
-    attempts: int
+    attempts: int  # run.attempt spans found (a killed worker's attempt has none)
+    receives: int = 1  # highest queue receive count seen on the run's attempts
 
 
 def first_attempts(
@@ -131,6 +138,7 @@ def first_attempts(
         found[trace_id] = FirstAttempt(
             started_at=datetime.fromtimestamp(nanos / 1e9, UTC),
             attempts=int(float(fields["attempts"])),
+            receives=int(float(fields.get("receives") or 1)),
         )
     return found
 
@@ -218,6 +226,24 @@ def wait_for_worker_metrics(
             return metrics
         sleep(poll_s)
         waited += poll_s
+
+
+def log_messages(logs, log_group: str, pattern: str, start: datetime, end: datetime):
+    """Messages of the log events matching `pattern` in the window, every page."""
+    kwargs = {
+        "logGroupName": log_group,
+        "startTime": int(start.timestamp() * 1000),
+        "endTime": int(end.timestamp() * 1000),
+        "filterPattern": pattern,
+    }
+    while True:
+        page = logs.filter_log_events(**kwargs)
+        for event in page["events"]:
+            yield event["message"]
+        token = page.get("nextToken")
+        if not token:
+            return
+        kwargs["nextToken"] = token
 
 
 @dataclass(frozen=True)

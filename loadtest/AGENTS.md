@@ -15,6 +15,7 @@ Run from `loadtest/`.
 | Test | `uv run pytest` (no AWS, no network) |
 | Lint / format | `uv run ruff check . && uv run ruff format --check .` / `uv run ruff format .` |
 | Load test | `uv run loadtest --runs 100 --rate 10` (needs load-test mode; costs money, see below) |
+| Chaos test | `uv run loadtest --runs 100 --rate 10 --chaos-every 20 --chaos-max 8` (load mode with `stub_latency_ms = 15000`, see Gotchas) |
 
 ## A test, step by step
 
@@ -37,7 +38,13 @@ Run from `loadtest/`.
 - Created to final: `created_at` to `updated_at` of succeeded runs.
 - Runs per minute: final runs over first `created_at` to last final `updated_at` (includes the
   wait for workers); "once working": over first "run.attempt" start to last final `updated_at`.
-- Redelivered: runs with more than one "run.attempt" span (0 expected without chaos).
+- Redelivered: runs whose message was received more than once (`queue.receive_count` on their
+  "run.attempt" spans), or with more than one such span. Span counts alone miss takeovers: a
+  killed worker never uploads the spans it still holds (0 expected without chaos).
+- Chaos: each stopped task's exit code from `describe_tasks` (137 = killed mid-run after the
+  stop timeout, 0 = finished its runs and exited); lost runs = not `SUCCEEDED`; repeated tool
+  calls = an idempotency key with outcome `ok` more than once in the gateway access log
+  (`filter_log_events`, lines `<time> INFO gateway.access {json}`) for this test's runs.
 - Workers: `describe_services` every 15 s (most running at once); CPU and memory: `AWS/ECS`
   `CPUUtilization` / `MemoryUtilization`, percent of the 0.5 vCPU / 1 GB task, one-minute
   points; CloudWatch publishes them a minute or two late, so the driver asks again every 30 s
@@ -52,6 +59,8 @@ Run from `loadtest/`.
 - `api.py`: public API client (`X-Api-Key`), retries on 429/502/503/504.
 - `aws.py`: Terraform outputs and the load-mode check, tenant key (SSM), Logs Insights query,
   ECS metrics and samples. Clients are passed in; tests use fakes.
+- `chaos.py`: `chaos_loop`, `running_tasks`, `stopped_exit_codes`, access-log parsing and
+  `repeated_calls`.
 - `stats.py`: percentiles, `RunRecord`, `summarize`.
 - `spec.py`: the load agent's spec (name and trigger swapped in the example spec).
 
@@ -62,6 +71,11 @@ Run from `loadtest/`.
   without queue activity: SQS then stops sending metrics, and the scale-out alarm waits for them
   (about 6 minutes measured, up to 15 documented).
 - The driver needs about 5 more minutes after the last run ends (spans, then metrics).
+- Chaos needs runs longer than ECS's 30 s stop timeout, or every stopped worker just drains: add
+  a temporary `load_test_settings` block to tfvars with `stub_latency_ms = 15000` (all four
+  values; it replaces the default), apply, test, then remove it and set `load_test = false`.
+- A killed worker's spans are lost, so some runs may have no "run.attempt" span after a chaos
+  test; queue-to-start then leaves them out ("without a span").
 - A 100-run test costs about $0.10-0.25 (Fargate while it scales in); nothing calls a real model.
 
 ## Conventions

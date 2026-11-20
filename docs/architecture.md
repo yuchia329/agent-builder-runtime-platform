@@ -617,8 +617,11 @@ logged and never fails the run.
   `load-stub`, trigger `manual.load.run`; refuses unless load-test mode is on) starts 100, then
   1,000 runs and measures queue-to-start p50/p95 (the run's `created_at` against its first
   "run.attempt" span in `aws/spans`), runs per minute, worker CPU and memory. Stopping random
-  worker tasks mid-run counts lost runs and duplicate side effects (same run, step and arguments
-  hash in the gateway access log); target 0 for both.
+  worker tasks mid-run (`--chaos-every`; ECS sends SIGTERM, the worker drains, and kills it after
+  30 s, so chaos runs use a longer stub latency) counts lost runs and duplicate side effects (a
+  tool call run `ok` more than once per idempotency key in the gateway access log); target 0 for
+  both. Takeovers are counted from the run message's `queue.receive_count`, not from span counts:
+  a killed worker never uploads the spans it still holds.
 
 ## Deployment
 

@@ -12,6 +12,7 @@ LOAD_OUTPUTS = {
     "api_url": "https://api.test/",
     "secret_parameters": {"TENANT_API_KEY": "/agent-platform/dev/control-plane/tenant-api-key"},
     "worker_service": {"cluster": "c", "service": "s"},
+    "functions": {"control_plane": "cp", "gateway": "agent-platform-dev-tool-gateway"},
 }
 
 
@@ -22,6 +23,7 @@ def test_read_target_in_load_mode():
         key_parameter="/agent-platform/dev/control-plane/tenant-api-key",
         cluster="c",
         service="s",
+        gateway_log_group="/aws/lambda/agent-platform-dev-tool-gateway",
     )
 
 
@@ -81,12 +83,15 @@ class FakeLogs:
         return {"status": status, "results": self.rows if status == "Complete" else []}
 
 
-def row(trace_id, nanos, attempts):
-    return [
+def row(trace_id, nanos, attempts, receives=None):
+    fields = [
         {"field": "traceId", "value": trace_id},
         {"field": "first_start", "value": nanos},
         {"field": "attempts", "value": attempts},
     ]
+    if receives is not None:
+        fields.append({"field": "receives", "value": receives})
+    return fields
 
 
 def test_first_attempts_keeps_only_wanted_traces():
@@ -95,7 +100,7 @@ def test_first_attempts_keeps_only_wanted_traces():
         ["Running", "Complete"],
         [
             row("a" * 32, str(started_ns), "1"),
-            row("b" * 32, "1.7635e18", "2"),
+            row("b" * 32, "1.7635e18", "2", "3"),
             row("other", "1", "1"),
         ],
     )
@@ -106,6 +111,9 @@ def test_first_attempts_keeps_only_wanted_traces():
     assert set(found) == {"a" * 32, "b" * 32}
     assert found["a" * 32] == aws.FirstAttempt(started_at=T0 + timedelta(seconds=30), attempts=1)
     assert found["b" * 32].attempts == 2
+    assert found["b" * 32].receives == 3
+    assert found["a" * 32].receives == 1  # no receive count: first delivery
+    assert "queue.receive_count" in logs.started["queryString"]
     assert logs.started["logGroupName"] == "aws/spans"
     assert logs.started["startTime"] == int(T0.timestamp())
     assert 'name = "run.attempt"' in logs.started["queryString"]
@@ -202,3 +210,26 @@ class FakeEcs:
 def test_sample_tasks():
     sample = aws.sample_tasks(FakeEcs(), "c", "s")
     assert (sample.desired, sample.running) == (5, 3)
+
+
+class PagedLogs:
+    def __init__(self, pages):
+        self.pages = pages
+        self.calls = []
+
+    def filter_log_events(self, **kwargs):
+        self.calls.append(kwargs)
+        index = int(kwargs.get("nextToken", "0"))
+        page = {"events": [{"message": m} for m in self.pages[index]]}
+        if index + 1 < len(self.pages):
+            page["nextToken"] = str(index + 1)
+        return page
+
+
+def test_log_messages_reads_every_page():
+    logs = PagedLogs([["a", "b"], ["c"]])
+    messages = list(aws.log_messages(logs, "/g", '"tool_call"', T0, T0 + timedelta(minutes=1)))
+    assert messages == ["a", "b", "c"]
+    assert logs.calls[0]["startTime"] == int(T0.timestamp() * 1000)
+    assert logs.calls[0]["filterPattern"] == '"tool_call"'
+    assert logs.calls[1]["nextToken"] == "1"

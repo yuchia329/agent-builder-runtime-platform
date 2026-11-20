@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from loadtest import aws, cli
+from loadtest.chaos import Stop
 from loadtest.driver import Outcome
 from loadtest.stats import summarize
 
@@ -40,13 +41,15 @@ def test_to_records_joins_spans_by_trace():
             },
         }
     )
-    attempts = {"t1": aws.FirstAttempt(T0 + timedelta(seconds=12), 1)}
+    attempts = {"t1": aws.FirstAttempt(T0 + timedelta(seconds=12), 1, receives=2)}
     records = {r.run_id: r for r in cli.to_records(outcome, attempts)}
     assert records["run_1"].queue_to_start_s == 12.0
     assert records["run_1"].total_s == 40.0
     assert records["run_2"].failure_reason == "lease_lost"
     assert records["run_2"].first_attempt_at is None
     assert cli.record_json(records["run_1"])["queue_to_start_s"] == 12.0
+    assert records["run_1"].receives == 2
+    assert records["run_2"].receives == 0
 
 
 def test_format_report_prints_the_numbers():
@@ -91,3 +94,40 @@ def test_save_results_writes_times_and_metrics(tmp_path):
     saved = json.loads(path.read_text())
     assert saved["worker_metrics"]["last_point"] == "2026-11-20T12:00:00+00:00"
     assert saved["at"] == "2026-11-20T12:00:00+00:00"
+
+
+def test_format_chaos():
+    outcome = Outcome(
+        runs={
+            "run_1": {
+                "run_id": "run_1",
+                "trace_id": "t1",
+                "status": "FAILED",
+                "created_at": "2026-11-20T12:00:00Z",
+                "updated_at": "2026-11-20T12:00:40Z",
+            }
+        }
+    )
+    summary = summarize(cli.to_records(outcome, {}))
+    stop = Stop(at=T0, task_id="abc", open_runs=3)
+    text = cli.format_chaos(
+        summary,
+        [stop, stop, stop],
+        7,
+        {"github.add_label": 1},
+        chaos=True,
+        exit_codes={"a": 137, "b": 0, "c": None},
+    )
+    assert "3 worker tasks stopped: 1 killed mid-run (exit 137), 1 finished" in text
+    assert ", 1 other" in text
+    assert "Lost runs         1" in text
+    assert "7 ok" in text and "github.add_label x1" in text
+    off = cli.format_chaos(summary, [], 0, {}, chaos=False)
+    assert "Chaos             off" in off and "repeated: none" in off
+
+
+def test_parse_args_chaos():
+    assert cli.parse_args([]).chaos_every is None
+    assert cli.parse_args(["--chaos-every", "20"]).chaos_every == 20.0
+    with pytest.raises(SystemExit):
+        cli.parse_args(["--chaos-every", "0"])

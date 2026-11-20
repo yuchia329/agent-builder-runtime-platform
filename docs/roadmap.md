@@ -44,7 +44,9 @@ started a run through the App's webhook, was labeled, and after Approve in Slack
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
 **M7 (scale proof) in progress:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
-queue's metrics) and warm (start p50 0.1 s, 347 runs per minute).
+queue's metrics; an hourly keep-alive applied, ADR 0025) and warm (start p50 0.1 s, 347 runs per
+minute); chaos at 100 runs (8 workers stopped, 5 killed mid-run, 13 runs taken over): 0 lost,
+0 repeated tool calls.
 
 ## Approach
 
@@ -529,16 +531,27 @@ Work in this order:
   alarm (measured about 6 minutes; also the first real issue after a quiet day). Options: keep the
   queue active (an EventBridge Scheduler call to `sqs:GetQueueAttributes` every few hours, about
   free) or start a worker on enqueue when the service is at 0 (control plane, ADR 0007 mentions
-  it; a new ADR either way). Check: a run after more than six hours idle starts within about 3
-  minutes; `loadtest` from idle shows it. Applied 2026-11-20 (ADR 0025): EventBridge Scheduler
+  it; a new ADR either way). Check: a run after more than six hours idle starts within about 4
+  minutes (was 3: an active queue measured about 4, see below); `loadtest` from idle shows it. Applied 2026-11-20 (ADR 0025): EventBridge Scheduler
   `keep_queue_active` calls `TagQueue` on the run queue every hour with its own `project` tag
   (Scheduler refuses read-only actions such as `GetQueueAttributes`); `plan` clean, tags
   unchanged. Left: the check after a quiet night (the queue would have slept from about 04:45 UTC
   2026-11-21): its metric points keep coming every minute, and one cold run (a planted issue in
-  the sandbox, live `issue-triage`, about $0.01) reaches a worker within about 3 minutes.
-- [ ] `[loadtest]` chaos: stop random worker tasks while runs are in progress (`ecs stop-task`);
+  the sandbox, live `issue-triage`, about $0.01) reaches a worker within about 4 minutes. For
+  scale: with an active queue and 0 workers (chaos test, 23:18 UTC), runs queued at 23:18:00, the
+  alarm fired 23:21:29, tasks ran from 23:21:57 (metric lag plus the one-minute alarm period).
+- [x] `[loadtest]` chaos: stop random worker tasks while runs are in progress (`ecs stop-task`);
   count lost runs (not final, or `FAILED` from the stop) and duplicate side effects from the
-  gateway access log. Check: at 100 runs, 0 lost and 0 duplicates.
+  gateway access log. Check: at 100 runs, 0 lost and 0 duplicates. Done: `--chaos-every S
+  --chaos-max N` stops a random running task every S seconds while runs are open; the report adds
+  tasks stopped (killed mid-run = exit 137, drained = exit 0), lost runs, and tool calls run `ok`
+  more than once per idempotency key (gateway access log); takeovers counted from the run
+  message's receive count (`queue.receive_count` on "run.attempt": a killed worker never uploads
+  its spans). 56 tests. On AWS (2026-11-20, load mode with `stub_latency_ms = 15000` so runs
+  outlast the 30 s stop timeout): 100/100 `SUCCEEDED`, 8 tasks stopped (5 killed mid-run, 3
+  drained), 13 runs taken over by another worker (SQS: 100 sent, 113 received), 200 tool calls,
+  0 repeated, 0 lost. Limit: the stub calls only `github.search_issues` (read-only) and
+  `github.add_label` (idempotent); a non-idempotent tool (Slack post) under chaos is not covered.
 - [ ] `[loadtest]` full test and report: 1,000 runs without and with chaos; `loadtest/report.md`
   (setup, numbers, limits hit, cost); settings back to normal (`plan` shows the dev values).
   **M7 done.**
@@ -593,6 +606,22 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · loadtest** — M7 chaos. `chaos.py`: `chaos_loop` (a random running task every
+  S seconds while runs are open, `ecs.stop_task` reason "loadtest chaos"; stops recorded even if
+  cancelled), `stopped_exit_codes`, `parse_access_line` / `repeated_calls` (gateway access log,
+  `ok` more than once per idempotency key). `aws.py`: target gains the gateway log group
+  (`functions` output), `log_messages` (paged); the attempts query adds the highest
+  `queue.receive_count`. Report: chaos, lost runs, tool calls; exit 1 also on a repeated call.
+  56 tests. On AWS, 100 runs with `--chaos-every 20 --chaos-max 8` (numbers in the task): 0 lost,
+  0 repeated, 13 taken over. Load mode off, the temporary `load_test_settings` block removed from
+  tfvars, `plan` clean, gateway `github`. Next: the 2026-11-21 checks (M6 cost, queue keep-alive:
+  target now about 4 minutes), then `[loadtest]` full test and report. Gotchas: a killed worker
+  loses the spans it had not uploaded, so the first test printed "redelivered 0" and 3 runs had
+  no span (fixed: receive count); the chaos test needs runs longer than the 30 s ECS stop timeout
+  (`stub_latency_ms = 15000` in a temporary tfvars `load_test_settings` block; the default
+  2,000 ms runs end before the kill, so stops only drain); the first stop can hit a task that
+  just started (no runs yet).
 
 - **2026-11-20 · infra** — M7 scale-out from an idle queue (ADR 0025), applied, check pending.
   New `aws_scheduler_schedule.keep_queue_active` (`scheduler.tf`): every hour, `TagQueue` on the

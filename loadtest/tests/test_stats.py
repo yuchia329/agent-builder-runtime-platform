@@ -97,6 +97,9 @@ def test_summarize_waits_only_from_succeeded_runs_with_a_span():
 def test_summarize_counts_redelivered_runs():
     summary = summarize([record(0, wait=1.0, attempts=2), record(1, wait=1.0)])
     assert summary.redelivered == 1
+    # a killed attempt leaves no span: the receive count still shows the takeover
+    taken_over = RunRecord(**{**record(2, wait=1.0).__dict__, "receives": 2})
+    assert summarize([taken_over]).redelivered == 1
 
 
 def test_summarize_nothing_final():

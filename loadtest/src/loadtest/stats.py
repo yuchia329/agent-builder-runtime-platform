@@ -40,6 +40,7 @@ class RunRecord:
     failure_reason: str | None = None
     first_attempt_at: datetime | None = None
     attempts: int = 0
+    receives: int = 0  # highest queue receive count (0 = no span found)
 
     @property
     def queue_to_start_s(self) -> float | None:
@@ -111,5 +112,5 @@ def summarize(records: list[RunRecord], start_errors: int = 0) -> Summary:
         wall_s=wall,
         working_runs_per_minute=working_per_minute,
         working_s=working,
-        redelivered=sum(1 for r in records if r.attempts > 1),
+        redelivered=sum(1 for r in records if r.receives > 1 or r.attempts > 1),
     )

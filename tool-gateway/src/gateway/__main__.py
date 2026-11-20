@@ -26,11 +26,17 @@ from gateway.seed import seed_from_env
 from gateway.tools.executor import ConnectorClient
 from gateway.tools.openapi_to_mcp import ConnectorError, load_connector
 from gateway.tools.registry import Registry
+from gateway.tracing import Tracing, build_tracing
 
 log = logging.getLogger("gateway")
 
 
-def connectors(settings: Settings, contracts: Contracts, credentials: Credentials) -> list:
+def connectors(
+    settings: Settings,
+    contracts: Contracts,
+    credentials: Credentials,
+    tracing: Tracing | None = None,
+) -> list:
     loaded = []
     for name in settings.connectors:
         if name == "fake":
@@ -51,7 +57,7 @@ def connectors(settings: Settings, contracts: Contracts, credentials: Credential
                 definition.base_url,
                 setting,
             )
-        loaded.append(ConnectorClient(definition, credentials, base_url=base_url))
+        loaded.append(ConnectorClient(definition, credentials, base_url=base_url, tracing=tracing))
     return loaded
 
 
@@ -67,7 +73,8 @@ def build(settings: Settings, store: TokenStore | None = None):
     logins = user_logins(settings, store)
     # One Credentials: one installation-token cache and one refresh lock for all connectors.
     credentials = Credentials(store, logins=logins)
-    registry = Registry(connectors(settings, contracts, credentials))
+    tracing = build_tracing(settings.tracing_exporter)
+    registry = Registry(connectors(settings, contracts, credentials, tracing))
     verifier = RunTokenVerifier(settings.run_token_public_key, contracts)
     log.info(
         "Tool gateway: connectors %s, run token key id %s",
@@ -87,7 +94,7 @@ def build(settings: Settings, store: TokenStore | None = None):
         log.info("User login: %s/oauth/github/start", settings.oauth.public_url)
     else:
         log.warning("GITHUB_OAUTH_* is not set: acts_as owner runs will be refused")
-    return create_app(registry, verifier, contracts, approvals, oauth)
+    return create_app(registry, verifier, contracts, approvals, oauth, tracing)
 
 
 def user_logins(settings: Settings, store: TokenStore) -> dict[str, OAuthLogins]:

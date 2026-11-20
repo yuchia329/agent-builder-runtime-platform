@@ -8,6 +8,7 @@ dependencies = [
     "httpx2>=2.16",
     "jsonschema>=4.23",
     "mcp>=2.3.0",
+    "opentelemetry-sdk>=1.45.2",
     "pyjwt[crypto]>=2.15.1",
     "pyyaml>=6.0",
     "starlette>=1.10.0",

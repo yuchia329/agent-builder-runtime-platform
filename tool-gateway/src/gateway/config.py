@@ -15,6 +15,7 @@ LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 
 OAUTH = ("GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET", "OAUTH_STATE_SECRET")
 MIN_STATE_SECRET = 32
+TRACING_EXPORTERS = ("none", "logging")  # gateway.tracing.EXPORTERS (no upload, ADR 0022)
 
 
 def connector_base_url(name: str, env: dict[str, str]) -> tuple[str, str] | None:
@@ -87,6 +88,7 @@ class Settings:
     control_plane_sigv4: bool = False  # sign calls to it with SigV4 (AWS, CONTROL_PLANE_SIGV4)
     region: str = ""  # AWS_REGION, for SigV4
     oauth: OAuthSettings | None = None  # user login for acts_as owner; None: owner runs refused
+    tracing_exporter: str = "none"  # TRACING_EXPORTER: none or logging (gateway.tracing)
     # For settings an allowlist names (GITHUB_REPOS, ...); holds secrets, so never shown.
     env: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
@@ -111,6 +113,9 @@ class Settings:
         region = env.get("AWS_REGION", "").strip()
         if sigv4 == "true" and not region:
             raise ValueError("CONTROL_PLANE_SIGV4=true needs AWS_REGION")
+        exporter = env.get("TRACING_EXPORTER", "").strip() or "none"
+        if exporter not in TRACING_EXPORTERS:
+            raise ValueError(f"TRACING_EXPORTER must be none or logging, not {exporter!r}")
         return cls(
             run_token_public_key=key,
             connectors=tuple(c.strip() for c in env.get("CONNECTORS", "").split(",") if c.strip()),
@@ -124,5 +129,6 @@ class Settings:
             connectors_dir=Path(env.get("CONNECTORS_DIR", str(CONNECTORS_FOLDER))),
             control_plane_url=env.get("CONTROL_PLANE_URL", "").strip(),
             oauth=OAuthSettings.from_env(env),
+            tracing_exporter=exporter,
             env=tuple(sorted(env.items())),
         )

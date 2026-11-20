@@ -32,7 +32,9 @@ Lambdas behind one HTTP API on its default endpoint, ADR 0021; workers on Fargat
 queue depth): the stub demo runs to `SUCCEEDED` on AWS and the workers return to 0; the control
 plane starts each run's trace and passes it on the queue message (ADR 0022; it uploads no spans
 from Lambda); the worker continues it (span per attempt, model call, tool call, checkpoint) and
-can upload straight to X-Ray (`TRACING_EXPORTER=xray`, checked live); next `[tool-gateway]` tracing.
+can upload straight to X-Ray (`TRACING_EXPORTER=xray`, checked live); the gateway joins it (spans
+made, not uploaded; its Lambda zip now carries bytecode, cold start about 2.0 s from 3.4 s); next
+`[infra]` worker traces.
 
 ## Approach
 
@@ -418,11 +420,14 @@ Work in this order:
 - [ ] `[infra]` worker traces: task definition `TRACING_EXPORTER=xray`; worker task role
   `xray:PutTraceSegments` and `xray:PutSpans` (AWS docs name both for the OTLP endpoint); 14-day
   retention on `aws/spans` (Transaction Search made it, so import or manage only its retention);
-  push a new worker image tag. Check: `aws_demo.py` run's `trace_id` shows one trace in X-Ray with
+  push a new worker image tag; rebuild the gateway zip first (`lambda_zip.py`, now with bytecode)
+  so the same apply deploys it. Check: `aws_demo.py` run's `trace_id` shows one trace in X-Ray with
   "run.start" (control plane, not uploaded, so the root is missing) and the worker's spans.
-- [ ] `[tool-gateway]` tracing: read `traceparent`, span per tool call joined to the worker's
+- [x] `[tool-gateway]` tracing: read `traceparent`, span per tool call joined to the worker's
   trace. The gateway is on Lambda too: uploading follows ADR 0022 (none unless a trial shows an
-  exporter that keeps responses fast). Check: tests; the trace id reaches the gateway.
+  exporter that keeps responses fast). Check: tests; the trace id reaches the gateway. Done
+  without upload; the access log carries `trace_id`. Lambda trial: OpenTelemetry raised the cold
+  start from 3.4 s to about 3.7 s, so the zip now carries precompiled bytecode: about 2.0 s.
 - [ ] `[infra]` protection: route throttling, a daily model spend alarm (cost per run as a metric,
   email above a limit), log retention. Check: a burst above the limit gets 429; the alarm fires
   on a test value.
@@ -481,8 +486,8 @@ service has followed.
   once the run has one). Declared in `contracts/run-message.schema.json`,
   `internal-api.openapi.yaml` and `mcp-tool-call.schema.json` (descriptions only). Must follow:
   `worker` done (reads the attribute, continues the trace, sends `traceparent` on internal API and
-  `/mcp` calls, no longer sends `trace_id`). Must follow: `tool-gateway` (read `traceparent`),
-  `infra` (the `[infra]` worker traces task: `TRACING_EXPORTER=xray`, X-Ray permissions on the
+  `/mcp` calls, no longer sends `trace_id`). `tool-gateway` done (continues it on `/mcp`, sends it
+  to the control plane). Must follow: `infra` (the `[infra]` worker traces task: `TRACING_EXPORTER=xray`, X-Ray permissions on the
   worker task role, 14-day retention on `aws/spans`, new image; no active tracing on the
   Lambdas).
 
@@ -498,6 +503,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · tool-gateway** — M6 task 11. New `gateway/tracing.py` (OpenTelemetry SDK, own
+  `TracerProvider`; `TRACING_EXPORTER=none|logging`, no upload, ADR 0022). `/mcp` handlers continue
+  the request's `traceparent`: "mcp.tools_list", "tool.execute" (run, tenant, agent, step, tool,
+  outcome), "approval.check", "connector.request" per HTTP attempt (connector, operationId, status,
+  attempt; no URL). `HttpControlPlane` sends `traceparent`; connector calls never do. Access log
+  lines gain `trace_id`. `scripts/lambda_zip.py` precompiles bytecode (unchecked-hash `.pyc`,
+  needs Python 3.12; zip 34.3 MB). 263 tests pass; `make demo`: the run's `trace_id` is on both
+  gateway access log lines. Lambda trials (4, ~$0): init 3.4 s before, 3.63 / 3.71 s with
+  OpenTelemetry, 1.96 / 2.00 s with bytecode. Next: `[infra]` worker traces (also deploys the new
+  gateway zip). Gotchas: the MCP SDK client lists tools again before a call, so a call has two
+  "mcp.tools_list" spans; GitHub's search operationId is `search/issues-and-pull-requests`.
 
 - **2026-11-19 · worker** — M6 task 10. New port `Tracer` (`ports/tracing.py`; `NoopTracer` in
   core is the `Deps` default) and adapter `tracing_otel.py` (OpenTelemetry SDK, own

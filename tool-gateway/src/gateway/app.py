@@ -28,6 +28,7 @@ from gateway.contracts import Contracts
 from gateway.oauth.routes import unavailable_app
 from gateway.tools import access_log
 from gateway.tools.registry import CallContext, Registry, ToolFailure
+from gateway.tracing import TRACEPARENT, Tracing, build_tracing, run_attributes
 
 log = logging.getLogger("gateway")
 
@@ -38,13 +39,19 @@ INVALID_PARAMS = -32602
 UNAUTHORIZED = -32001
 
 
-def build_server(registry: Registry, contracts: Contracts, approvals: ApprovalCheck) -> Server:
+def build_server(
+    registry: Registry, contracts: Contracts, approvals: ApprovalCheck, tracing: Tracing
+) -> Server:
     call_schema = contracts.validator("mcp-tool-call")
 
     async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None):
         claims = _claims(ctx)
-        allowed = registry.allowed(claims)
-        descriptions = [await _description(tool, claims) for tool in allowed]
+        with tracing.span(
+            "mcp.tools_list", run_attributes(claims), traceparent=_traceparent(ctx)
+        ) as span:
+            allowed = registry.allowed(claims)
+            span.set_attribute("tools.count", len(allowed))
+            descriptions = [await _description(tool, claims) for tool in allowed]
         return ListToolsResult(
             tools=[
                 McpTool(
@@ -63,12 +70,22 @@ def build_server(registry: Registry, contracts: Contracts, approvals: ApprovalCh
 
     async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams):
         claims = _claims(ctx)
+        meta = _meta(params)
+        attributes = {
+            **run_attributes(claims),
+            "gen_ai.tool.name": params.name,
+            "run.step": meta.get(STEP) if isinstance(meta.get(STEP), int) else None,
+        }
+        with tracing.span("tool.execute", attributes, traceparent=_traceparent(ctx)) as span:
+            return await _call_tool(claims, params, meta, span)
+
+    async def _call_tool(claims: RunClaims, params: CallToolRequestParams, meta, span):
         started = time.monotonic()
         arguments = params.arguments or {}
-        meta = _meta(params)
         step, key = meta.get(STEP), meta.get(IDEMPOTENCY_KEY)
 
         def done(outcome: str, reason: str | None = None) -> None:
+            span.set_attribute("tool.outcome", outcome)
             elapsed = (time.monotonic() - started) * 1000
             access_log.record(claims, params.name, step, key, arguments, outcome, elapsed, reason)
 
@@ -93,9 +110,11 @@ def build_server(registry: Registry, contracts: Contracts, approvals: ApprovalCh
             return _error("Invalid arguments: " + "; ".join(e.message for e in argument_errors[:5]))
         if params.name in claims.require_approval:
             # Second approval check (ADR 0003): blocking HTTP, so off the event loop.
-            refusal = await anyio.to_thread.run_sync(
-                approvals.check, claims, params.name, step, arguments
-            )
+            with tracing.span("approval.check") as check:
+                refusal = await anyio.to_thread.run_sync(
+                    approvals.check, claims, params.name, step, arguments
+                )
+                check.set_attribute("approval.outcome", "refused" if refusal else "approved")
             if refusal is not None:
                 done("refused", refusal)
                 return _error(
@@ -139,6 +158,13 @@ async def _description(tool, claims: RunClaims) -> str:
         )
         return tool.description
     return f"{tool.description}\n\n{extra}" if extra else tool.description
+
+
+def _traceparent(ctx: ServerRequestContext) -> str | None:
+    """The caller's `traceparent` header (the worker's span); /mcp is internal (IAM on AWS), so
+    it may continue the caller's trace (ADR 0022)."""
+    headers = getattr(ctx.request, "headers", None)
+    return headers.get(TRACEPARENT) if headers is not None else None
 
 
 def _claims(ctx: ServerRequestContext) -> RunClaims:
@@ -232,10 +258,14 @@ def create_app(
     contracts: Contracts,
     approvals: ApprovalCheck | None = None,
     oauth=None,
+    tracing: Tracing | None = None,
 ):
     """`approvals` None: every require_approval tool is refused (fail closed). `oauth`: the login
-    routes (`gateway.oauth.routes.oauth_app`); None answers 503 there."""
-    server = build_server(registry, contracts, approvals or ApprovalCheck(None))
+    routes (`gateway.oauth.routes.oauth_app`); None answers 503 there. `tracing` None: spans are
+    made and dropped (`TRACING_EXPORTER=none`)."""
+    server = build_server(
+        registry, contracts, approvals or ApprovalCheck(None), tracing or build_tracing()
+    )
     mcp_app = server.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,

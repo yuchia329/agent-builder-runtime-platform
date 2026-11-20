@@ -73,16 +73,19 @@ def meta(step: int = 3, key: str = "a" * 64) -> dict[str, Any]:
 
 class LiveGateway:
     """The real app on 127.0.0.1 and a free port, in a thread. `oauth`: a function from the
-    gateway's URL to the login routes (their redirect URI needs the port)."""
+    gateway's URL to the login routes (their redirect URI needs the port). `tracing`: where spans
+    go (`gateway.tracing.build_tracing` with an in-memory exporter)."""
 
-    def __init__(self, keys: Keys, *connectors: FakeConnector, approvals=None, oauth=None) -> None:
+    def __init__(
+        self, keys: Keys, *connectors: FakeConnector, approvals=None, oauth=None, tracing=None
+    ) -> None:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             self.port = s.getsockname()[1]
         self.url = f"http://127.0.0.1:{self.port}"
         verifier = RunTokenVerifier(keys.public_pem, CONTRACTS)
         routes = oauth(self.url) if oauth else None
-        app = create_app(Registry(connectors), verifier, CONTRACTS, approvals, routes)
+        app = create_app(Registry(connectors), verifier, CONTRACTS, approvals, routes, tracing)
         self._server = uvicorn.Server(
             uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning")
         )
@@ -103,15 +106,23 @@ class LiveGateway:
 
 
 @contextlib.asynccontextmanager
-async def mcp_client(gateway: LiveGateway, run_token: str | None, *, as_bearer: bool = False):
+async def mcp_client(
+    gateway: LiveGateway,
+    run_token: str | None,
+    *,
+    as_bearer: bool = False,
+    traceparent: str | None = None,
+):
     """The SDK's client sending the run token in X-Run-Token (contract), or as `Authorization:
-    Bearer` (the old place, still accepted) with `as_bearer`."""
+    Bearer` (the old place, still accepted) with `as_bearer`; `traceparent` on every request."""
     if run_token is None:
         headers = {}
     elif as_bearer:
         headers = {"Authorization": f"Bearer {run_token}"}
     else:
         headers = {"X-Run-Token": run_token}
+    if traceparent:
+        headers["traceparent"] = traceparent
     async with (
         httpx2.AsyncClient(headers=headers, timeout=httpx2.Timeout(10)) as http,
         Client(

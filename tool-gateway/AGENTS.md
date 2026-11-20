@@ -18,7 +18,8 @@ Run from `tool-gateway/`.
 | Owner login (acts_as owner) | add `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET` to `../.env` (`.env.example`); the App's redirect URI is `http://localhost:8090/oauth/github/callback`; an owner run's tool error gives the link to open; logins are lost on restart (memory store) |
 | Point a connector at a simulator | `CONNECTOR_<NAME>_BASE_URL=http://127.0.0.1:<port>` (evals and tests; loopback only; startup logs it) |
 | Stop a background gateway | `kill $(lsof -ti :8090)` (not `pkill -f gateway`: it matches the shell too) |
-| Lambda zip | `uv run python scripts/lambda_zip.py` (`build/gateway-lambda.zip`, arm64 wheels; ADR 0019) |
+| See spans locally | `TRACING_EXPORTER=logging` (each span printed as JSON on stdout) |
+| Lambda zip | `uv run python scripts/lambda_zip.py` (`build/gateway-lambda.zip`, arm64 wheels, precompiled bytecode; needs Python 3.12; ADR 0019) |
 | Lambda trial (AWS, ~2 min, ~$0) | `uv run python scripts/lambda_trial.py` (throwaway function with the Web Adapter layer: `/health`, 401, `initialize` with a KMS-signed token; deletes everything; profile `default`) |
 | GitHub App credential into SSM (AWS) | `uv run python scripts/put_app_credential.py --status`, then without `--status` (from `../.env`; never prints the key) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
@@ -59,6 +60,8 @@ Run from `tool-gateway/`.
 - `tests/fake_control_plane.py`: answers `GET /internal/runs/{id}` from runs put with `put`;
   `fail_next`, `garbage`.
 - `contracts.py` loads every `../contracts/*.schema.json` together (`CONTRACTS_DIR` to move).
+- `tracing.py`: `Tracing` (spans on its own `TracerProvider`), `build_tracing`
+  (`TRACING_EXPORTER`), `traceparent()` and `trace_id()` of the current span (ADR 0022).
 - AWS (ADR 0018, 0019): `aws.py` (`aws_env` fills the environment from KMS and SSM before
   `Settings.from_env`; `sigv4_signer`), `adapters/token_store_ssm.py`, `run.sh` (Lambda handler,
   run by the Web Adapter layer), `scripts/lambda_zip.py`, `scripts/lambda_trial.py`,
@@ -84,6 +87,14 @@ Run from `tool-gateway/`.
 - Fail closed: a tool in the token's `require_approval` runs only after `approvals.ApprovalCheck`
   finds an exact approved match in the run (`CONTROL_PLANE_URL`); every other outcome, including
   errors, refuses. Keep `canonical()` equal to the worker's `_canonical` in `core/handle_run.py`.
+- Tracing (ADR 0022): `/mcp` handlers continue the request's `traceparent`; nothing else does.
+  Span attributes are ids, names, counts and status codes: never arguments, results, URLs (paths
+  and queries hold argument values), tokens or exception messages (`Tracing.span` records only
+  the type). `traceparent` goes to the control plane only, never to a connector's API. Tests use
+  `build_tracing("none", span_exporter=InMemorySpanExporter())` and
+  `LiveGateway(..., tracing=...)`, `mcp_client(..., traceparent=...)`.
+- The Lambda zip ships `.pyc` compiled by the local Python 3.12 (unchecked-hash); a runtime other
+  than python3.12 needs `PYTHON` in `lambda_zip.py` changed with it.
 - DNS-rebinding protection is off on purpose (container host names; the token protects `/mcp`).
 - Tests talk to a real server through the SDK client (`LiveGateway`, `mcp_client`); async tests
   use `pytest.mark.anyio`.

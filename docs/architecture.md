@@ -427,7 +427,8 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   token); a refused refresh deletes the login. Without the `GITHUB_OAUTH_*` settings `/oauth/*`
   answers 503 and owner runs are refused. uvicorn's request log hides `/oauth/` query strings.
 - Every call writes an access log line: run, tenant, agent and version, `started_by`, the identity
-  acted as, tool, argument hash, outcome. Never a token or argument values.
+  acted as, tool, argument hash, outcome, and the run's `trace_id` (to find its trace in X-Ray).
+  Never a token or argument values.
 - Built in stages: in M1 tool calls ran inside the worker; since M4 they run in this service
   ([ADR 0006](adr/0006-separate-tool-gateway.md)), and the Docker worker always uses it. The M1
   adapter (`worker/.../tools_local.py`, kept for host runs and tests) enforces the same rules: a repo allowlist, search kept inside the repo, short
@@ -438,7 +439,9 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
   warm instance. The `/oauth/` routes are public (a browser calls them) and keep no state. The
   unchanged uvicorn app runs under the Lambda Web Adapter layer
   ([ADR 0019](adr/0019-gateway-on-lambda-web-adapter.md)): a zip (`scripts/lambda_zip.py`,
-  python3.12, arm64), handler `run.sh`, readiness `/health`; a cold start takes about 3.5 s.
+  python3.12, arm64), handler `run.sh`, readiness `/health`. The zip carries precompiled bytecode
+  (Lambda's code folder is read-only, so otherwise every cold start compiles all the Python): a
+  cold start takes about 2.0 s (3.4 s before, 3.7 s with OpenTelemetry and no bytecode).
 - On AWS (ADR 0018), startup reads the run-token public key from KMS (`RUN_TOKEN_KMS_KEY_ID`) and
   the OAuth secrets from SSM (`SECRETS_SSM_PATH`); the `TokenStore` is SSM SecureString, one
   parameter per credential at `<TOKEN_STORE_SSM_PATH>/<tenant>/<identity>/<provider>` (characters
@@ -530,7 +533,7 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`; ssm: `TOKEN_STORE_SSM_PATH` (`/agent-platform/dev/gateway/tokens`) |
-| Tracing             | control plane, worker                  | `TRACING_EXPORTER` (default none: spans and trace context are made, nothing is uploaded; ADR 0022). Control plane: `none\|logging` (none on Lambda). Worker: `none\|logging\|xray`; `xray` uploads to the X-Ray OTLP endpoint with SigV4 in `AWS_REGION` (Fargate) |
+| Tracing             | control plane, worker, gateway         | `TRACING_EXPORTER` (default none: spans and trace context are made, nothing is uploaded; ADR 0022). Control plane and gateway: `none\|logging` (none on Lambda). Worker: `none\|logging\|xray`; `xray` uploads to the X-Ray OTLP endpoint with SigV4 in `AWS_REGION` (Fargate) |
 | Gateway on AWS      | gateway                                | `RUN_TOKEN_KMS_KEY_ID` (instead of `RUN_TOKEN_PUBLIC_KEY`), `SECRETS_SSM_PATH` (`/agent-platform/dev/gateway`: `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`), `CONTROL_PLANE_SIGV4=true` with `AWS_REGION`; Lambda: `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`, `AWS_LWA_READINESS_CHECK_PATH=/health` |
 | GitHub App (local)  | gateway                                | With `TOKEN_STORE=memory`, all or none: `TENANT_ID`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_FILE` (path to the `.pem`, kept outside the repo); stored as the tenant's team-bot at startup. On AWS the `TokenStore` is written by an operator |
 | Owner login         | gateway                                | All three or none: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` (secret), `OAUTH_STATE_SECRET` (secret, 32+ characters); `GATEWAY_PUBLIC_URL` (default `http://localhost:8090`, where browsers reach the gateway). Unset: owner runs refused (ADR 0015) |
@@ -559,11 +562,16 @@ One trace per run ([ADR 0022](adr/0022-run-traces-start-in-the-control-plane.md)
   the SQS message attribute `traceparent` (not in the body). An approval decision ("run.approval")
   and a sweep re-send ("run.requeue") add a child of "run.start" and send their own `traceparent`.
 - **The worker continues it** on every attempt and sends `traceparent` on internal API and `/mcp`
-  calls; the gateway reads it. Only `/internal/*` requests may join a caller's trace.
+  calls; the gateway continues it on every `/mcp` request and sends it on its approval check's
+  `GET /internal/runs/{id}`, never to a connector's API. Only `/internal/*` and `/mcp` (both
+  IAM-authorized on AWS) may join a caller's trace.
 - **Spans:** in the control plane one SERVER span per request (`<METHOD> <route>`, status, run id
   from the route) and one per AWS SDK call (DynamoDB, SQS, KMS, SSM); in the worker one per model
   call ("model.call"), tool call ("tool.call") and checkpoint write ("checkpoint"), all under one
-  "run.attempt" span per queue delivery whose parent is the message's `traceparent`. Attributes:
+  "run.attempt" span per queue delivery whose parent is the message's `traceparent`; in the
+  gateway "mcp.tools_list" and "tool.execute" (children of the worker's span, with the outcome),
+  "approval.check", and "connector.request" per HTTP attempt (connector, operationId, status,
+  attempt; no URL, since paths and queries hold argument values). Attributes:
   tenant, agent, spec version, run, step, model, input/output tokens, cost, tool name. Never input,
   output, issue text, tokens, keys, headers or exception messages.
 - **Upload:** the worker sends its spans to the X-Ray OTLP endpoint (SigV4); this needs
@@ -571,7 +579,10 @@ One trace per run ([ADR 0022](adr/0022-run-traces-start-in-the-control-plane.md)
   control plane on Lambda uploads nothing (`TRACING_EXPORTER=none`, active tracing off): measured,
   Lambda's X-Ray agent forwarded spans only for sampled requests and none after a SnapStart
   restore, and active tracing added about 250 ms to a cold start. Its latency is read from the
-  Lambda REPORT log lines.
+  Lambda REPORT log lines. The gateway on Lambda uploads nothing either (`TRACING_EXPORTER=none`;
+  an upload would be one more HTTPS call before every response, since Lambda freezes the process
+  after it): the worker's "tool.call" span times each call, and the access log's `trace_id` links
+  the gateway's lines to the trace.
 
 ## Testing
 

@@ -15,6 +15,7 @@ from typing import Any
 import httpx2
 
 from gateway.ports.control_plane import ControlPlaneUnavailable, RunNotFound
+from gateway.tracing import TRACEPARENT, traceparent
 
 ATTEMPTS = 3
 TIMEOUT_SECONDS = 5.0
@@ -39,6 +40,8 @@ class HttpControlPlane:
     def get_run(self, run_id: str) -> dict[str, Any]:
         url = f"{self._base_url}/internal/runs/{urllib.parse.quote(run_id, safe='')}"
         headers = {"Accept": "application/json"}
+        if parent := traceparent():  # the run's trace continues in the control plane (ADR 0022)
+            headers[TRACEPARENT] = parent
         if self._signer is not None:
             headers = self._signer("GET", url, headers, b"")
         for attempt in range(1, ATTEMPTS + 1):

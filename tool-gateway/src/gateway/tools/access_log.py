@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from gateway.auth.run_token import RunClaims
+from gateway.tracing import trace_id
 
 log = logging.getLogger("gateway.access")
 
@@ -48,4 +49,6 @@ def record(
     }
     if reason:
         entry["reason"] = reason
+    if current := trace_id():  # the run's trace in X-Ray (ADR 0022)
+        entry["trace_id"] = current
     log.info(json.dumps(entry, sort_keys=True))

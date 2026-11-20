@@ -18,6 +18,7 @@ from gateway.credentials import Auth, Credentials
 from gateway.tools import rules
 from gateway.tools.openapi_to_mcp import ConnectorDefinition, Operation, ToolDefinition
 from gateway.tools.registry import ApiError, CallContext, Tool, ToolFailure
+from gateway.tracing import Tracing, build_tracing
 
 ATTEMPTS = 3
 TIMEOUT_SECONDS = 10.0
@@ -54,8 +55,10 @@ class ConnectorClient:
         base_url: str | None = None,
         sleep: Callable[[float], None] = time.sleep,
         http: httpx2.Client | None = None,
+        tracing: Tracing | None = None,
     ) -> None:
         self.connector = connector
+        self._tracing = tracing or build_tracing()
         self._credentials = credentials
         self._base_url = (base_url or connector.base_url).rstrip("/")
         self._sleep = sleep
@@ -159,7 +162,7 @@ class ConnectorClient:
             attempt += 1
             headers = {**self.connector.headers, **auth.headers}
             try:
-                response = self._http.request(**request, headers=headers)
+                response = self._send(op, request, headers, attempt)
             except httpx2.TransportError:
                 if attempt == ATTEMPTS:
                     raise ToolFailure(f"{name} is unreachable; try again later") from None
@@ -183,6 +186,22 @@ class ConnectorClient:
                 raise ApiError(f"{name} answered {status}: {_message(response)}", status)
             return response.json() if response.content else {}
         raise AssertionError("unreachable")
+
+    def _send(
+        self, op: Operation, request: dict[str, Any], headers: dict[str, str], attempt: int
+    ) -> httpx2.Response:
+        """One HTTP attempt in a "connector.request" span (no URL: its path and query hold
+        argument values). No `traceparent` header: the trace stays inside the platform."""
+        attributes = {
+            "connector.name": self.connector.name,
+            "connector.operation": op.operation_id,
+            "http.request.method": op.method,
+            "connector.attempt": attempt,
+        }
+        with self._tracing.span("connector.request", attributes) as span:
+            response = self._http.request(**request, headers=headers)
+            span.set_attribute("http.response.status_code", response.status_code)
+            return response
 
 
 def _message(response: httpx2.Response) -> str:

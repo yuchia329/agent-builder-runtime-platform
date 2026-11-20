@@ -639,7 +639,8 @@ AWS (one region)                                idle cost
 ├── SQS run queue + dead-letter queue           $0    per request
 ├── Bedrock (if configured)                     $0    per token
 ├── SSM Parameter Store (secrets, tokens)       $0    standard tier
-├── EventBridge Scheduler (sweeps, 5 min)       $0    free tier
+├── EventBridge Scheduler (sweeps 5 min,        $0    free tier
+│   queue keep-alive 1 h)
 ├── KMS key                                     $1 per month
 └── ECR, CloudWatch logs and alarms, X-Ray      cents
 ```
@@ -685,9 +686,12 @@ AWS (one region)                                idle cost
   and five minutes with nothing waiting or in flight sets the service to 0. Measured on dev (2026-11-19): a stub run after idle finished
   207 s after it was started, nearly all of it a worker starting; the service was back at 0 tasks
   458 s after the run. An idle queue makes scale-out slower: SQS stops sending metrics for a
-  queue inactive over six hours and resumes them up to 15 minutes after it wakes, so the alarm
+  queue with no call for six hours and resumes them up to 15 minutes after it wakes, so the alarm
   fired about 6 minutes after 100 runs were queued on 2026-11-20 (tasks running 20 s later);
-  with workers up, a run waited 0.1 s (p50) for a worker (M7 load driver). A Lambda entrypoint, or starting the service on enqueue, can be added if
+  with workers up, a run waited 0.1 s (p50) for a worker (M7 load driver). So EventBridge
+  Scheduler calls the run queue every hour (`TagQueue` with its own `project` tag: Scheduler
+  cannot call read-only actions) and the queue never goes quiet
+  ([ADR 0025](adr/0025-keep-the-run-queue-active.md)). A Lambda entrypoint, or starting the service on enqueue, can be added if
   scale-out is too slow. The task definition sets `TRACING_EXPORTER=xray`: workers send spans
   straight to the X-Ray OTLP endpoint (task role: `xray:PutTraceSegments`, `xray:PutSpans`), and
   `METRICS_NAMESPACE=AgentPlatform/dev` for the model spend metric (Observability).
@@ -713,7 +717,7 @@ AWS (one region)                                idle cost
   the default security group has no rules. Only the workers run in it.
 - **IAM:** one role per service, each allowed only what it calls (tables, queue, its own SSM path,
   the KMS key, `execute-api:Invoke` on `/internal/*` and `/mcp`); the scheduler may invoke only
-  the control plane's alias.
+  the control plane's alias and tag the run queue (keep-alive).
 - **Data:** two DynamoDB tables (control plane, run state), on-demand capacity, built from the
   services' JSON definitions (`control-plane/dynamodb/`, `worker/dynamodb/`), names
   `agent-platform-dev-<table>`. The control-plane table has deletion protection and

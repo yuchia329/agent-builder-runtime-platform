@@ -1,9 +1,9 @@
 # The dev environment. Data: DynamoDB tables (dynamodb.tf), the run queue (sqs.tf), the worker
 # image repository (ecr.tf), the run-token signing key (kms.tf), secret parameters (ssm.tf).
 # Compute: Lambda packages (artifacts.tf), the two functions (lambda.tf), the HTTP API (api.tf),
-# the workers' network (network.tf), Fargate (ecs.tf, scaling.tf), sweeps (scheduler.tf), roles
-# (iam.tf), log groups (logs.tf), alerts (alarms.tf), load-test mode (load_test.tf). Personal
-# values in terraform.tfvars (see the .example).
+# the workers' network (network.tf), Fargate (ecs.tf, scaling.tf), sweeps and the queue
+# keep-alive (scheduler.tf), roles (iam.tf), log groups (logs.tf), alerts (alarms.tf), load-test
+# mode (load_test.tf). Personal values in terraform.tfvars (see the .example).
 
 locals {
   environment = "dev"

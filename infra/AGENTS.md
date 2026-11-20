@@ -60,12 +60,14 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
 | API address | `terraform -chdir=envs/dev output -raw api_url` |
 | End-to-end check on AWS (a few cents) | `uv run --with boto3 python scripts/aws_demo.py` (`--no-trace` skips the trace lookup, `--no-scale-in` the wait for 0 workers) |
 | Load-test mode on / off | `load_test = true` (or `false`) in `envs/dev/terraform.tfvars`, then `plan` and `apply`; `terraform -chdir=envs/dev output load_test` shows the mode |
-| Lambda concurrency quota | `aws service-quotas get-service-quota --service-code lambda --quota-code L-B99A9384 --profile default` (10 until the increase to 1,000 is granted) |
+| Lambda concurrency quota | `aws service-quotas get-service-quota --service-code lambda --quota-code L-B99A9384 --profile default` (1,000 since 2026-11-20; was 10) |
 | Route throttling (some 429s) | `uv run python scripts/throttle_check.py` (keep `--concurrency` under 10: the account's Lambda limit) |
 | Spend alarm state | `aws cloudwatch describe-alarms --alarm-names agent-platform-dev-model-spend --query 'MetricAlarms[0].StateValue' --profile default` |
 | Test the spend alarm (stays in ALARM 24 h) | `aws cloudwatch put-metric-data --namespace AgentPlatform/dev --metric-name ModelCostUsd --value 2 --profile default` |
 | Transaction Search on? | `aws xray get-trace-segment-destination --profile default` (must say `CloudWatchLogs` / `ACTIVE`) |
 | Workers running now | `aws ecs describe-services --cluster agent-platform-dev --services agent-platform-dev-worker --query 'services[0].[desiredCount,runningCount]' --profile default` |
+| Queue keep-alive calls (ADR 0025) | `aws cloudwatch get-metric-statistics --namespace AWS/Scheduler --metric-name InvocationAttemptCount --dimensions Name=ScheduleGroup,Value=default --statistics Sum --period 3600 --start-time <iso> --end-time <iso> --profile default` (also `TargetErrorCount`, must be 0) |
+| Is the run queue reporting? | `aws cloudwatch get-metric-statistics --namespace AWS/SQS --metric-name ApproximateNumberOfMessagesVisible --dimensions Name=QueueName,Value=agent-platform-dev-runs --statistics Maximum --period 60 --start-time <iso> --end-time <iso> --profile default` (a point every minute = active) |
 | Activate the cost tag (once, after a tagged resource exists, up to 24 h) | `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=project,Status=Active --profile default` |
 
 ## Conventions
@@ -98,7 +100,7 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
   taken over with an `import` block and `skip_destroy = true`, never re-created by Terraform.
 - Throttling cannot be tested on IAM routes: unsigned requests get 403 and are not counted. Test
   on a public route with a steady stream (one burst at once got Lambda's 503s, no 429). Throttle
-  limits stay under the account's Lambda concurrency (10); raise both together.
+  limits stay under the account's Lambda concurrency (1,000 since 2026-11-20); raise both together.
 - A CloudWatch alarm's 86400 s period is the last 24 hours, not a calendar day. Metric filter
   patterns cannot select JSON keys with dots (span attributes like `cost.usd`).
 - Emails and other personal values in variables are `sensitive = true`, so plans show
@@ -111,6 +113,10 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
   `local.worker_load_env`, merged in `ecs.tf`.
 - Check a new worker image before pushing it: tags are immutable, so a bad push costs a new tag
   (`docker run --rm --entrypoint /app/.venv/bin/python <image> -c "import worker..."`).
+- EventBridge Scheduler's universal target (`arn:aws:scheduler:::aws-sdk:<service>:<action>`)
+  refuses read-only actions (`get`, `list`, `describe`, `receive`, ... prefixes). The queue
+  keep-alive therefore calls `TagQueue` with the tag the queue already has; never `SendMessage`
+  (a message starts a run and a worker).
 - Nothing that bills by the hour (ADR 0007): no NAT gateway, load balancer, interface endpoints,
   RDS or always-on instance. Prefer free options (SSE-S3 over KMS for state, SSM over Secrets
   Manager).

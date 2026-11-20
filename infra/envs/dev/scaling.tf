@@ -2,8 +2,8 @@
 # waiting: +1, 10-49: +5, 50 or more: +10; up to worker_max_tasks, more in load-test mode), back
 # to 0 after 5 minutes with nothing waiting or in flight. One run still adds exactly one task. A run in progress keeps its message in
 # flight (the worker extends its visibility), so scale-in never cuts a run short. SQS metrics are
-# per minute, and a queue idle for hours can take several minutes to report again: the first run
-# after a long idle waits for that (ADR 0007).
+# per minute; a queue with no call for six hours stops reporting and takes up to 15 minutes to
+# report again, so a schedule calls it every hour (scheduler.tf, ADR 0025).
 
 resource "aws_appautoscaling_target" "worker" {
   service_namespace  = "ecs"

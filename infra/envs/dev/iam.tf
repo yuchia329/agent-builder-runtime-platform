@@ -198,7 +198,7 @@ resource "aws_iam_role_policy" "worker_task" {
   policy = data.aws_iam_policy_document.worker_task.json
 }
 
-# --- Scheduler (sweeps) -------------------------------------------------------------------
+# --- Scheduler (sweeps, keep the queue active) -------------------------------------------------------------------
 
 resource "aws_iam_role" "scheduler" {
   name = "${local.name}-scheduler"
@@ -217,10 +217,18 @@ resource "aws_iam_role_policy" "scheduler" {
   role = aws_iam_role.scheduler.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "lambda:InvokeFunction"
-      Resource = aws_lambda_alias.control_plane.arn
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = aws_lambda_alias.control_plane.arn
+      },
+      {
+        # keep_queue_active (scheduler.tf): re-applies the queue's own project tag
+        Effect   = "Allow"
+        Action   = "sqs:TagQueue"
+        Resource = aws_sqs_queue.runs.arn
+      },
+    ]
   })
 }

@@ -530,7 +530,12 @@ Work in this order:
   queue active (an EventBridge Scheduler call to `sqs:GetQueueAttributes` every few hours, about
   free) or start a worker on enqueue when the service is at 0 (control plane, ADR 0007 mentions
   it; a new ADR either way). Check: a run after more than six hours idle starts within about 3
-  minutes; `loadtest` from idle shows it.
+  minutes; `loadtest` from idle shows it. Applied 2026-11-20 (ADR 0025): EventBridge Scheduler
+  `keep_queue_active` calls `TagQueue` on the run queue every hour with its own `project` tag
+  (Scheduler refuses read-only actions such as `GetQueueAttributes`); `plan` clean, tags
+  unchanged. Left: the check after a quiet night (the queue would have slept from about 04:45 UTC
+  2026-11-21): its metric points keep coming every minute, and one cold run (a planted issue in
+  the sandbox, live `issue-triage`, about $0.01) reaches a worker within about 3 minutes.
 - [ ] `[loadtest]` chaos: stop random worker tasks while runs are in progress (`ecs stop-task`);
   count lost runs (not final, or `FAILED` from the stop) and duplicate side effects from the
   gateway access log. Check: at 100 runs, 0 lost and 0 duplicates.
@@ -588,6 +593,23 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · infra** — M7 scale-out from an idle queue (ADR 0025), applied, check pending.
+  New `aws_scheduler_schedule.keep_queue_active` (`scheduler.tf`): every hour, `TagQueue` on the
+  run queue with its own `project` tag, so SQS keeps sending its metrics (a queue with no call for
+  six hours stops, and resumes up to 15 minutes after waking; the load driver measured about 6
+  minutes to the first worker). Scheduler role gains `sqs:TagQueue` on the run queue only. `plan`
+  clean after apply, queue tags unchanged; schedule created 22:57 UTC (first call about 23:58).
+  Docs: ADR 0025 and index, architecture (Deployment: workers, cost tree, IAM), `infra/AGENTS.md`
+  (two check commands, Scheduler convention, Lambda quota 1,000), `scaling.tf`/`main.tf` comments.
+  Next (2026-11-21, with the M6 cost check): `TargetErrorCount` 0 and a `TagQueue` event in
+  CloudTrail by the scheduler role; the run queue's per-minute metric points continue past about
+  04:45 UTC; then plant an issue in the sandbox (dev is live) and check its run reached a worker
+  within about 3 minutes (`created_at` against the first "run.attempt" span); tick the task.
+  Then `[loadtest]` chaos. Gotchas: Scheduler's universal target refuses read-only actions (`get`,
+  `list`, `describe`, `receive`, ...), so `GetQueueAttributes` cannot be the keep-alive; never use
+  `SendMessage` for it (a message starts a run); the sweeps schedule shares the `default` group, so
+  Scheduler metrics by group count both schedules.
 
 - **2026-11-20 · loadtest** — M7 task 3 (driver). New `loadtest/` uv project: `cli.py` (args,
   report, `results/<time>-<runs>.json`, git-ignored), `driver.py` (start at a fixed rate, poll

@@ -34,6 +34,7 @@ Rules:
 | [0019](0019-gateway-on-lambda-web-adapter.md) | Tool gateway on Lambda through the Lambda Web Adapter | Proposed |
 | [0020](0020-run-token-in-its-own-header.md) | The run token travels in X-Run-Token; Authorization belongs to SigV4 | Proposed |
 | [0021](0021-default-api-endpoint-no-custom-domain.md) | The default execute-api endpoint, no custom domain | Proposed |
+| [0022](0022-run-traces-start-in-the-control-plane.md) | Run traces start in the control plane; Lambda uploads no spans | Proposed |
 
 ## Template
 

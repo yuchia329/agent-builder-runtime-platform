@@ -10,6 +10,7 @@ import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
 import dev.agentplatform.controlplane.ControlPlaneApplication;
 import dev.agentplatform.controlplane.run.Sweeps;
 import dev.agentplatform.controlplane.secret.SecretSource;
+import dev.agentplatform.controlplane.trace.TraceExport;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,7 +36,8 @@ import org.springframework.web.context.support.WebApplicationContextUtils;
  * <p>Spring starts in the static initializer, so with SnapStart it starts once, before the
  * snapshot. Then {@link #beforeCheckpoint} sends a few requests that need no network through the
  * app ({@link Priming}), so the classes a first real request needs are loaded and in the snapshot.
- * {@code LAMBDA_PRIMING=off} skips that (for measuring, ADR 0017). {@link #afterRestore} starts
+ * {@code LAMBDA_PRIMING=off} skips that (for measuring, ADR 0017); its spans are dropped, and the
+ * span exporter closes before the snapshot (ADR 0022). {@link #afterRestore} starts
  * loading the secrets in the background (ADR 0018). The in-process sweep schedule is
  * always off here: a frozen function cannot keep time.
  */
@@ -88,7 +90,13 @@ public class LambdaHandler implements RequestStreamHandler, Resource {
             return;
         }
         log.info("Priming before the SnapStart snapshot");
-        Priming.run(this);
+        var traces = bean(TraceExport.class);
+        traces.pause(); // priming requests are not real traffic
+        try {
+            Priming.run(this);
+        } finally {
+            traces.resume();
+        }
     }
 
     @Override

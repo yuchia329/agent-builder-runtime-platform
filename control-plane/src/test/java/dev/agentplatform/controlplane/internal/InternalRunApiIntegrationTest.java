@@ -55,6 +55,7 @@ class InternalRunApiIntegrationTest {
     @Test
     void workerLifecycleWithApproval() throws Exception {
         var runId = startRun("internal-lifecycle");
+        var traceId = ApiClient.json(api.get("/runs/" + runId)).get("trace_id").asString();
 
         var running = patch(runId, "{\"status\":\"RUNNING\",\"steps\":1,\"cost_usd\":0.001,"
                 + "\"trace_id\":\"4bf92f3577b34da6a3ce929d0e0e4736\"}");
@@ -67,7 +68,8 @@ class InternalRunApiIntegrationTest {
         var body = ApiClient.json(waiting);
         assertThat(contracts.validate(ContractValidator.RUN_SUMMARY, body)).isEmpty();
         assertThat(body.get("pending_approval").get("tool").asString()).isEqualTo("github.close_issue");
-        assertThat(body.get("trace_id").asString()).isEqualTo("4bf92f3577b34da6a3ce929d0e0e4736");
+        // The control plane started the run's trace; a worker's trace id does not replace it (ADR 0022).
+        assertThat(body.get("trace_id").asString()).isEqualTo(traceId).isNotEqualTo("4bf92f3577b34da6a3ce929d0e0e4736");
 
         var internal = ApiClient.json(api.send("GET", "/internal/runs/" + runId, null, null, false));
         assertThat(contracts.validate(ContractValidator.INTERNAL_RUN, internal)).isEmpty();

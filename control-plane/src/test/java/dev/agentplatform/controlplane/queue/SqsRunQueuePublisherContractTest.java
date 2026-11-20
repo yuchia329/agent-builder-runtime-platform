@@ -46,15 +46,18 @@ class SqsRunQueuePublisherContractTest extends RunQueuePublisherContractTest {
     }
 
     @Override
-    protected List<String> receivedBodies() {
-        var bodies = new ArrayList<String>();
+    protected List<Received> received() {
+        var received = new ArrayList<Received>();
         while (true) {
-            var messages = sqs.receiveMessage(r -> r.queueUrl(queueUrl).maxNumberOfMessages(10).waitTimeSeconds(1))
-                    .messages();
+            var messages = sqs.receiveMessage(r -> r.queueUrl(queueUrl).maxNumberOfMessages(10).waitTimeSeconds(1)
+                    .messageAttributeNames("All")).messages();
             if (messages.isEmpty()) {
-                return bodies;
+                return received;
             }
-            messages.forEach(m -> bodies.add(m.body()));
+            messages.forEach(m -> {
+                var trace = m.messageAttributes().get(RunMessage.TRACE_ATTRIBUTE);
+                received.add(new Received(m.body(), trace == null ? null : trace.stringValue()));
+            });
         }
     }
 }

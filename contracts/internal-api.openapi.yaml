@@ -31,6 +31,11 @@ info:
     equal that call; otherwise it pauses again.
 
     All requests are signed with AWS SigV4; API Gateway checks the signature (ADR 0007).
+
+    Tracing (ADR 0022): each run has one trace, started by the control plane when it creates the
+    run. Callers send the W3C `traceparent` header they got with the run (the queue message's
+    `traceparent` attribute, see run-message.schema.json); the control plane's spans for the
+    request join that trace. Only these internal routes honor `traceparent`.
 servers:
   - url: /
     description: Same host as the public API (the API Gateway endpoint on AWS, or localhost:8080 locally)
@@ -147,7 +152,10 @@ components:
       minimum: 0
 
     TraceId:
-      description: OpenTelemetry trace id of the run.
+      description: >-
+        OpenTelemetry trace id of the run, set by the control plane when it creates the run (ADR
+        0022). A caller's `trace_id` in PATCH is ignored once the run has one (runs created before
+        tracing take it); workers stop sending it.
       type: string
       pattern: "^[0-9a-f]{32}$"
 

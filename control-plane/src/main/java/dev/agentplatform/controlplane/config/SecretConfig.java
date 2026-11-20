@@ -9,27 +9,28 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
+import software.amazon.awssdk.core.interceptor.ExecutionInterceptor;
 import software.amazon.awssdk.services.kms.KmsClient;
 import software.amazon.awssdk.services.ssm.SsmClient;
 
 /**
  * Picks the {@link SecretSource} ({@code SECRETS_SOURCE}, ADR 0018) and makes the SSM and KMS
  * clients. Like the store clients, they read region and credentials from the environment and open
- * no connection until first used (Lambda SnapStart).
+ * no connection until first used (Lambda SnapStart). Each call gets a span (ADR 0022).
  */
 @Configuration(proxyBeanMethods = false)
 public class SecretConfig {
 
     @Bean
     @Lazy
-    SsmClient ssmClient() {
-        return SsmClient.create();
+    SsmClient ssmClient(ExecutionInterceptor awsSdkTracing) {
+        return SsmClient.builder().overrideConfiguration(c -> c.addExecutionInterceptor(awsSdkTracing)).build();
     }
 
     @Bean
     @Lazy
-    KmsClient kmsClient() {
-        return KmsClient.create();
+    KmsClient kmsClient(ExecutionInterceptor awsSdkTracing) {
+        return KmsClient.builder().overrideConfiguration(c -> c.addExecutionInterceptor(awsSdkTracing)).build();
     }
 
     @Bean

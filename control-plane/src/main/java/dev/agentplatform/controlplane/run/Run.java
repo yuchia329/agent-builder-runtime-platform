@@ -22,6 +22,7 @@ public record Run(
         int steps,
         BigDecimal costUsd,
         String traceId,
+        String traceParent,
         String pendingApprovalJson,
         String approvalJson,
         ApprovalMessage approvalMessage,
@@ -36,8 +37,22 @@ public record Run(
 
     public static Run queued(String runId, String tenantId, String agentName, int agentVersion,
                              String inputJson, String startedBy, Instant now) {
+        return queued(runId, tenantId, agentName, agentVersion, inputJson, startedBy, null, now);
+    }
+
+    /**
+     * A new run in the trace {@code traceParent} (W3C {@code traceparent} of its "run" span, ADR
+     * 0022); its {@code traceId} is that trace's id. Null leaves both unset.
+     */
+    public static Run queued(String runId, String tenantId, String agentName, int agentVersion,
+                             String inputJson, String startedBy, String traceParent, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, RunStatus.QUEUED, 0, BigDecimal.ZERO,
-                null, null, null, null, null, null, inputJson, startedBy, now, now);
+                traceIdOf(traceParent), traceParent, null, null, null, null, null, inputJson, startedBy, now, now);
+    }
+
+    /** The trace id (32 hex) inside a W3C {@code traceparent} ({@code 00-<trace>-<span>-<flags>}). */
+    public static String traceIdOf(String traceParent) {
+        return traceParent == null ? null : traceParent.substring(3, 35);
     }
 
     /** A run started through the API with the tenant's key. */
@@ -47,14 +62,16 @@ public record Run(
     }
 
     /**
-     * Applies an update; null fields in the update leave the current value. A new pause
+     * Applies an update; null fields in the update leave the current value. A worker's trace id is
+     * kept only if the run has none (runs created before the control plane started traces). A new pause
      * (WAITING_APPROVAL) has not been posted yet, so it drops the previous approval message.
      */
     public Run with(RunUpdate update, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, update.status(),
                 update.steps() != null ? update.steps() : steps,
                 update.costUsd() != null ? update.costUsd() : costUsd,
-                update.traceId() != null ? update.traceId() : traceId,
+                traceId != null ? traceId : update.traceId(),
+                traceParent,
                 update.pendingApprovalJson() != null ? update.pendingApprovalJson() : pendingApprovalJson,
                 approvalJson,
                 update.status() == RunStatus.WAITING_APPROVAL ? null : approvalMessage,
@@ -69,19 +86,20 @@ public record Run(
      */
     public Run decided(ApprovalDecision decision, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, decision.nextStatus(), steps, costUsd, traceId,
-                null, decision.toJson(), approvalMessage, decision.approved() ? failure : decision.failure(), output,
+                traceParent, null, decision.toJson(), approvalMessage, decision.approved() ? failure : decision.failure(), output,
                 inputJson, startedBy, createdAt, now);
     }
 
     /** Fails the run with {@code failure} ({@code approval_expired}) and clears the pending call. */
     public Run expired(Failure failure, Instant now) {
-        return new Run(runId, tenantId, agentName, agentVersion, RunStatus.FAILED, steps, costUsd, traceId, null,
-                approvalJson, approvalMessage, failure, output, inputJson, startedBy, createdAt, now);
+        return new Run(runId, tenantId, agentName, agentVersion, RunStatus.FAILED, steps, costUsd, traceId, traceParent,
+                null, approvalJson, approvalMessage, failure, output, inputJson, startedBy, createdAt, now);
     }
 
     /** The run with its pending call posted at {@code message}. */
     public Run withApprovalMessage(ApprovalMessage message) {
-        return new Run(runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId, pendingApprovalJson,
+        return new Run(runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId, traceParent,
+                pendingApprovalJson,
                 approvalJson, message, failure, output, inputJson, startedBy, createdAt, updatedAt);
     }
 }

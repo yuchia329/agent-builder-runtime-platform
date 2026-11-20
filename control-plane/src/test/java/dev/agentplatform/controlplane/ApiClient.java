@@ -24,6 +24,12 @@ public final class ApiClient {
 
     public HttpResponse<String> send(String method, String path, String body, String contentType, boolean withKey)
             throws Exception {
+        return send(method, path, body, contentType, withKey, java.util.Map.of());
+    }
+
+    /** {@link #send(String, String, String, String, boolean)} with extra request headers. */
+    public HttpResponse<String> send(String method, String path, String body, String contentType, boolean withKey,
+                                     java.util.Map<String, String> headers) throws Exception {
         var builder = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
                 .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
         if (contentType != null) {
@@ -32,6 +38,7 @@ public final class ApiClient {
         if (withKey) {
             builder.header("X-Api-Key", API_KEY);
         }
+        headers.forEach(builder::header);
         return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 

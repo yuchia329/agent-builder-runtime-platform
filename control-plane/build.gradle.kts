@@ -37,8 +37,15 @@ dependencies {
     // Lambda entry (ADR 0017): API Gateway HTTP API events into the same Spring MVC app.
     implementation("com.amazonaws.serverless:aws-serverless-java-container-springboot4:3.0.5")
     implementation("org.crac:crac:1.5.0")
+    // Tracing (ADR 0022): the OpenTelemetry SDK set up by hand (no Java agent: it slows Lambda
+    // starts) and spans for AWS SDK calls. Versions: the SDK from Spring Boot's BOM (1.62);
+    // instrumentation 2.28 is built on 1.62.
+    implementation("io.opentelemetry:opentelemetry-sdk")
+    implementation("io.opentelemetry:opentelemetry-exporter-logging")
+    implementation("io.opentelemetry.instrumentation:opentelemetry-aws-sdk-2.2:2.28.0-alpha")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("io.opentelemetry:opentelemetry-sdk-testing")
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

@@ -29,8 +29,9 @@ SSM secret parameters; ADR 0018); control plane signs run tokens with KMS and re
 KMS public key, SigV4 to the control plane; worker signs gateway calls (run token moved to
 `X-Run-Token`, which the gateway reads; ADR 0020), arm64 Fargate image; dev compute applied (both
 Lambdas behind one HTTP API on its default endpoint, ADR 0021; workers on Fargate scaled 0..2 on
-queue depth): the stub demo runs to `SUCCEEDED` on AWS and the workers return to 0; next
-`[control-plane]` tracing.
+queue depth): the stub demo runs to `SUCCEEDED` on AWS and the workers return to 0; the control
+plane starts each run's trace and passes it on the queue message (ADR 0022; it uploads no spans
+from Lambda); next `[worker]` tracing.
 
 ## Approach
 
@@ -402,14 +403,20 @@ Work in this order:
   scaled 0..N on queue depth; EventBridge Scheduler for the sweeps; least-privilege IAM roles.
   Check: publish the example spec and run it with the stub model on AWS (like `make demo`) to
   `SUCCEEDED`; workers back to 0.
-- [ ] `[control-plane]` tracing: OpenTelemetry spans, trace id passed to the run (queue message
-  and run record; if a contract changes, list it under Cross-service changes), Lambda active
-  tracing. Check: tests; spans in X-Ray for a stub run.
-- [ ] `[worker]` tracing: spans per model call, tool call and checkpoint with the attributes in
-  `docs/architecture.md` → Observability; collector container in the Fargate task. Check: a stub
-  run shows one trace across control plane and worker.
-- [ ] `[tool-gateway]` tracing: span per tool call, joined to the worker's trace. Check: the
-  stub run's trace includes the gateway.
+- [x] `[control-plane]` tracing: OpenTelemetry spans, trace id passed to the run (queue message
+  and run record; if a contract changes, list it under Cross-service changes). Changed during the
+  task (ADR 0022): no upload from Lambda and no active tracing (measured: sampled-only, nothing
+  after a restore, +250 ms cold start). Check: tests; the run's trace id reaches the worker
+  (`make demo`).
+- [ ] `[worker]` tracing: continue the run's trace from the SQS `traceparent` attribute, spans per
+  model call, tool call and checkpoint with the attributes in `docs/architecture.md` →
+  Observability, uploaded straight to the X-Ray OTLP endpoint with SigV4 (no collector; ADR 0022).
+  First confirm Transaction Search: `aws xray get-trace-segment-destination` must say
+  `CloudWatchLogs` (on 2026-11-19 it stayed `XRay` after enabling, though spans reached
+  `aws/spans`). Check: a stub run on AWS shows one trace in X-Ray under the run's `trace_id`.
+- [ ] `[tool-gateway]` tracing: read `traceparent`, span per tool call joined to the worker's
+  trace. The gateway is on Lambda too: uploading follows ADR 0022 (none unless a trial shows an
+  exporter that keeps responses fast). Check: tests; the trace id reaches the gateway.
 - [ ] `[infra]` protection: route throttling, a daily model spend alarm (cost per run as a metric,
   email above a limit), log retention. Check: a burst above the limit gets 429; the alarm fires
   on a test value.
@@ -463,6 +470,16 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
+- **Run trace context** (ADR 0022, 2026-11-19). The control plane sets the SQS message attribute
+  `traceparent` (W3C) on every run message and owns `trace_id` (a worker's PATCH value is ignored
+  once the run has one). Declared in `contracts/run-message.schema.json`,
+  `internal-api.openapi.yaml` and `mcp-tool-call.schema.json` (descriptions only). Must follow:
+  `worker` (read the attribute, continue the trace, send `traceparent` on internal API and `/mcp`
+  calls, stop sending `trace_id`), `tool-gateway` (read `traceparent`), `infra` (14-day retention
+  on the `aws/spans` log group that Transaction Search made; worker task role may call the X-Ray
+  OTLP endpoint; no active tracing on the Lambdas). Current workers ignore the attribute (checked
+  with `make demo`).
+
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
   `contracts/mcp-tool-call.schema.json` and `internal-api.openapi.yaml` (`run_token`). `worker`
@@ -475,6 +492,23 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · control-plane** — M6 task 9. New package `trace/`: OpenTelemetry SDK by hand
+  (`TracingConfig`; no agent), `SecureIdGenerator` (SnapStart-safe ids), `RunTracing` ("run.start"
+  opens each run's trace, "run.approval" and "run.requeue" join it), `TracingFilter` (SERVER span
+  per request; only `/internal/*` honors an incoming `traceparent`), `TraceExport` (made on first
+  use, closed before the snapshot, paused while priming), AWS SDK spans through
+  `opentelemetry-aws-sdk-2.2` 2.28.0-alpha on every client. `Run` gains `traceParent`; DynamoDB
+  keeps the first `traceId` (`if_not_exists`). `RunMessage.traceParent` goes in the SQS attribute
+  `traceparent`. `TRACING_EXPORTER=none|logging`. 317 tests pass (2 live-AWS skipped); contracts
+  96; `make demo` passed. Decision changed mid-task (ADR 0022): Transaction Search turned on by
+  the user; the Lambda trial with active tracing and the X-Ray UDP exporter got spans only for
+  sampled requests, none after a restore, and +250 ms restore (2.29 s vs 2.00 s median cold click
+  with nothing uploaded), so the control plane uploads nothing and the worker uploads directly.
+  Next: `[worker]` tracing. Gotchas: the Transaction Search status read `XRay` / `ACTIVE` after
+  enabling while spans still reached `aws/spans` (confirm before the worker task);
+  `InMemorySpanExporter.shutdown()` clears its spans; `AwsSdkTelemetry` 2.28 calls it
+  `createExecutionInterceptor()`; the Lambda zip is 49.0 MB.
 
 - **2026-11-19 · infra** — M6 task 8. `infra/envs/dev/` compute applied, 56 resources (`network.tf`,
   `artifacts.tf`, `logs.tf`, `iam.tf`, `lambda.tf`, `api.tf`, `ecs.tf`, `scaling.tf`,

@@ -5,6 +5,7 @@ import dev.agentplatform.controlplane.queue.RunMessage;
 import dev.agentplatform.controlplane.queue.RunQueueException;
 import dev.agentplatform.controlplane.queue.RunQueuePublisher;
 import dev.agentplatform.controlplane.store.RunStore;
+import dev.agentplatform.controlplane.trace.RunTracing;
 import java.time.Clock;
 import java.time.Duration;
 import org.slf4j.Logger;
@@ -33,17 +34,24 @@ public class RunSweeper {
     private final RunQueuePublisher queue;
     private final Clock clock;
     private final Duration queuedAfter;
+    private final RunTracing tracing;
 
     @Autowired
-    public RunSweeper(RunStore runs, RunQueuePublisher queue, Clock clock, PlatformProperties props) {
-        this(runs, queue, clock, Duration.ofSeconds(props.sweepQueuedAfterSeconds()));
+    public RunSweeper(RunStore runs, RunQueuePublisher queue, Clock clock, PlatformProperties props,
+                      RunTracing tracing) {
+        this(runs, queue, clock, Duration.ofSeconds(props.sweepQueuedAfterSeconds()), tracing);
     }
 
     RunSweeper(RunStore runs, RunQueuePublisher queue, Clock clock, Duration queuedAfter) {
+        this(runs, queue, clock, queuedAfter, RunTracing.noop());
+    }
+
+    RunSweeper(RunStore runs, RunQueuePublisher queue, Clock clock, Duration queuedAfter, RunTracing tracing) {
         this.runs = runs;
         this.queue = queue;
         this.clock = clock;
         this.queuedAfter = queuedAfter;
+        this.tracing = tracing;
     }
 
     /** One sweep. Returns how many runs were re-enqueued. */
@@ -60,8 +68,12 @@ public class RunSweeper {
                 if (!runs.touchQueued(run.runId(), now)) {
                     continue; // left QUEUED since the index was read
                 }
+                var span = tracing.startInRun(run, "run.requeue"); // the worker continues the run's trace
                 try {
-                    queue.publish(new RunMessage(run.runId(), run.tenantId()));
+                    RunTracing.inSpan(span, () -> {
+                        queue.publish(new RunMessage(run.runId(), run.tenantId(), RunTracing.traceParent(span)));
+                        return null;
+                    });
                     sent++;
                 } catch (RunQueueException e) {
                     log.warn("Re-enqueue of run {} failed; retried next sweep: {}", run.runId(), e.getMessage());

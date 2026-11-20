@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Run message",
-  "description": "Body of a message on the SQS run queue. The control plane sends it; the worker receives it and loads everything else through the internal API (ADR 0001). Delivery is at least once, so the same run_id may arrive more than once.",
+  "description": "Body of a message on the SQS run queue. The control plane sends it; the worker receives it and loads everything else through the internal API (ADR 0001). Delivery is at least once, so the same run_id may arrive more than once. The control plane also sets the SQS message attribute `traceparent` (String, W3C Trace Context) to the run's trace; the worker continues that trace and sends `traceparent` on its calls (ADR 0022). It is not part of the body.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "run_id", "tenant_id"],

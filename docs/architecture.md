@@ -24,7 +24,8 @@ flowchart LR
   GW -->|acts_as credential| EXT[GitHub · Slack · Notion · Calendar]
 ```
 
-Every component emits OpenTelemetry spans to CloudWatch and X-Ray, one trace per run.
+One OpenTelemetry trace per run, started by the control plane and continued by the worker and the
+gateway; the worker uploads its spans to X-Ray ([ADR 0022](adr/0022-run-traces-start-in-the-control-plane.md)).
 
 ### Run lifecycle
 
@@ -128,7 +129,7 @@ Boundaries the design depends on:
 | Run state        | DynamoDB (DynamoDB Local for dev)                                     |
 | Tool gateway     | Python, FastAPI, MCP Python SDK (stateless Streamable HTTP), Lambda   |
 | Secrets          | SSM Parameter Store (SecureString), KMS                               |
-| Observability    | OpenTelemetry (Java + Python SDKs), ADOT collector, CloudWatch, X-Ray |
+| Observability    | OpenTelemetry (Java + Python SDKs), X-Ray with Transaction Search (spans in CloudWatch Logs), CloudWatch |
 | Evals / CI       | GitHub Actions, pytest-based eval runner, LLM judge on a configured provider |
 | Load test        | Stub model server + k6 or Locust                                      |
 | Infra            | Terraform                                                             |
@@ -528,6 +529,7 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`; ssm: `TOKEN_STORE_SSM_PATH` (`/agent-platform/dev/gateway/tokens`) |
+| Tracing             | control plane                          | `TRACING_EXPORTER=none\|logging` (default none, also on Lambda: spans and trace context are made, nothing is uploaded; ADR 0022) |
 | Gateway on AWS      | gateway                                | `RUN_TOKEN_KMS_KEY_ID` (instead of `RUN_TOKEN_PUBLIC_KEY`), `SECRETS_SSM_PATH` (`/agent-platform/dev/gateway`: `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`), `CONTROL_PLANE_SIGV4=true` with `AWS_REGION`; Lambda: `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`, `AWS_LWA_READINESS_CHECK_PATH=/health` |
 | GitHub App (local)  | gateway                                | With `TOKEN_STORE=memory`, all or none: `TENANT_ID`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_FILE` (path to the `.pem`, kept outside the repo); stored as the tenant's team-bot at startup. On AWS the `TokenStore` is written by an operator |
 | Owner login         | gateway                                | All three or none: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` (secret), `OAUTH_STATE_SECRET` (secret, 32+ characters); `GATEWAY_PUBLIC_URL` (default `http://localhost:8090`, where browsers reach the gateway). Unset: owner runs refused (ADR 0015) |
@@ -548,8 +550,25 @@ the spec as `<provider>/<model id>`; config only defines the providers
 
 ## Observability
 
-- One trace per run; spans for each model call, tool call and checkpoint write.
-- Span attributes: tenant, agent, spec version, step, model, input/output tokens, cost, tool name.
+One trace per run ([ADR 0022](adr/0022-run-traces-start-in-the-control-plane.md)):
+
+- **The control plane starts it** when it creates the run: a "run.start" span with no parent (the
+  request or webhook that caused it is a link, so each run has its own trace). The run stores its
+  W3C `traceparent` (`trace_id` in the API is its trace id) and every run message carries it in
+  the SQS message attribute `traceparent` (not in the body). An approval decision ("run.approval")
+  and a sweep re-send ("run.requeue") add a child of "run.start" and send their own `traceparent`.
+- **The worker continues it** on every attempt and sends `traceparent` on internal API and `/mcp`
+  calls; the gateway reads it. Only `/internal/*` requests may join a caller's trace.
+- **Spans:** in the control plane one SERVER span per request (`<METHOD> <route>`, status, run id
+  from the route) and one per AWS SDK call (DynamoDB, SQS, KMS, SSM); in the worker one per model
+  call, tool call and checkpoint write. Attributes: tenant, agent, spec version, run, step, model,
+  input/output tokens, cost, tool name. Never input, output, issue text, tokens, keys or headers.
+- **Upload:** the worker sends its spans to the X-Ray OTLP endpoint (SigV4); this needs
+  Transaction Search on in the account, which stores spans in the `aws/spans` log group. The
+  control plane on Lambda uploads nothing (`TRACING_EXPORTER=none`, active tracing off): measured,
+  Lambda's X-Ray agent forwarded spans only for sampled requests and none after a SnapStart
+  restore, and active tracing added about 250 ms to a cold start. Its latency is read from the
+  Lambda REPORT log lines.
 
 ## Testing
 
@@ -673,7 +692,8 @@ control-plane/                  Java 21, Spring Boot 4, Gradle (see control-plan
   dynamodb/                     control-plane table definition
   src/main/java/dev/agentplatform/controlplane/
                                 one package per area: agent, run, trigger, internal, store,
-                                queue, contract, tenant, config, web, approval, token, secret, lambda
+                                queue, contract, tenant, config, web, approval, token, secret, lambda,
+                                trace
 
 worker/                         Python 3.12, uv, own agent loop (see worker/AGENTS.md)
   src/worker/                   core/ (no vendor imports), ports/, adapters/, entrypoints/,

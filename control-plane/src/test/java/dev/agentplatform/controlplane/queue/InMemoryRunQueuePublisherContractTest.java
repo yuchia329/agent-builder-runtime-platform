@@ -13,7 +13,7 @@ class InMemoryRunQueuePublisherContractTest extends RunQueuePublisherContractTes
     }
 
     @Override
-    protected List<String> receivedBodies() {
-        return inMemory.bodies();
+    protected List<Received> received() {
+        return inMemory.messages().stream().map(m -> new Received(m.toJson(), m.traceParent())).toList();
     }
 }

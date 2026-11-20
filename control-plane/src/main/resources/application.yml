@@ -42,3 +42,7 @@ platform:
   secrets:
     source: ${SECRETS_SOURCE:env}
     ssm-path: ${SECRETS_SSM_PATH:}
+  # Spans (ADR 0022): none (default; also on Lambda: ids and trace context only, nothing uploaded)
+  # or logging (each span in the log).
+  tracing:
+    exporter: ${TRACING_EXPORTER:none}

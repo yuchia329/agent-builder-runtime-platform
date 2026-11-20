@@ -17,13 +17,15 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
+import software.amazon.awssdk.core.interceptor.ExecutionInterceptor;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
 /**
  * Picks adapters from {@code platform.store-backend} and {@code platform.queue-backend}. AWS
  * clients read region, credentials and endpoints (AWS_ENDPOINT_URL_DYNAMODB / _SQS locally) from
- * the environment and open no connection at startup, which keeps Lambda SnapStart cheap.
+ * the environment and open no connection at startup, which keeps Lambda SnapStart cheap. Each call
+ * gets a span (ADR 0022).
  */
 @Configuration(proxyBeanMethods = false)
 public class StoreConfig {
@@ -35,14 +37,14 @@ public class StoreConfig {
 
     @Bean
     @Lazy
-    DynamoDbClient dynamoDbClient() {
-        return DynamoDbClient.create();
+    DynamoDbClient dynamoDbClient(ExecutionInterceptor awsSdkTracing) {
+        return DynamoDbClient.builder().overrideConfiguration(c -> c.addExecutionInterceptor(awsSdkTracing)).build();
     }
 
     @Bean
     @Lazy
-    SqsClient sqsClient() {
-        return SqsClient.create();
+    SqsClient sqsClient(ExecutionInterceptor awsSdkTracing) {
+        return SqsClient.builder().overrideConfiguration(c -> c.addExecutionInterceptor(awsSdkTracing)).build();
     }
 
     @Bean

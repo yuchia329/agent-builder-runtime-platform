@@ -26,7 +26,7 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionChe
  *
  * <pre>
  * Run  PK = RUN#&lt;id&gt;  SK = META
- *      runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId,
+ *      runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId, traceParent,
  *      pendingApproval (JSON), approval (JSON), approvalChannel, approvalMessageId, failureReason,
  *      failureMessage, output, input (JSON), startedBy, createdAt, updatedAt
  *      GSI2PK = TENANT#&lt;t&gt;#AGENT#&lt;name&gt;  GSI2SK = &lt;createdAt&gt;#&lt;runId&gt;  (runs of an agent by time)
@@ -67,6 +67,10 @@ public class DynamoDbRunStore implements RunStore {
         item.put("status", s(run.status().name()));
         item.put("steps", n(run.steps()));
         item.put("costUsd", AttributeValue.fromN(run.costUsd().toPlainString()));
+        if (run.traceParent() != null) {
+            item.put("traceId", s(run.traceId()));
+            item.put("traceParent", s(run.traceParent()));
+        }
         item.put("input", s(run.inputJson()));
         item.put("startedBy", s(run.startedBy()));
         item.put("createdAt", s(run.createdAt().toString()));
@@ -105,7 +109,7 @@ public class DynamoDbRunStore implements RunStore {
             values.put(":cost", AttributeValue.fromN(update.costUsd().toPlainString()));
         }
         if (update.traceId() != null) {
-            sets.add("traceId = :trace");
+            sets.add("traceId = if_not_exists(traceId, :trace)"); // the control plane's trace wins
             values.put(":trace", s(update.traceId()));
         }
         if (update.pendingApprovalJson() != null) {
@@ -343,6 +347,7 @@ public class DynamoDbRunStore implements RunStore {
                 Integer.parseInt(item.get("steps").n()),
                 new BigDecimal(item.get("costUsd").n()),
                 str(item, "traceId"),
+                str(item, "traceParent"),
                 str(item, "pendingApproval"),
                 str(item, "approval"),
                 item.containsKey("approvalMessageId")

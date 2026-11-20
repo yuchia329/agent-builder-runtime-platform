@@ -11,6 +11,7 @@ import dev.agentplatform.controlplane.store.IllegalTransitionException;
 import dev.agentplatform.controlplane.store.RunNotFoundException;
 import dev.agentplatform.controlplane.store.RunStore;
 import dev.agentplatform.controlplane.tenant.Principals;
+import dev.agentplatform.controlplane.trace.RunTracing;
 import dev.agentplatform.controlplane.agent.Agent;
 import java.time.Clock;
 import java.util.Comparator;
@@ -19,6 +20,7 @@ import java.util.HexFormat;
 import java.security.SecureRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -34,21 +36,31 @@ public class RunService {
     private final RunQueuePublisher queue;
     private final ApprovalNotifier approvals;
     private final Clock clock;
+    private final RunTracing tracing;
 
+    @Autowired
     public RunService(AgentStore agents, RunStore runs, RunQueuePublisher queue, ApprovalNotifier approvals,
-                      Clock clock) {
+                      Clock clock, RunTracing tracing) {
         this.agents = agents;
         this.runs = runs;
         this.queue = queue;
         this.approvals = approvals;
         this.clock = clock;
+        this.tracing = tracing;
+    }
+
+    /** Without tracing (tests that do not look at spans). */
+    public RunService(AgentStore agents, RunStore runs, RunQueuePublisher queue, ApprovalNotifier approvals,
+                      Clock clock) {
+        this(agents, runs, queue, approvals, clock, RunTracing.noop());
     }
 
     /** A run plus the spec and publisher ({@code owner}) of the version it is pinned to, for workers. */
     public record RunWithSpec(Run run, String specJson, String owner) {}
 
     /**
-     * Stores a QUEUED run pinned to the agent's active version, then enqueues it. If enqueueing
+     * Stores a QUEUED run pinned to the agent's active version, then enqueues it, in a new trace
+     * (its "run.start" span, ADR 0022) that the queue message carries to the worker. If enqueueing
      * fails the run stays QUEUED and the {@link dev.agentplatform.controlplane.queue.RunQueueException}
      * propagates (a later sweep re-enqueues such runs).
      */
@@ -63,11 +75,15 @@ public class RunService {
         if (agent.activeVersion() == null) {
             throw new AgentNotPublishedException(agentName);
         }
-        var run = Run.queued(newRunId(), tenantId, agentName, agent.activeVersion(), inputJson, startedBy,
-                clock.instant());
-        runs.create(run);
-        queue.publish(new RunMessage(run.runId(), tenantId));
-        return run;
+        var runId = newRunId();
+        var span = tracing.startRun(runId, tenantId, agentName, agent.activeVersion());
+        return RunTracing.inSpan(span, () -> {
+            var run = Run.queued(runId, tenantId, agentName, agent.activeVersion(), inputJson, startedBy,
+                    RunTracing.traceParent(span), clock.instant());
+            runs.create(run);
+            queue.publish(new RunMessage(run.runId(), tenantId, run.traceParent()));
+            return run;
+        });
     }
 
     /**
@@ -135,17 +151,22 @@ public class RunService {
             throw new ApprovalConflictException(
                     "Run '%s' is waiting on step %d, not step %d".formatted(runId, pendingStep, step));
         }
-        var now = clock.instant();
-        var decided = runs.decideApproval(runId, pendingJson,
-                ApprovalDecision.of(pendingJson, decision, decidedBy, now), now);
-        if (decided.status() == RunStatus.QUEUED) {
-            try {
-                queue.publish(new RunMessage(runId, decided.tenantId()));
-            } catch (RunQueueException e) {
-                log.warn("Run {} approved and QUEUED but not enqueued; the sweep will send it", runId, e);
+        var span = tracing.startInRun(run, "run.approval");
+        span.setAttribute("approval.decision", decision.name());
+        span.setAttribute("approval.step", (long) step);
+        return RunTracing.inSpan(span, () -> {
+            var now = clock.instant();
+            var decided = runs.decideApproval(runId, pendingJson,
+                    ApprovalDecision.of(pendingJson, decision, decidedBy, now), now);
+            if (decided.status() == RunStatus.QUEUED) {
+                try {
+                    queue.publish(new RunMessage(runId, decided.tenantId(), RunTracing.traceParent(span)));
+                } catch (RunQueueException e) {
+                    log.warn("Run {} approved and QUEUED but not enqueued; the sweep will send it", runId, e);
+                }
             }
-        }
-        return decided;
+            return decided;
+        });
     }
 
     static String newRunId() {

@@ -105,6 +105,24 @@ abstract class RunStoreContractTest {
     }
 
     @Test
+    void aRunsOwnTraceIsKeptAndAWorkersTraceIdDoesNotReplaceIt() {
+        var traceParent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        var run = Run.queued("run_traced", "tenant-demo", "issue-triage", 1, INPUT, "api:tenant-demo", traceParent, T0);
+        store.create(run);
+        assertThat(store.find(run.runId())).get().satisfies(found -> {
+            assertThat(found.traceParent()).isEqualTo(traceParent);
+            assertThat(found.traceId()).isEqualTo("0af7651916cd43dd8448eb211c80319c");
+        });
+
+        var updated = store.update(run.runId(), new RunUpdate(RunStatus.RUNNING, 1, null,
+                "4bf92f3577b34da6a3ce929d0e0e4736", null, null, null), T1);
+
+        assertThat(updated.traceId()).isEqualTo("0af7651916cd43dd8448eb211c80319c");
+        assertThat(updated.traceParent()).isEqualTo(traceParent);
+        assertThat(store.find(run.runId())).contains(updated);
+    }
+
+    @Test
     void progressUpdateKeepsFieldsItDoesNotSend() {
         var run = queuedRun();
         store.update(run.runId(), new RunUpdate(RunStatus.RUNNING, 2, new BigDecimal("0.5"),

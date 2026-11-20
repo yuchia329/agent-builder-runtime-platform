@@ -87,7 +87,7 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 
 - Package `dev.agentplatform.controlplane`, one package per area (`agent`, `run`, `trigger`,
   `internal`, `store`, `queue`, `contract`, `tenant`, `config`, `web`, `approval`, `token`,
-  `secret`, `lambda`).
+  `secret`, `lambda`, `trace`).
 - Webhook routes (`/triggers/*`) have no API key; they trust only a valid signature. Keep the
   verification and payload rules in plain classes (`GitHubWebhooks`) so they test without HTTP.
 - Webhook deliveries are claimed in `DeliveryStore` before any run starts; tests send a unique
@@ -123,7 +123,7 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
   `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`, `SLACK_SIGNING_SECRET`, `APPROVAL_TIMEOUT_HOURS`, `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`,
   `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`, `SECRETS_SOURCE`, `SECRETS_SSM_PATH`,
-  `RUN_TOKEN_KMS_KEY_ID`). No network calls at startup (Lambda SnapStart).
+  `RUN_TOKEN_KMS_KEY_ID`, `TRACING_EXPORTER`). No network calls at startup (Lambda SnapStart).
 - Lambda (ADR 0017): `lambda/LambdaHandler` is the entry; Spring starts in its static
   initializer, before the SnapStart snapshot, and `lambda/Priming` sends network-free requests
   before it. A snapshot is shared by every restored environment: make ids, secrets and seeds only
@@ -160,3 +160,15 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
 - Slack fixtures (`src/test/resources/fixtures/slack/`) are recorded response bodies with
   workspace, user, bot and app ids and bot profile removed, channel `C0123456789`; tests replay
   them with `FakeSlackServer`. Recording posts to the real channel: delete probe messages after.
+- Tracing (ADR 0022): `TRACING_EXPORTER=none` (default, and on Lambda: spans and trace context are
+  made, nothing is uploaded) or `logging` (spans in the log; try `TRACING_EXPORTER=logging
+  ./gradlew bootRun`). A run's trace starts in `RunService.start` ("run.start", no parent);
+  control-plane work on an existing run uses `RunTracing.startInRun(run, name)` +
+  `RunTracing.inSpan` and sends `RunTracing.traceParent(span)` on any queue message. Span
+  attributes: ids only (`tenant.id`, `agent.name`, `agent.version`, `run.id`, route, status);
+  never input, output, headers, tokens or exception messages. A new AWS client gets
+  `overrideConfiguration(c -> c.addExecutionInterceptor(awsSdkTracing))`. Ids come from
+  `SecureIdGenerator` (snapshot-safe). Tests: `trace/TestTracing` (real tracer, spans in memory) or
+  a `@Primary TraceExport` over an `InMemorySpanExporter` (`TracingIntegrationTest`);
+  `RunTracing.noop()` where spans do not matter. `InMemoryRunQueuePublisher.messages()` returns
+  messages with their `traceParent`. Do not turn on Lambda active tracing (+250 ms cold start).

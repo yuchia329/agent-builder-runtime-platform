@@ -99,7 +99,7 @@ Supporting components are not deployed as services but are built and worked on t
 | `contracts`   | `contracts/`                                              | Shared schemas: agent spec, run message, run token, internal API, connector allowlist, MCP tool call |
 | `specs`       | `specs/`                                                  | Example agent specs (`issue-triage`, `meeting-prep`)                 |
 | `evals`       | `evals/`                                                  | Regression tasks, fixtures, LLM judge, CI gate                       |
-| `loadtest`    | `loadtest/`                                               | Stub model, stub tools, load driver, chaos script                    |
+| `loadtest`    | `loadtest/`                                               | Load driver and chaos script against AWS (stub model, fake connector) |
 | `infra`       | `infra/`                                                  | Terraform for every AWS resource                                     |
 | `local-stack` | `docker-compose.yml`, `.env.example`, `Makefile`, `local-stack/` | Runs everything locally                                              |
 | `ci`          | `.github/workflows/`                                      | Build, test and eval workflows                                       |
@@ -131,7 +131,7 @@ Boundaries the design depends on:
 | Secrets          | SSM Parameter Store (SecureString), KMS                               |
 | Observability    | OpenTelemetry (Java + Python SDKs), X-Ray with Transaction Search (spans in CloudWatch Logs), CloudWatch |
 | Evals / CI       | GitHub Actions, pytest-based eval runner, LLM judge on a configured provider |
-| Load test        | Stub model server + k6 or Locust                                      |
+| Load test        | Stub model (built-in provider `stub`) + a Python driver (asyncio, httpx, boto3) |
 | Infra            | Terraform                                                             |
 
 ## Control plane
@@ -612,10 +612,12 @@ logged and never fails the run.
   scripted responses otherwise). Each task runs 3 times; a regression is a task that passed in
   the committed baseline failing, or the pass rate dropping more than 5 points. A CI gate on pull
   requests comes later.
-- **Load and chaos** (`loadtest/`): a stub model returns scripted tool calls with fixed latency.
-  Drive 1,000 concurrent runs and measure queue-to-start p95, runs per minute, worker CPU and
-  memory. Stop random worker tasks mid-run and count lost runs and duplicate side effects against
-  the stub tools' call log (target 0 for both).
+- **Load and chaos** (`loadtest/`, M7, on AWS): the stub model returns scripted tool calls with
+  fixed latency, tools through the gateway's fake connector. A Python driver starts 100, then
+  1,000 runs and measures queue-to-start p50/p95 (the run's `created_at` against its first
+  "run.attempt" span in `aws/spans`), runs per minute, worker CPU and memory. Stopping random
+  worker tasks mid-run counts lost runs and duplicate side effects (same run, step and arguments
+  hash in the gateway access log); target 0 for both.
 
 ## Deployment
 
@@ -763,7 +765,7 @@ tool-gateway/                   Python, MCP SDK (Starlette) + uvicorn (see tool-
 
 specs/          issue-triage.yaml, meeting-prep.yaml
 evals/          tasks/<spec>/, simulators/, runner/ (run_suite, checks, judge, compare), labels/, baselines/
-loadtest/       stub_model/, stub_tools/, drive.js, chaos.py, report.md
+loadtest/       driver and chaos scripts (Python), report.md
 infra/          bootstrap/ (state bucket, budgets; local state), envs/dev/ (see infra/AGENTS.md)
 ```
 

@@ -82,7 +82,7 @@ can run alongside 2 to 5. Start a session with
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind one API Gateway HTTP API, workers at 0; traces in X-Ray; no hourly cost when idle | In progress |
-| M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Not started |
+| M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Planned     |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
 ## MVP scope (M0 + M1)
@@ -462,20 +462,58 @@ Work in this order:
   the API); issue closed `duplicate` with `bug` and `duplicate` labels, by the App's bot; 9 gateway
   calls as `team-bot`; 34 worker spans under the run's `trace_id`; `ModelCostUsd` 7 samples,
   Sum $0.007567. Steps in `specs/README.md` → Run issue-triage on AWS. Left: the cost check.
-- [ ] `[infra]` `aws_demo.py` uses its own agent name (for example `demo-stub`) with a spec whose
-  tools the live gateway can serve, so it can run while dev is live without replacing
-  `issue-triage` (today it republishes `issue-triage` as the stub; see `specs/README.md` →
-  Gotchas). Check: `aws_demo.py` passes with `gateway_connectors = "github"`.
+(The `aws_demo.py` agent-name task added here moved into M7 task 1.)
+
+## M7 tasks: scale proof
+
+Against the M6 deployment on AWS: cold starts, scaling from 0 and SQS behave as they do only
+there. Stub model and the gateway's fake connector, never real providers or GitHub. Decided when
+planning (2026-11-20):
+
+- Load driver: a plain Python script in `loadtest/` (asyncio + httpx for the API, boto3 for logs
+  and metrics), not k6 or Locust: the test starts N runs and watches them finish; it is not a
+  flood of HTTP requests against one endpoint.
+- Sizes in steps: 100 runs, then 1,000; each paid test only after the user says go, with an
+  estimate. Budget for all of M7: $5 (estimated under $1 per 1,000-run test).
+- Limits found (2026-11-20): Lambda concurrent executions 10 (increase to 1,000 requested
+  2026-11-20, `PENDING`; check with `aws service-quotas get-service-quota --service-code lambda
+  --quota-code L-B99A9384`), Fargate 64 vCPU (about 128 workers at 0.5 vCPU), API throttle 5 per
+  second per route, `worker_max_tasks` 2, and scale-out of one task per alarm with a 2-minute
+  cooldown (20 tasks would take about 40 minutes).
+- Queue-to-start without a contract change: the run's `created_at` (API) against the start of
+  its first "run.attempt" span in `aws/spans`, joined by `trace_id`. Duplicate side effects: tool
+  calls with the same run, step and arguments hash in the gateway access log.
+- Dev is live (`gateway_connectors = "github"`, M6): load mode switches it to `fake` for the test
+  and back after; the live `issue-triage` is never replaced.
+
+Work in this order:
+
+- [ ] `[infra]` load-test mode: tfvars switches used only during a test (API throttle limits,
+  `worker_max_tasks` 20, `gateway_connectors = "fake"`); scale-out sized to the backlog (step
+  scaling on queue depth, more tasks for a deeper queue, instead of one per alarm);
+  `aws_demo.py` publishes and runs its own agent (for example `demo-stub`), never
+  `issue-triage`, and refuses with a clear message when the gateway's connectors cannot serve
+  the stub's tools. Needs the Lambda quota above 10. Check: `aws_demo.py` passes in load mode;
+  `plan` back to normal settings restores them; the live `issue-triage` version is unchanged.
+- [ ] `[worker]` stub model latency: a setting (for example `MODEL_STUB_LATENCY_MS`) that makes
+  each stub model call take a fixed time, so runs last like real ones; the stub's tool calls
+  stay the demo script. Check: tests; image pushed.
+- [ ] `[loadtest]` driver: `loadtest/` (uv project, `AGENTS.md`): publish the load agent, start N
+  runs at a set rate, poll until each is final; read first "run.attempt" start times from
+  `aws/spans`, worker CPU and memory from ECS metrics; print queue-to-start p50 and p95, runs per
+  minute, failures, CPU and memory. Check: 100 runs all `SUCCEEDED`, numbers printed (cost
+  estimate first).
+- [ ] `[loadtest]` chaos: stop random worker tasks while runs are in progress (`ecs stop-task`);
+  count lost runs (not final, or `FAILED` from the stop) and duplicate side effects from the
+  gateway access log. Check: at 100 runs, 0 lost and 0 duplicates.
+- [ ] `[loadtest]` full test and report: 1,000 runs without and with chaos; `loadtest/report.md`
+  (setup, numbers, limits hit, cost); settings back to normal (`plan` shows the dev values).
+  **M7 done.**
 
 ## Later milestones (draft)
 
 Rough lists so the path is visible. Each milestone's planning session rewrites its own list.
 
-- **M7 scale proof:** against the M6 deployment on AWS (cold starts, scaling from 0 and SQS
-  exist only there). `[loadtest]` driver (k6 or Locust, open question), stub model with fixed
-  latency, 1,000 concurrent runs (queue-to-start p95, runs per minute, worker CPU and memory),
-  random worker stops counting lost runs and duplicate side effects (target 0);
-  `loadtest/report.md`.
 - **M8 open source:** needs a new goal. The worker no longer uses the Strands Agents SDK
   (ADR 0009, ADR 0010), so "fix Strands bugs upstream" has almost nothing to rest on. Candidates:
   libraries the platform does use (MCP Python SDK, ...). Decide when planning M8.
@@ -504,7 +542,6 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
   worker entrypoint (ADR 0005) early?
 - Is Spring Boot's cold start on Lambda with SnapStart fast enough for Slack's 3-second callback
   limit, or does the control plane need a lighter framework?
-- k6 or Locust for the load driver.
 
 ## Cross-service changes
 
@@ -523,6 +560,15 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · M7 planning** — M7 task list written (load-test mode, stub latency, driver,
+  chaos, full test and report); decisions under M7 tasks (plain Python driver, 100 then 1,000
+  runs, $5 budget, start time from spans). Lambda concurrency increase to 1,000 requested
+  (`PENDING`); Fargate quota 64 vCPU is enough. The M6 `aws_demo.py` task moved into M7 task 1.
+  M6 waits only for the cost check (2026-11-21). Next: `/start infra` (load-test mode) once the
+  quota is granted; the worker's stub latency task can go first. Gotchas: scale-out today adds
+  one task per alarm (2-minute cooldown); dev is live on the github connector, so a stub load
+  must switch the gateway to `fake` first.
 
 - **2026-11-20 · specs** — M6 go live. App credential put into the SSM `TokenStore`
   (`put_app_credential.py`); `gateway_connectors = "github"` and `github_repos` in tfvars

@@ -20,6 +20,7 @@ TOOLS_PROVIDERS = ("fake", "local", "mcp")
 TRACING_EXPORTERS = ("none", "logging", "xray")  # ADR 0022
 PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
 BUILT_IN_PROVIDERS = ("stub",)
+STUB_LATENCY_MS_MAX = 60_000  # a minute per call; the example spec's budget is 300 s
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # CloudWatch namespace rules (ADR 0023); "AWS/" is reserved for AWS's own metrics.
 METRICS_NAMESPACE = re.compile(r"^(?!AWS/)[A-Za-z0-9.\-_/#: ]{1,255}$")
@@ -60,6 +61,7 @@ class Config:
     tool_gateway_sigv4: bool  # sign gateway requests with SigV4 (AWS: API Gateway IAM on /mcp)
     tracing_exporter: str  # where spans go: none, logging, xray (OTLP to X-Ray, SigV4)
     metrics_namespace: str | None  # CloudWatch namespace of the EMF lines; None: no metrics
+    stub_latency_ms: int  # how long each call to the built-in stub model waits (load tests)
     aws_region: str
     concurrency: int
     visibility_seconds: int
@@ -82,6 +84,13 @@ class Config:
                 return default
             return int(raw)
 
+        def bounded_int(name: str, default: int, high: int) -> int:
+            raw = env.get(name, "").strip() or str(default)  # empty means unset
+            if not raw.isdigit() or int(raw) > high:
+                errors.append(f"{name}={raw!r}: expected a whole number from 0 to {high}")
+                return default
+            return int(raw)
+
         config = cls(
             queue_backend=choice("QUEUE_BACKEND", QUEUE_BACKENDS, "sqs"),
             run_queue_url=env.get("RUN_QUEUE_URL") or None,
@@ -99,6 +108,7 @@ class Config:
             tool_gateway_sigv4=choice("TOOL_GATEWAY_SIGV4", ("true", "false"), "false") == "true",
             tracing_exporter=choice("TRACING_EXPORTER", TRACING_EXPORTERS, "none"),
             metrics_namespace=env.get("METRICS_NAMESPACE", "").strip() or None,
+            stub_latency_ms=bounded_int("MODEL_STUB_LATENCY_MS", 0, STUB_LATENCY_MS_MAX),
             aws_region=env.get("AWS_REGION", "us-east-1"),
             concurrency=positive_int("WORKER_CONCURRENCY", 4),
             visibility_seconds=positive_int("RUN_VISIBILITY_SECONDS", 60),

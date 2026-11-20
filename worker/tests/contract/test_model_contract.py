@@ -34,6 +34,7 @@ def _bedrock():
 ADAPTERS = {
     "scripted": lambda: iter([("any", ScriptedModel(SCRIPT))]),
     "stub": lambda: iter([("any", StubModel(SCRIPT))]),
+    "stub_with_latency": lambda: iter([("any", StubModel(SCRIPT, 0.25, sleep=lambda s: None))]),
     "router": lambda: iter([("scripted/any", ModelRouter({"scripted": ScriptedModel(SCRIPT)}))]),
     "openai_compat_minimax": _minimax,
     "bedrock_nova_lite": _bedrock,

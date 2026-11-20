@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import itertools
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,14 +67,28 @@ class StubModel:
     The reply is picked by how many replies the model already gave in this conversation, so
     concurrent runs never share a position in the script. Tool call ids are derived from that
     position, so replays are deterministic. Past the end of the script it gives a final answer.
+
+    `latency_seconds` makes every call wait that long before answering, like a real model
+    (MODEL_STUB_LATENCY_MS; load tests, M7). `sleep` is injectable so tests never wait.
     """
 
-    def __init__(self, turns: Sequence[ModelTurn]) -> None:
+    def __init__(
+        self,
+        turns: Sequence[ModelTurn],
+        latency_seconds: float = 0.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if latency_seconds < 0:
+            raise ValueError("latency_seconds must not be negative")
         self._turns = list(turns)
+        self._latency = latency_seconds
+        self._sleep = sleep
 
     def complete(
         self, model: str, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
     ) -> ModelTurn:
+        if self._latency > 0:
+            self._sleep(self._latency)
         position = sum(1 for m in messages if m.role == "assistant")
         if position >= len(self._turns):
             return final_turn("Stub model: script finished.")

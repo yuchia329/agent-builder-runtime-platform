@@ -263,3 +263,24 @@ def test_wiring_picks_metrics_from_the_namespace():
     assert isinstance(build(Config.from_env(env)).deps.metrics, NoopMetrics)
     with_namespace = build(Config.from_env({**env, "METRICS_NAMESPACE": "AgentPlatform/dev"}))
     assert isinstance(with_namespace.deps.metrics, EmfMetrics)
+
+
+def test_stub_latency_defaults_to_zero_and_reads_milliseconds():
+    assert Config.from_env(LOCAL).stub_latency_ms == 0
+    assert Config.from_env({**LOCAL, "MODEL_STUB_LATENCY_MS": "1500"}).stub_latency_ms == 1500
+    assert Config.from_env({**LOCAL, "MODEL_STUB_LATENCY_MS": "60000"}).stub_latency_ms == 60000
+    assert Config.from_env({**LOCAL, "MODEL_STUB_LATENCY_MS": " "}).stub_latency_ms == 0
+
+
+@pytest.mark.parametrize("raw", ["-5", "1.5", "fast", "60001"])
+def test_bad_stub_latency(raw):
+    with pytest.raises(ConfigError, match="MODEL_STUB_LATENCY_MS"):
+        Config.from_env({**LOCAL, "MODEL_STUB_LATENCY_MS": raw})
+
+
+def test_wiring_gives_the_stub_its_latency():
+    from worker.wiring import build
+
+    env = {"QUEUE_BACKEND": "memory", "STATE_BACKEND": "memory", "MODEL_STUB_LATENCY_MS": "250"}
+    stub = build(Config.from_env(env)).deps.model._providers["stub"]
+    assert stub._latency == 0.25

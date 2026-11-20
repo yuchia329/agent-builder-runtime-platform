@@ -495,9 +495,12 @@ Work in this order:
   `issue-triage`, and refuses with a clear message when the gateway's connectors cannot serve
   the stub's tools. Needs the Lambda quota above 10. Check: `aws_demo.py` passes in load mode;
   `plan` back to normal settings restores them; the live `issue-triage` version is unchanged.
-- [ ] `[worker]` stub model latency: a setting (for example `MODEL_STUB_LATENCY_MS`) that makes
+- [x] `[worker]` stub model latency: a setting (for example `MODEL_STUB_LATENCY_MS`) that makes
   each stub model call take a fixed time, so runs last like real ones; the stub's tool calls
-  stay the demo script. Check: tests; image pushed.
+  stay the demo script. Check: tests; image pushed. Done: `MODEL_STUB_LATENCY_MS` (0 to 60000,
+  default 0, empty = unset), `StubModel(latency_seconds, sleep)`; 366 tests pass. Image pushed
+  at the commit (tag in the handoff note); not deployed: the load-mode task sets the tag and the
+  value (`worker_model_env`).
 - [ ] `[loadtest]` driver: `loadtest/` (uv project, `AGENTS.md`): publish the load agent, start N
   runs at a set rate, poll until each is final; read first "run.attempt" start times from
   `aws/spans`, worker CPU and memory from ECS metrics; print queue-to-start p50 and p95, runs per
@@ -560,6 +563,15 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · worker** — M7 task 2 (stub latency). `StubModel` waits `latency_seconds` before
+  each reply (injectable `sleep`; negative refused); `config.py` reads `MODEL_STUB_LATENCY_MS`
+  (0 to 60000, default 0, empty = unset); wiring passes it. Tests: `tests/unit/test_model_stub.py`,
+  config and wiring cases, a `stub_with_latency` entry in the `Model` contract suite; 366 passed,
+  1 skipped (live). Image pushed after the commit, not applied. Next: `[infra]` load-test mode
+  once the Lambda quota is granted (set `worker_image_tag` to this image and
+  `MODEL_STUB_LATENCY_MS` in `worker_model_env`). Gotchas: `worker_model_env` in tfvars replaces
+  the whole default map, so keep the `MODEL_MINIMAX_*` entries when adding the latency.
 
 - **2026-11-20 · M7 planning** — M7 task list written (load-test mode, stub latency, driver,
   chaos, full test and report); decisions under M7 tasks (plain Python driver, 100 then 1,000

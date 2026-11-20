@@ -58,7 +58,9 @@ def build(config: Config) -> App:
     control_plane = HttpControlPlane(
         config.control_plane_url, default_signer(config.aws_region), trace_headers=headers
     )
-    providers: dict[str, Model] = {"stub": StubModel(demo_turns())}
+    providers: dict[str, Model] = {
+        "stub": StubModel(demo_turns(), latency_seconds=config.stub_latency_ms / 1000)
+    }
     for p in config.model_providers:
         if p.protocol == "bedrock":
             providers[p.name] = BedrockConverseModel(

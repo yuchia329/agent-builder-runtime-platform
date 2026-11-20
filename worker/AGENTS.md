@@ -20,6 +20,7 @@ Run from `worker/`.
 | Real model locally | In `../.env`: `MODEL_PROVIDERS=minimax` and the `MODEL_MINIMAX_*` lines from `../.env.example` with your key; publish a spec with `model: minimax/MiniMax-M3` |
 | Real Bedrock locally | In `../.env`: add `bedrock` to `MODEL_PROVIDERS` and the `MODEL_BEDROCK_*` lines from `../.env.example` (profile from `~/.aws`, no keys in `.env`); run the worker on the host (the image has no `~/.aws`); spec `model: bedrock/amazon.nova-lite-v1:0` |
 | See spans locally | `TRACING_EXPORTER=logging` (each span printed as JSON on stdout) |
+| Slow stub model (load tests) | `MODEL_STUB_LATENCY_MS=2000` (each `stub/*` call waits 2 s; 0 to 60000, default 0; on AWS through `worker_model_env` in tfvars) |
 | See metric lines locally | `METRICS_NAMESPACE=AgentPlatform/local` (one `ModelCostUsd` JSON line on stdout per model call) |
 | Metric on AWS (after a run) | `aws cloudwatch get-metric-statistics --namespace AgentPlatform/dev --metric-name ModelCostUsd --statistics Sum SampleCount --period 3600 --start-time <ISO> --end-time <ISO> --profile default` |
 | Live X-Ray check (dev AWS, fraction of a cent) | `LIVE_AWS=1 uv run pytest tests/unit/test_live_xray.py -s` (profile `default`; one span through the OTLP endpoint, found in `aws/spans` in about 20-30 s; needs Transaction Search on) |
@@ -116,7 +117,8 @@ Run from `worker/`.
   and pass only the names the expression uses, or DynamoDB rejects the call.
 - Tests that need Docker get `@pytest.mark.docker` (or `marks=` on a `pytest.param`).
 - `ScriptedModel` (tests: one script, records calls) vs `StubModel` (running worker: stateless,
-  picks the turn by how many assistant replies the conversation has, safe across concurrent runs).
+  picks the turn by how many assistant replies the conversation has, safe across concurrent runs;
+  `latency_seconds` waits before each reply, with an injectable `sleep` that tests pass).
 - A `require_approval` call runs only on a matching approved `RunRecord.approval` (step, tool,
   canonical-JSON arguments); otherwise the loop pauses again. Tests decide with
   `InMemoryControlPlane.decide()`, never by editing the run by hand, except to test mismatches.

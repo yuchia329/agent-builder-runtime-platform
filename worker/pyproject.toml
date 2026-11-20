@@ -8,6 +8,8 @@ dependencies = [
     "httpx>=0.28.1",
     "jsonschema>=4.23", # tool argument checks in core (a validation library, not a vendor SDK)
     "mcp>=2.3.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.2",
+    "opentelemetry-sdk>=1.45.2",
 ]
 
 [project.scripts]

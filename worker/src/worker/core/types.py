@@ -144,7 +144,6 @@ class RunUpdate:
     status: RunStatus
     steps: int | None = None
     cost_usd: float | None = None
-    trace_id: str | None = None
     pending_approval: PendingApproval | None = None
     failure: Failure | None = None
     output: str | None = None
@@ -155,8 +154,6 @@ class RunUpdate:
             d["steps"] = self.steps
         if self.cost_usd is not None:
             d["cost_usd"] = self.cost_usd
-        if self.trace_id is not None:
-            d["trace_id"] = self.trace_id
         if self.pending_approval is not None:
             p = self.pending_approval
             d["pending_approval"] = {"step": p.step, "tool": p.tool, "arguments": p.arguments}

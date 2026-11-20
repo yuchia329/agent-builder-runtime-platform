@@ -26,6 +26,14 @@ def test_requests_are_sigv4_signed_for_execute_api(server):
     assert headers["X-Amz-Date"]
 
 
+def test_requests_carry_the_current_trace(server):
+    trace_parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    http_client(server, trace_headers=lambda: {"traceparent": trace_parent}).get_run(RUN_ID)
+
+    _, _, headers = server.requests[-1]
+    assert headers["traceparent"] == trace_parent
+
+
 def test_patch_body_matches_contract(server):
     http_client(server).update_run(RUN_ID, RunUpdate(RunStatus.RUNNING, steps=0))
 

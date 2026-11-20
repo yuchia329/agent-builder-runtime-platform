@@ -14,6 +14,7 @@ from worker.ports.queue import QueueMessage
 @dataclass
 class _Entry:
     body: str
+    trace_parent: str | None = None
     receive_count: int = 0
     visible_at: float = 0.0
     receipt: str | None = None
@@ -29,9 +30,10 @@ class InMemoryRunQueue:
         self.dead: list[str] = []  # bodies moved to the dead-letter list
         self.extends: list[tuple[str, float]] = []  # (receipt, seconds), for heartbeat tests
 
-    def send(self, body: str) -> None:
+    def send(self, body: str, trace_parent: str | None = None) -> None:
+        """Adds a message; `trace_parent` stands for the SQS attribute `traceparent`."""
         with self._cond:
-            self._entries.append(_Entry(body))
+            self._entries.append(_Entry(body, trace_parent))
             self._cond.notify_all()
 
     def pending(self) -> int:
@@ -64,7 +66,9 @@ class InMemoryRunQueue:
             entry.receive_count += 1
             entry.visible_at = now + self._visibility
             entry.receipt = f"r{next(self._receipts)}"
-            taken.append(QueueMessage(entry.body, entry.receipt, entry.receive_count))
+            taken.append(
+                QueueMessage(entry.body, entry.receipt, entry.receive_count, entry.trace_parent)
+            )
         return taken
 
     def _held(self, receipt: str) -> _Entry | None:

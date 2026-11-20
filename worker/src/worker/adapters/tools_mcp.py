@@ -19,7 +19,7 @@ changes). Errors never contain the token.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import anyio
@@ -70,10 +70,12 @@ class GatewayTools:
         *,
         auth: httpx2.Auth | None = None,
         timeout_seconds: float = TIMEOUT_SECONDS,
+        trace_headers: Callable[[], Mapping[str, str]] = dict,
     ) -> None:
         self._url = gateway_url.rstrip("/") + "/mcp"
         self._auth = auth
         self._timeout = timeout_seconds
+        self._trace_headers = trace_headers  # `traceparent` of the current span (ADR 0022)
 
     def describe(self, names: Sequence[str], context: ToolContext) -> list[ToolSpec]:
         listed = self._run(context, self._list)
@@ -120,7 +122,8 @@ class GatewayTools:
                 "This run has no run token, so the tool gateway cannot be used "
                 "(the control plane issues one when RUN_TOKEN_PRIVATE_KEY is set)"
             )
-        headers = {RUN_TOKEN_HEADER: context.run_token}
+        # Read here, on the caller's thread: the current span (tool.call) lives there.
+        headers = {**self._trace_headers(), RUN_TOKEN_HEADER: context.run_token}
         if self._auth is None:  # unsigned: also where gateways before X-Run-Token look
             headers["Authorization"] = f"Bearer {context.run_token}"
 

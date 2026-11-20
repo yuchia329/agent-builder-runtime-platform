@@ -88,7 +88,7 @@ Filled in as each component is scaffolded.
 | ------------- | ----- | ---- | ----------- |
 | contracts     | —     | `cd contracts && uv run pytest` | — |
 | control-plane | `cd control-plane && ./gradlew bootJar` (Lambda: `lambdaZip`) | `cd control-plane && ./gradlew test` (needs Docker) | `cd control-plane && ./gradlew bootRun` |
-| worker        | `cd worker && uv sync` (Fargate image: `make worker-image`) | `cd worker && uv run pytest` (needs Docker; `-m "not docker"` without) | `cd worker && set -a && . ../.env && set +a && uv run worker` |
+| worker        | `cd worker && uv sync` (Fargate image: `make worker-image`) | `cd worker && uv run pytest` (needs Docker; `-m "not docker"` without; live X-Ray check: `worker/AGENTS.md`) | `cd worker && set -a && . ../.env && set +a && uv run worker` |
 | tool-gateway  | `cd tool-gateway && uv sync` (Lambda: `uv run python scripts/lambda_zip.py`) | `cd tool-gateway && uv run pytest` | `cd tool-gateway && RUN_TOKEN_PUBLIC_KEY=... CONNECTORS=fake uv run gateway` (port 8090; with GitHub: `tool-gateway/AGENTS.md`) |
 | evals         | `cd evals && uv sync` | `cd evals && uv run pytest` (no Docker; starts the real gateway) | `make eval` / `make eval SPEC=<name>` (real model, costs money; see `evals/AGENTS.md`) |
 | specs         | — | validate: see `specs/AGENTS.md` | real run: `specs/README.md` |

@@ -64,9 +64,11 @@ class HttpControlPlane:
         backoff_seconds: float = 0.5,
         timeout_seconds: float = 10.0,
         sleep: Callable[[float], None] = time.sleep,
+        trace_headers: Callable[[], Mapping[str, str]] = dict,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._sign = signer
+        self._trace_headers = trace_headers  # `traceparent` of the current span (ADR 0022)
         self._attempts = attempts
         self._backoff = backoff_seconds
         self._sleep = sleep
@@ -93,7 +95,7 @@ class HttpControlPlane:
     def _request(self, method: str, run_id: str, body: dict[str, Any] | None = None):
         url = f"{self._base}/internal/runs/{quote(run_id, safe='')}"
         content = b"" if body is None else json.dumps(body).encode()
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", **self._trace_headers()}
         if body is not None:
             headers["Content-Type"] = "application/json"
 

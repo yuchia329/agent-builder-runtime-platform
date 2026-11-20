@@ -17,6 +17,7 @@ QUEUE_BACKENDS = ("sqs", "memory")
 STATE_BACKENDS = ("dynamodb", "memory")
 MODEL_PROTOCOLS = ("openai", "bedrock")
 TOOLS_PROVIDERS = ("fake", "local", "mcp")
+TRACING_EXPORTERS = ("none", "logging", "xray")  # ADR 0022
 PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
 BUILT_IN_PROVIDERS = ("stub",)
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -55,6 +56,7 @@ class Config:
     github_api_url: str
     tool_gateway_url: str | None
     tool_gateway_sigv4: bool  # sign gateway requests with SigV4 (AWS: API Gateway IAM on /mcp)
+    tracing_exporter: str  # where spans go: none, logging, xray (OTLP to X-Ray, SigV4)
     aws_region: str
     concurrency: int
     visibility_seconds: int
@@ -92,6 +94,7 @@ class Config:
             github_api_url=env.get("GITHUB_API_URL", "https://api.github.com"),
             tool_gateway_url=env.get("TOOL_GATEWAY_URL", "").strip() or None,
             tool_gateway_sigv4=choice("TOOL_GATEWAY_SIGV4", ("true", "false"), "false") == "true",
+            tracing_exporter=choice("TRACING_EXPORTER", TRACING_EXPORTERS, "none"),
             aws_region=env.get("AWS_REGION", "us-east-1"),
             concurrency=positive_int("WORKER_CONCURRENCY", 4),
             visibility_seconds=positive_int("RUN_VISIBILITY_SECONDS", 60),

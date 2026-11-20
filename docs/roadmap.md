@@ -31,7 +31,8 @@ KMS public key, SigV4 to the control plane; worker signs gateway calls (run toke
 Lambdas behind one HTTP API on its default endpoint, ADR 0021; workers on Fargate scaled 0..2 on
 queue depth): the stub demo runs to `SUCCEEDED` on AWS and the workers return to 0; the control
 plane starts each run's trace and passes it on the queue message (ADR 0022; it uploads no spans
-from Lambda); next `[worker]` tracing.
+from Lambda); the worker continues it (span per attempt, model call, tool call, checkpoint) and
+can upload straight to X-Ray (`TRACING_EXPORTER=xray`, checked live); next `[tool-gateway]` tracing.
 
 ## Approach
 
@@ -408,12 +409,17 @@ Work in this order:
   task (ADR 0022): no upload from Lambda and no active tracing (measured: sampled-only, nothing
   after a restore, +250 ms cold start). Check: tests; the run's trace id reaches the worker
   (`make demo`).
-- [ ] `[worker]` tracing: continue the run's trace from the SQS `traceparent` attribute, spans per
+- [x] `[worker]` tracing: continue the run's trace from the SQS `traceparent` attribute, spans per
   model call, tool call and checkpoint with the attributes in `docs/architecture.md` →
   Observability, uploaded straight to the X-Ray OTLP endpoint with SigV4 (no collector; ADR 0022).
-  First confirm Transaction Search: `aws xray get-trace-segment-destination` must say
-  `CloudWatchLogs` (on 2026-11-19 it stayed `XRay` after enabling, though spans reached
-  `aws/spans`). Check: a stub run on AWS shows one trace in X-Ray under the run's `trace_id`.
+  Transaction Search confirmed (`CloudWatchLogs` / `ACTIVE`). Checked: tests; a live span from the
+  laptop found in `aws/spans`; `make demo`. The stub run's whole trace on AWS moves to the infra
+  task below (needs the task definition and IAM changes).
+- [ ] `[infra]` worker traces: task definition `TRACING_EXPORTER=xray`; worker task role
+  `xray:PutTraceSegments` and `xray:PutSpans` (AWS docs name both for the OTLP endpoint); 14-day
+  retention on `aws/spans` (Transaction Search made it, so import or manage only its retention);
+  push a new worker image tag. Check: `aws_demo.py` run's `trace_id` shows one trace in X-Ray with
+  "run.start" (control plane, not uploaded, so the root is missing) and the worker's spans.
 - [ ] `[tool-gateway]` tracing: read `traceparent`, span per tool call joined to the worker's
   trace. The gateway is on Lambda too: uploading follows ADR 0022 (none unless a trial shows an
   exporter that keeps responses fast). Check: tests; the trace id reaches the gateway.
@@ -474,11 +480,11 @@ service has followed.
   `traceparent` (W3C) on every run message and owns `trace_id` (a worker's PATCH value is ignored
   once the run has one). Declared in `contracts/run-message.schema.json`,
   `internal-api.openapi.yaml` and `mcp-tool-call.schema.json` (descriptions only). Must follow:
-  `worker` (read the attribute, continue the trace, send `traceparent` on internal API and `/mcp`
-  calls, stop sending `trace_id`), `tool-gateway` (read `traceparent`), `infra` (14-day retention
-  on the `aws/spans` log group that Transaction Search made; worker task role may call the X-Ray
-  OTLP endpoint; no active tracing on the Lambdas). Current workers ignore the attribute (checked
-  with `make demo`).
+  `worker` done (reads the attribute, continues the trace, sends `traceparent` on internal API and
+  `/mcp` calls, no longer sends `trace_id`). Must follow: `tool-gateway` (read `traceparent`),
+  `infra` (the `[infra]` worker traces task: `TRACING_EXPORTER=xray`, X-Ray permissions on the
+  worker task role, 14-day retention on `aws/spans`, new image; no active tracing on the
+  Lambdas).
 
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
@@ -492,6 +498,22 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · worker** — M6 task 10. New port `Tracer` (`ports/tracing.py`; `NoopTracer` in
+  core is the `Deps` default) and adapter `tracing_otel.py` (OpenTelemetry SDK, own
+  `TracerProvider`, nothing global; exceptions mark the span with the type name only, never the
+  message). `PollLoop` opens "run.attempt" per delivery with the SQS attribute `traceparent` as
+  parent (`QueueMessage.trace_parent`); `handle_run` adds "model.call", "tool.call" (outcome ok,
+  error, reused) and "checkpoint" spans. `HttpControlPlane` and `GatewayTools` send `traceparent`;
+  `RunUpdate.trace_id` removed. `TRACING_EXPORTER=none|logging|xray`; `xray` is OTLP/HTTP to
+  `https://xray.<region>.amazonaws.com/v1/traces` signed by `SigV4RequestsAuth` (service `xray`),
+  batched, flushed on shutdown. New deps `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`
+  (pull in `requests`, `protobuf`). 332 tests pass (1 live skipped); the live check
+  (`LIVE_AWS=1 ... test_live_xray.py`) found its span in `aws/spans` after 23 s; `make demo`
+  passed. Next: `[tool-gateway]` tracing; the new `[infra]` worker traces task (whole AWS trace
+  check moved there). Gotchas: Transaction Search now reads `CloudWatchLogs` / `ACTIVE`; spans
+  take about 20-30 s to show in `aws/spans`; the control plane uploads nothing, so on AWS the
+  worker's "run.attempt" has a parent span X-Ray never receives.
 
 - **2026-11-19 · control-plane** — M6 task 9. New package `trace/`: OpenTelemetry SDK by hand
   (`TracingConfig`; no agent), `SecureIdGenerator` (SnapStart-safe ids), `RunTracing` ("run.start"

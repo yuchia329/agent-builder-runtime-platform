@@ -47,7 +47,16 @@ def _sqs(request):
     client = request.getfixturevalue("sqs_client")
     url = client.create_queue(QueueName=f"runs-{uuid.uuid4().hex[:8]}")["QueueUrl"]
     queue = SqsRunQueue(url, visibility_seconds=VISIBILITY, client=client)
-    return queue, lambda body: client.send_message(QueueUrl=url, MessageBody=body)
+
+    def send(body, trace_parent=None):
+        attributes = (
+            {"traceparent": {"DataType": "String", "StringValue": trace_parent}}
+            if trace_parent
+            else {}
+        )
+        client.send_message(QueueUrl=url, MessageBody=body, MessageAttributes=attributes)
+
+    return queue, send
 
 
 ADAPTERS = [
@@ -70,6 +79,18 @@ def test_receive_returns_sent_body(queue):
     assert message.body == '{"run": 1}'
     assert message.receive_count == 1
     assert message.receipt
+
+
+def test_trace_parent_comes_from_the_message_attribute(queue):
+    q, send = queue
+    trace_parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    send('{"run": "traced"}', trace_parent)
+    send('{"run": "plain"}')
+
+    messages = {m.body: m for m in q.receive(10, wait_seconds=1)}
+
+    assert messages['{"run": "traced"}'].trace_parent == trace_parent
+    assert messages['{"run": "plain"}'].trace_parent is None
 
 
 def test_receive_on_empty_queue_returns_nothing_after_wait(queue):

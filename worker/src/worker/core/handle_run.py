@@ -29,6 +29,10 @@ picked up again rebuilds its history from them and continues: tool calls of the 
 without a saved result are processed again, then the next model turn. The run's input message is
 not saved; it is rebuilt from the run. If the run-state store fails (StateError), the attempt
 stops without reporting, and the run resumes later from its last checkpoint.
+
+Tracing (``deps.tracer``, ADR 0022): a span per model call (``model.call``), tool call
+(``tool.call``) and checkpoint write (``checkpoint``), children of the caller's span (the poll
+loop's ``run.attempt``). Attributes are ids, counts and names; never input, output or arguments.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ from jsonschema import Draft202012Validator
 from worker.core.budget import BudgetExceeded, BudgetTracker
 from worker.core.errors import LeaseLost, RunConflict, StateError, ToolError
 from worker.core.models import MODELS, ModelInfo, UnknownModel, model_info
+from worker.core.tracing import NoopTracer
 from worker.core.trim import ContextTooLarge, fit_context, message_chars
 from worker.core.types import (
     Decision,
@@ -66,6 +71,7 @@ from worker.ports.control_plane import ControlPlane
 from worker.ports.model import Model
 from worker.ports.run_state import Checkpoint, RunStateStore
 from worker.ports.tools import ToolClient
+from worker.ports.tracing import Tracer
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +88,7 @@ class Deps:
     clock: Clock
     models: Mapping[str, ModelInfo] = field(default_factory=lambda: MODELS)
     state: RunStateStore | None = None  # checkpoints; None: nothing is saved
+    tracer: Tracer = field(default_factory=NoopTracer)
 
 
 @dataclass(frozen=True)
@@ -107,6 +114,14 @@ class _Resume:
 def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunStatus:
     """Executes one run and returns the status it ended in (or was already in)."""
     run = deps.control_plane.get_run(run_id)
+    deps.tracer.annotate(
+        {
+            "run.id": run.run_id,
+            "tenant.id": run.tenant_id,
+            "agent.name": run.agent_name,
+            "agent.version": run.agent_version,
+        }
+    )
     if run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
         # Duplicate delivery of a run that is finished or paused: nothing to do.
         log.info("run %s is %s; skipping", run_id, run.status)
@@ -221,6 +236,7 @@ class _AgentLoop:
             len(t.name) + len(t.description) + len(json.dumps(t.input_schema)) for t in self._tools
         )
         self._tokens_per_char = DEFAULT_TOKENS_PER_CHAR
+        self._outcome = ""  # of the latest tool call, for its span
 
     def run(self) -> RunUpdate:
         if self._last_turn is not None:  # resumed: finish what the latest saved turn asked for
@@ -231,11 +247,20 @@ class _AgentLoop:
         while True:
             self._before_step()
             self._fit_context()
-            turn = self._deps.model.complete(
-                self._spec.model, self._spec.instructions, self._sent, self._tools
-            )
+            attributes = {
+                "run.step": self._budget.steps + 1,
+                "gen_ai.request.model": self._spec.model,
+            }
+            with self._deps.tracer.span("model.call", attributes) as span:
+                turn = self._deps.model.complete(
+                    self._spec.model, self._spec.instructions, self._sent, self._tools
+                )
+                cost = self._price.cost_usd(turn.usage)
+                span.set("gen_ai.usage.input_tokens", turn.usage.input_tokens)
+                span.set("gen_ai.usage.output_tokens", turn.usage.output_tokens)
+                span.set("cost.usd", round(cost, 6))
+                span.set("stop_reason", turn.stop_reason.value)
             self._learn_token_ratio(turn.usage.input_tokens)
-            cost = self._price.cost_usd(turn.usage)
             self._budget.record_step(cost)
             message = Message.assistant(turn)
             self._add(message)
@@ -292,9 +317,10 @@ class _AgentLoop:
             }
             if stop is not None:
                 data["stop_reason"] = stop.value
-            self._deps.state.save_checkpoint(
-                self._run.run_id, self._attempt.owner, self._budget.steps, data
-            )
+            with self._deps.tracer.span("checkpoint", {"run.step": self._budget.steps}):
+                self._deps.state.save_checkpoint(
+                    self._run.run_id, self._attempt.owner, self._budget.steps, data
+                )
         self._unsaved.clear()
 
     def _estimate(self, messages: Sequence[Message]) -> int:
@@ -330,8 +356,16 @@ class _AgentLoop:
         With a run-state store: claim the call's key, call the tool, store the result. A key
         claimed before (a resumed run) returns its stored result without calling again."""
         self._before_step()
+        attributes = {"run.step": self._budget.steps + 1, "gen_ai.tool.name": call.name}
+        with self._deps.tracer.span("tool.call", attributes) as span:
+            result = self._execute_claimed(call)
+            span.set("tool.outcome", self._outcome)
+        return result
+
+    def _execute_claimed(self, call: ToolCall) -> ToolResult:
         key = self._claim(call)
         if isinstance(key, ToolResult):
+            self._outcome = "reused"
             self._budget.record_step()
             return key
         step = self._budget.steps + 1
@@ -346,6 +380,7 @@ class _AgentLoop:
             result = ToolResult(call.id, content)
         except ToolError as e:
             result = ToolResult(call.id, f"Tool failed: {e}", is_error=True)
+        self._outcome = "error" if result.is_error else "ok"
         if key is not None:
             assert self._deps.state is not None and self._attempt is not None
             self._deps.state.complete_tool_call(

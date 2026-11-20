@@ -40,6 +40,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop)
     loop.run_forever()
     loop.drain()
+    app.tracer.shutdown()  # sends the spans still waiting (scale-in sends SIGTERM)
     log.info("worker stopped")
     return 0
 

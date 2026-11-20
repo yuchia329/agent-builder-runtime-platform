@@ -83,3 +83,12 @@ def test_signed_requests_carry_sigv4_and_the_token_only_in_its_header():
     assert headers["X-Amz-Security-Token"] == "session"
     assert TOKEN not in authorization
     assert json.loads(body)["jsonrpc"] == "2.0"  # the signed body is the JSON-RPC request
+
+
+def test_requests_carry_the_current_trace():
+    trace_parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    with Recorder() as gateway:
+        call(GatewayTools(gateway.url, trace_headers=lambda: {"traceparent": trace_parent}))
+
+    headers, _ = gateway.requests[0]
+    assert headers["traceparent"] == trace_parent

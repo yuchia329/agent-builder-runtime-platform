@@ -1,4 +1,5 @@
-"""RunQueue on Amazon SQS (ElasticMQ locally, via AWS_ENDPOINT_URL_SQS)."""
+"""RunQueue on Amazon SQS (ElasticMQ locally, via AWS_ENDPOINT_URL_SQS). The run's trace comes in
+the message attribute `traceparent` (ADR 0022)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from worker.core.errors import QueueError
 from worker.ports.queue import QueueMessage
 
 SQS_MAX_MESSAGES = 10
+TRACE_ATTRIBUTE = "traceparent"
 SQS_MAX_WAIT_SECONDS = 20
 
 
@@ -35,6 +37,7 @@ class SqsRunQueue:
                 WaitTimeSeconds=min(wait_seconds, SQS_MAX_WAIT_SECONDS),
                 VisibilityTimeout=self._visibility,
                 MessageSystemAttributeNames=["ApproximateReceiveCount"],
+                MessageAttributeNames=[TRACE_ATTRIBUTE],
             )
         except (BotoCoreError, ClientError) as e:
             raise QueueError(f"receive failed: {e}") from e
@@ -43,6 +46,9 @@ class SqsRunQueue:
                 body=m["Body"],
                 receipt=m["ReceiptHandle"],
                 receive_count=int(m.get("Attributes", {}).get("ApproximateReceiveCount", 1)),
+                trace_parent=m.get("MessageAttributes", {})
+                .get(TRACE_ATTRIBUTE, {})
+                .get("StringValue"),
             )
             for m in response.get("Messages", [])
         ]

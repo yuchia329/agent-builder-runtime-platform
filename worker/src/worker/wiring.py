@@ -17,6 +17,7 @@ from worker.adapters.run_state_memory import InMemoryRunStateStore
 from worker.adapters.tools_fake import issue_triage_tools
 from worker.adapters.tools_local import GitHubTools
 from worker.adapters.tools_mcp import GatewayTools, SignedAuth
+from worker.adapters.tracing_otel import OtelTracer, build_tracer, trace_headers
 from worker.config import Config
 from worker.core.handle_run import Deps
 from worker.ports.model import Model
@@ -30,6 +31,7 @@ class App:
     queue: RunQueue
     deps: Deps
     state: RunStateStore
+    tracer: OtelTracer  # shutdown() sends the spans still waiting
 
 
 def build(config: Config) -> App:
@@ -48,7 +50,11 @@ def build(config: Config) -> App:
     else:  # one process only: leases in memory do not stop another worker
         state = InMemoryRunStateStore(clock)
 
-    control_plane = HttpControlPlane(config.control_plane_url, default_signer(config.aws_region))
+    tracer = build_tracer(config.tracing_exporter, config.aws_region)
+    headers = trace_headers(tracer)
+    control_plane = HttpControlPlane(
+        config.control_plane_url, default_signer(config.aws_region), trace_headers=headers
+    )
     providers: dict[str, Model] = {"stub": StubModel(demo_turns())}
     for p in config.model_providers:
         if p.protocol == "bedrock":
@@ -71,7 +77,8 @@ def build(config: Config) -> App:
     elif config.tools_provider == "mcp":
         assert config.tool_gateway_url  # checked by Config
         auth = SignedAuth(default_signer(config.aws_region)) if config.tool_gateway_sigv4 else None
-        tools = GatewayTools(config.tool_gateway_url, auth=auth)
+        tools = GatewayTools(config.tool_gateway_url, auth=auth, trace_headers=headers)
     else:
         tools = issue_triage_tools()
-    return App(queue, Deps(control_plane, model, tools, clock, state=state), state)
+    deps = Deps(control_plane, model, tools, clock, state=state, tracer=tracer)
+    return App(queue, deps, state, tracer)

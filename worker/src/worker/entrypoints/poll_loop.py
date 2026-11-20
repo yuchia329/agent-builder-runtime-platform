@@ -11,6 +11,8 @@
   (so SQS delivers it again, and after N tries moves it to the DLQ) when the body is invalid, the
   run is not found, or handle_run raised (control plane unreachable, a bug).
 - stop() ends polling; drain() waits for runs in progress.
+- Each attempt is a `run.attempt` span in the run's trace (the message's `traceparent`
+  attribute, ADR 0022); handle_run's spans are its children.
 """
 
 from __future__ import annotations
@@ -130,18 +132,32 @@ class PollLoop:
             return
 
         beat = _Heartbeat(self._queue, message, self._visibility, self._state, run.run_id, owner)
+        attributes = {
+            "run.id": run.run_id,
+            "tenant.id": run.tenant_id,
+            "queue.receive_count": message.receive_count,
+        }
         try:
-            with beat:
+            with (
+                beat,
+                self._deps.tracer.span(
+                    "run.attempt", attributes, parent=message.trace_parent
+                ) as span,
+            ):
                 try:
                     status = self._handler(run.run_id, self._deps, Attempt(owner, beat.lost.is_set))
+                    span.set("run.status", str(status))
                 except RunNotFound:
                     log.warning("run %s not found (receive %d)", run.run_id, message.receive_count)
+                    span.set("run.outcome", "not_found")
                     return
                 except LeaseLost:
                     log.warning("run %s: lease lost; message kept", run.run_id)
+                    span.set("run.outcome", "lease_lost")
                     return
-                except Exception:  # noqa: BLE001 - keep the message; it is retried
+                except Exception as e:  # noqa: BLE001 - keep the message; it is retried
                     log.exception("run %s failed to process; message kept for retry", run.run_id)
+                    span.set("run.outcome", f"retry: {type(e).__name__}")
                     return
         finally:
             try:

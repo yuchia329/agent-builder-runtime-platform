@@ -19,6 +19,8 @@ Run from `worker/`.
 | Tools through the gateway | In `../.env`: `TOOLS_PROVIDER=mcp`, `TOOL_GATEWAY_URL=http://localhost:8090`; run the gateway (`tool-gateway/AGENTS.md`) and give the control plane `RUN_TOKEN_*` so runs carry a token |
 | Real model locally | In `../.env`: `MODEL_PROVIDERS=minimax` and the `MODEL_MINIMAX_*` lines from `../.env.example` with your key; publish a spec with `model: minimax/MiniMax-M3` |
 | Real Bedrock locally | In `../.env`: add `bedrock` to `MODEL_PROVIDERS` and the `MODEL_BEDROCK_*` lines from `../.env.example` (profile from `~/.aws`, no keys in `.env`); run the worker on the host (the image has no `~/.aws`); spec `model: bedrock/amazon.nova-lite-v1:0` |
+| See spans locally | `TRACING_EXPORTER=logging` (each span printed as JSON on stdout) |
+| Live X-Ray check (dev AWS, fraction of a cent) | `LIVE_AWS=1 uv run pytest tests/unit/test_live_xray.py -s` (profile `default`; one span through the OTLP endpoint, found in `aws/spans` in about 20-30 s; needs Transaction Search on) |
 | Lint | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
 | Image (from repo root) | `docker build -f worker/Dockerfile .` (or `make up`) |
@@ -32,7 +34,7 @@ Run from `worker/`.
   library, `worker.core` / `worker.ports`, and `jsonschema`. `tests/unit/test_core_boundary.py`
   fails on any other import.
 - `src/worker/ports/`: `Protocol` interfaces only (`ControlPlane`, `Model`, `ToolClient`, `Clock`,
-  `RunQueue`, `RunStateStore`).
+  `RunQueue`, `RunStateStore`, `Tracer`).
 - `src/worker/adapters/`: implementations. Vendor SDKs (boto3, httpx, Strands) live only here.
   Models: `model_router.py` (picks the provider from `<provider>/<model id>`),
   `model_openai_compat.py` (OpenAI Chat Completions format: MiniMax, OpenAI, OpenRouter, vLLM,
@@ -55,6 +57,8 @@ Run from `worker/`.
 - `tests/fake_github_server.py` + `tests/fixtures/github/*.json`: answers like the GitHub REST
   API (routes registered with `on`, `fail_next` for retries) for `tools_local.py`.
 - `adapters/tools_mcp.py` (`GatewayTools`): tools through the gateway over MCP (SDK client).
+- `adapters/tracing_otel.py`: `OtelTracer`, `build_tracer` (`TRACING_EXPORTER`), the SigV4-signed
+  X-Ray OTLP exporter; `core/tracing.py`: `NoopTracer`, the `Deps` default.
 - `tests/live_gateway.py`: the real tool gateway as a subprocess (fake connector, minimal env,
   throwaway P-256 key) and `RunTokens` signing run tokens like the control plane; session
   fixtures `live_gateway` and `run_tokens` in `conftest.py`.
@@ -134,5 +138,13 @@ Run from `worker/`.
   default chain); never put keys in the task definition.
 - `GatewayTools` maps every failure to `ToolError` (the MCP SDK wraps errors in exception
   groups; unwrap with `_first`) and does not retry: repeats are core's decision (ADR 0013).
+- Tracing (ADR 0022): the run's trace comes from the SQS attribute `traceparent`
+  (`QueueMessage.trace_parent`), never the body. Span attributes are counts, names and ids only:
+  never input, output, tool arguments, results, tokens or exception messages (`OtelTracer` records
+  only the exception type; `tests/integration/test_tracing.py` checks for leaks). Adapters that
+  call another service take `trace_headers(tracer)` and add `traceparent`; `GatewayTools` reads it
+  on the caller's thread, before its event loop.
+- Tracing tests use `build_tracer("none", ..., span_exporter=InMemorySpanExporter())`; the
+  exporter drops spans after `shutdown()`, so read them before.
 - The fake tools and scripted model are shared test infrastructure (later: chaos and load tests);
   keep them deterministic.

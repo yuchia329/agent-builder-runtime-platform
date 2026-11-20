@@ -498,6 +498,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `RunStateStore`     | worker        | Atomic conditional writes for lease, checkpoint (step n only after n-1), idempotency claim         | DynamoDB, in-memory                        |
 | `Model`             | worker        | Model id + messages + tools in; text or tool calls, stop reason, token usage out; retries transient errors | Stub (scripted), router, OpenAI-compatible (M1), Bedrock Converse (M1) |
 | `ToolClient`        | worker        | `describe(names, context)` returns tool schemas; `call(name, args, context)` returns a result or raises `ToolError`; `context` is the run id, run token, step and idempotency key | Fake (tests), direct calls (M1), MCP gateway (M4) |
+| `Tracer`            | worker        | `span(name, attributes, parent=traceparent)` as a context manager, `annotate` the current span, `traceparent()` of the current span; failures mark the span with the exception type only | No-op (core default), OpenTelemetry |
 | `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
 | `RunTokenSigner`    | control plane | `keyId()` (RFC 7638 thumbprint), `publicKey()`, `sign(input)` returns an ES256 signature in JOSE form; no network call at construction | Local key pair, KMS |
 | `SecretSource`      | control plane | `get(secret)` (null = not set; may load on first use, never at startup), `peek` (only what is held), `configured`, `prefetch` | Env, SSM Parameter Store |
@@ -529,7 +530,7 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`; ssm: `TOKEN_STORE_SSM_PATH` (`/agent-platform/dev/gateway/tokens`) |
-| Tracing             | control plane                          | `TRACING_EXPORTER=none\|logging` (default none, also on Lambda: spans and trace context are made, nothing is uploaded; ADR 0022) |
+| Tracing             | control plane, worker                  | `TRACING_EXPORTER` (default none: spans and trace context are made, nothing is uploaded; ADR 0022). Control plane: `none\|logging` (none on Lambda). Worker: `none\|logging\|xray`; `xray` uploads to the X-Ray OTLP endpoint with SigV4 in `AWS_REGION` (Fargate) |
 | Gateway on AWS      | gateway                                | `RUN_TOKEN_KMS_KEY_ID` (instead of `RUN_TOKEN_PUBLIC_KEY`), `SECRETS_SSM_PATH` (`/agent-platform/dev/gateway`: `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`), `CONTROL_PLANE_SIGV4=true` with `AWS_REGION`; Lambda: `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`, `AWS_LWA_READINESS_CHECK_PATH=/health` |
 | GitHub App (local)  | gateway                                | With `TOKEN_STORE=memory`, all or none: `TENANT_ID`, `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY_FILE` (path to the `.pem`, kept outside the repo); stored as the tenant's team-bot at startup. On AWS the `TokenStore` is written by an operator |
 | Owner login         | gateway                                | All three or none: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` (secret), `OAUTH_STATE_SECRET` (secret, 32+ characters); `GATEWAY_PUBLIC_URL` (default `http://localhost:8090`, where browsers reach the gateway). Unset: owner runs refused (ADR 0015) |
@@ -561,8 +562,10 @@ One trace per run ([ADR 0022](adr/0022-run-traces-start-in-the-control-plane.md)
   calls; the gateway reads it. Only `/internal/*` requests may join a caller's trace.
 - **Spans:** in the control plane one SERVER span per request (`<METHOD> <route>`, status, run id
   from the route) and one per AWS SDK call (DynamoDB, SQS, KMS, SSM); in the worker one per model
-  call, tool call and checkpoint write. Attributes: tenant, agent, spec version, run, step, model,
-  input/output tokens, cost, tool name. Never input, output, issue text, tokens, keys or headers.
+  call ("model.call"), tool call ("tool.call") and checkpoint write ("checkpoint"), all under one
+  "run.attempt" span per queue delivery whose parent is the message's `traceparent`. Attributes:
+  tenant, agent, spec version, run, step, model, input/output tokens, cost, tool name. Never input,
+  output, issue text, tokens, keys, headers or exception messages.
 - **Upload:** the worker sends its spans to the X-Ray OTLP endpoint (SigV4); this needs
   Transaction Search on in the account, which stores spans in the `aws/spans` log group. The
   control plane on Lambda uploads nothing (`TRACING_EXPORTER=none`, active tracing off): measured,

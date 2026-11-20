@@ -9,6 +9,9 @@ class QueueMessage:
     body: str
     receipt: str
     receive_count: int
+    # The run's trace (W3C traceparent) from the message attribute `traceparent`, if any
+    # (ADR 0022); not part of the body.
+    trace_parent: str | None = None
 
 
 class RunQueue(Protocol):

@@ -568,7 +568,7 @@ than the current milestone.
   each reply (injectable `sleep`; negative refused); `config.py` reads `MODEL_STUB_LATENCY_MS`
   (0 to 60000, default 0, empty = unset); wiring passes it. Tests: `tests/unit/test_model_stub.py`,
   config and wiring cases, a `stub_with_latency` entry in the `Model` contract suite; 366 passed,
-  1 skipped (live). Image pushed after the commit, not applied. Next: `[infra]` load-test mode
+  1 skipped (live). Image `c53f4c6` pushed after the commit, not applied. Next: `[infra]` load-test mode
   once the Lambda quota is granted (set `worker_image_tag` to this image and
   `MODEL_STUB_LATENCY_MS` in `worker_model_env`). Gotchas: `worker_model_env` in tfvars replaces
   the whole default map, so keep the `MODEL_MINIMAX_*` entries when adding the latency.

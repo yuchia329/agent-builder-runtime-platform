@@ -28,7 +28,7 @@ Run from `worker/`.
 | Format | `uv run ruff format .` |
 | Image (from repo root) | `docker build -f worker/Dockerfile .` (or `make up`) |
 | Fargate image (from repo root) | `make worker-image` (linux/arm64, tag `agent-platform-worker:<commit>`) |
-| Push to ECR (from repo root; in the infra compute task) | `url=$(terraform -chdir=infra/envs/dev output -raw worker_repository_url)`, `aws ecr get-login-password --profile default \| docker login --username AWS --password-stdin ${url%%/*}`, `docker tag agent-platform-worker:<commit> $url:<commit>`, `docker push $url:<commit>` (tags are immutable: a new commit, a new tag) |
+| Push to ECR (from repo root; in the infra compute task) | `url=$(terraform -chdir=infra/envs/dev output -raw worker_repository_url)`, `aws ecr get-login-password --profile default \| docker login --username AWS --password-stdin ${url%%/*}`, `docker tag agent-platform-worker:<commit> "${url}:<commit>"`, `docker push "${url}:<commit>"` (tags are immutable: a new commit, a new tag; keep the braces: in zsh `$url:c...` reads `:c` as a modifier) |
 
 ## Layout
 

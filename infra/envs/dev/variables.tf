@@ -20,3 +20,84 @@ variable "project" {
   type        = string
   default     = "agent-platform"
 }
+
+# --- Compute (M6 task 7). Personal values go in terraform.tfvars (git-ignored; see the example).
+
+variable "tenant_id" {
+  description = "The one tenant (control plane TENANT_ID; the GitHub App credential is stored under it)."
+  type        = string
+  default     = "tenant-demo"
+}
+
+variable "slack_approval_channel" {
+  description = "Slack channel id for approval requests (SLACK_APPROVAL_CHANNEL; required with SSM secrets)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[CG][A-Z0-9]{8,}$", var.slack_approval_channel))
+    error_message = "slack_approval_channel must be a Slack channel id like C0123456789."
+  }
+}
+
+variable "github_oauth_client_id" {
+  description = "The GitHub App's client id (GITHUB_OAUTH_CLIENT_ID); its secret is in SSM."
+  type        = string
+}
+
+variable "gateway_connectors" {
+  description = "Connectors the gateway loads (CONNECTORS): fake for stub checks, github to go live."
+  type        = string
+  default     = "fake"
+}
+
+variable "github_repos" {
+  description = "Repos the github connector may touch (GITHUB_REPOS, owner/name,...); needed with github."
+  type        = string
+  default     = ""
+}
+
+variable "worker_image_tag" {
+  description = "Tag of the worker image in ECR (the commit it was built from; make worker-image)."
+  type        = string
+}
+
+variable "worker_max_tasks" {
+  description = "Most worker tasks the service scales to."
+  type        = number
+  default     = 2
+}
+
+variable "worker_model_env" {
+  description = "Model provider settings for the worker (not secrets; API keys come from SSM)."
+  type        = map(string)
+  default = {
+    MODEL_PROVIDERS          = "minimax"
+    MODEL_MINIMAX_PROTOCOL   = "openai"
+    MODEL_MINIMAX_BASE_URL   = "https://api.minimax.io/v1"
+    MODEL_MINIMAX_EXTRA_BODY = "{\"reasoning_split\":true}"
+  }
+}
+
+variable "control_plane_memory_mb" {
+  description = "Control plane Lambda memory: 1769 MB is one vCPU, the smallest that answers a cold Slack click in time (ADR 0017)."
+  type        = number
+  default     = 1769
+}
+
+variable "gateway_memory_mb" {
+  description = "Gateway Lambda memory (152 MB used in the trial, ADR 0019)."
+  type        = number
+  default     = 512
+}
+
+variable "web_adapter_layer_version" {
+  description = "Version of AWS's LambdaAdapterLayerArm64 (ADR 0019); upgrade on purpose."
+  type        = number
+  default     = 30
+}
+
+variable "log_retention_days" {
+  description = "How long CloudWatch keeps the services' logs."
+  type        = number
+  default     = 14
+}

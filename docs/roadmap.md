@@ -27,7 +27,10 @@ cold Slack click in about 2.2 s); dev data applied (tables, run queue, worker EC
 SSM secret parameters; ADR 0018); control plane signs run tokens with KMS and reads secrets from SSM
 (`SECRETS_SOURCE=ssm`); gateway runs on Lambda with the Web Adapter (ADR 0019), SSM `TokenStore`,
 KMS public key, SigV4 to the control plane; worker signs gateway calls (run token moved to
-`X-Run-Token`, which the gateway reads; ADR 0020), arm64 Fargate image; next `[infra]` compute.
+`X-Run-Token`, which the gateway reads; ADR 0020), arm64 Fargate image; dev compute applied (both
+Lambdas behind one HTTP API on its default endpoint, ADR 0021; workers on Fargate scaled 0..2 on
+queue depth): the stub demo runs to `SUCCEEDED` on AWS and the workers return to 0; next
+`[control-plane]` tracing.
 
 ## Approach
 
@@ -67,7 +70,7 @@ can run alongside 2 to 5. Start a session with
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
-| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind API Gateway on a custom domain, workers at 0; traces in X-Ray; no hourly cost when idle | In progress |
+| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind one API Gateway HTTP API, workers at 0; traces in X-Ray; no hourly cost when idle | In progress |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Not started |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
@@ -356,8 +359,9 @@ protection; one live triage at the end proves all of it. Decided when planning (
   it). The first two budgets are free.
 - Secrets in SSM Parameter Store SecureString (free), not Secrets Manager; the run-token key in
   KMS (signing happens in KMS, the private key never leaves it). Fixed idle cost about $1 a month.
-- Domain: a subdomain of the user's domain in Cloudflare (`api.<your-domain>`); the domain name
-  stays out of the repo (a Terraform variable set locally).
+- Domain: none. Changed during `[infra]` compute (ADR 0021): the API's default `execute-api`
+  address, which stays the same across deploys; the experiment is deleted at the end, so a
+  custom domain in Cloudflare is not worth its setup.
 - One tenant, one user. Multi-tenant use (other people, users and roles) is a later milestone.
 - The control plane's sweeps run from EventBridge Scheduler every 5 minutes (configurable; within
   the free tiers, so $0 idle, though never completely silent).
@@ -392,12 +396,12 @@ Work in this order:
 - [x] `[tool-gateway]` read the run token from `X-Run-Token` (contract change, see Cross-service
   changes), `Authorization: Bearer` as a fallback while unsigned workers send both. Check: tests
   with both headers; `make demo`.
-- [ ] `[infra]` compute: Lambdas (control plane alias with SnapStart, gateway), one HTTP API
-  (public routes: agents API, webhooks, Slack; IAM-authorized routes: `/internal/*`, `/mcp`),
-  custom domain with an ACM certificate validated in Cloudflare (records added by the user),
-  default endpoint off; Fargate service in public subnets (no NAT) scaled 0..N on queue depth;
-  EventBridge Scheduler for the sweeps; least-privilege IAM roles. Check: publish the example
-  spec and run it with the stub model on AWS (like `make demo`) to `SUCCEEDED`; workers back to 0.
+- [x] `[infra]` compute: Lambdas (control plane alias with SnapStart, gateway), one HTTP API
+  (public routes: agents API, webhooks, Slack; IAM-authorized routes: `/internal/*`, `/mcp`) on
+  its default endpoint (ADR 0021, no custom domain); Fargate service in public subnets (no NAT)
+  scaled 0..N on queue depth; EventBridge Scheduler for the sweeps; least-privilege IAM roles.
+  Check: publish the example spec and run it with the stub model on AWS (like `make demo`) to
+  `SUCCEEDED`; workers back to 0.
 - [ ] `[control-plane]` tracing: OpenTelemetry spans, trace id passed to the run (queue message
   and run record; if a contract changes, list it under Cross-service changes), Lambda active
   tracing. Check: tests; spans in X-Ray for a stub run.
@@ -409,8 +413,10 @@ Work in this order:
 - [ ] `[infra]` protection: route throttling, a daily model spend alarm (cost per run as a metric,
   email above a limit), log retention. Check: a burst above the limit gets 429; the alarm fires
   on a test value.
-- [ ] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL and Slack's
-  Request URL moved to the domain (no tunnels); a planted duplicate in the sandbox is labeled
+- [ ] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL, its OAuth
+  callback URL and Slack's Request URL moved to the API's `execute-api` address (no tunnels;
+  `terraform output api_url`); `gateway_connectors = "github"` and `github_repos` in
+  `terraform.tfvars`; a planted duplicate in the sandbox is labeled
   and, after Approve in Slack, closed by `<app>[bot]` on AWS; its trace in X-Ray; a day later the
   project tag's cost shows no hourly charge. **M6 done.**
 
@@ -457,17 +463,6 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
-- **Control-plane table TTL on attribute `ttl`** (delivery claims expire after 7 days).
-  Declared in `control-plane/dynamodb/control-plane-ttl.json`. Must follow: `infra` (M6;
-  `local-stack` done). Until then items never expire; correctness does not depend on it (claims
-  check `ttl` themselves).
-
-- **Internal API and gateway auth is IAM (SigV4) through API Gateway** (ADR 0007). Declared in
-  `contracts/internal-api.openapi.yaml`. Code done: `worker` signs the control plane and (with
-  `TOOL_GATEWAY_SIGV4=true`) the gateway, `tool-gateway` signs the control plane
-  (`CONTROL_PLANE_SIGV4=true`). Must follow: `infra` (IAM authorization on `/internal/*` and
-  `/mcp`, `execute-api:Invoke` for the worker and gateway roles). Nothing checks signatures locally.
-
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
   `contracts/mcp-tool-call.schema.json` and `internal-api.openapi.yaml` (`run_token`). `worker`
@@ -480,6 +475,22 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · infra** — M6 task 8. `infra/envs/dev/` compute applied, 56 resources (`network.tf`,
+  `artifacts.tf`, `logs.tf`, `iam.tf`, `lambda.tf`, `api.tf`, `ecs.tf`, `scaling.tf`,
+  `scheduler.tf`); values in git-ignored `terraform.tfvars` (`.example` committed). The user chose
+  no custom domain (ADR 0021, Proposed): the default `execute-api` address, from
+  `terraform output api_url`. All 7 SSM secrets are set (tenant API key generated with
+  `put_secrets.py --generate`); worker image `838bc29` in ECR. `scripts/aws_demo.py` (like
+  `make demo`) passed: `SUCCEEDED` in 5 steps, 207 s from start (nearly all a worker starting from
+  0), workers back to 0 after 458 s, dead-letter queue empty. Cross-service entries for the
+  control-plane TTL (done in the data task) and the IAM routes removed. Next: `[control-plane]`
+  tracing. Gotchas: Lambda zips and the worker image must be built before `plan` (`filemd5` of
+  the zips); routes answer 404 for up to a minute after the API is created; secrets are read once
+  per Lambda instance and the 5-minute sweeps keep a control-plane instance warm, so a changed
+  secret may reach the control plane only after a new version is published; put secrets and push
+  the image before the full apply. When ADR 0021 is accepted, mark ADR 0007's status "custom
+  domain superseded by 0021".
 
 - **2026-11-19 · tool-gateway** — Follow-up to the worker's header change (ADR 0020).
   `app._run_token`: `X-Run-Token` decides alone when present (an empty or bad one is 401 even

@@ -1,0 +1,62 @@
+# The workers' network (ADR 0007): two public subnets with an internet gateway; tasks get a public
+# IP to reach SQS, DynamoDB, the API and model providers. No NAT gateway, no interface endpoints:
+# nothing here bills by the hour. Nothing accepts inbound traffic. The Lambdas run outside the VPC.
+
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.20.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags                 = { Name = local.name }
+}
+
+resource "aws_subnet" "public" {
+  count             = 2
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+  tags              = { Name = "${local.name}-public-${count.index}" }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = local.name }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "${local.name}-public" }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count          = 2
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+# The VPC's default security group allows traffic between its members; take every rule away.
+resource "aws_default_security_group" "main" {
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_security_group" "worker" {
+  name        = "${local.name}-worker"
+  description = "Worker tasks: outbound only"
+  vpc_id      = aws_vpc.main.id
+
+  egress {
+    description = "HTTPS to AWS APIs, the platform API and model providers"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}

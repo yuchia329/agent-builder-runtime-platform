@@ -10,7 +10,7 @@ flowchart LR
   team[Team] -->|publish spec| API
   gh[GitHub] -->|webhook| API
   slack[Slack] -->|approval click| API
-  API{{API Gateway<br/>custom domain}} --> CP
+  API{{API Gateway<br/>HTTP API}} --> CP
   CP[Control plane<br/>Java · Lambda] --> CPDB[(DynamoDB<br/>control-plane table)]
   CP -->|approval buttons| slack
   CP -->|enqueue run_id| Q[[SQS run queue]]
@@ -122,7 +122,7 @@ Boundaries the design depends on:
 | ---------------- | --------------------------------------------------------------------- |
 | Control plane    | Java 21, Spring Boot 4, Gradle, AWS SDK for Java v2 (plain DynamoDB client), `aws-serverless-java-container-springboot4`, Lambda SnapStart |
 | Control-plane DB | DynamoDB on-demand, own table (DynamoDB Local for dev)                |
-| API entry        | API Gateway HTTP API, custom domain (DNS on Cloudflare, ACM cert)     |
+| API entry        | API Gateway HTTP API, default `execute-api` endpoint (ADR 0021)       |
 | Queue            | Amazon SQS with a dead-letter queue (ElasticMQ locally)               |
 | Workers          | Python 3.12, uv, own agent loop; model adapters per protocol (OpenAI-compatible, Bedrock Converse) behind a router, ECS Fargate |
 | Run state        | DynamoDB (DynamoDB Local for dev)                                     |
@@ -522,8 +522,8 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Control-plane table | control plane                          | `STORE_BACKEND=dynamodb\|memory`, `CONTROL_PLANE_TABLE` |
 | SQS run queue       | control plane (send), worker (receive) | `QUEUE_BACKEND=sqs\|memory`, `RUN_QUEUE_URL`            |
 | Run-state table     | worker                                 | `STATE_BACKEND=dynamodb\|memory`, `STATE_TABLE`         |
-| Control plane URL   | worker, gateway                        | `CONTROL_PLANE_URL` (custom domain; SigV4-signed)       |
-| Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (custom domain); `TOOL_GATEWAY_SIGV4=true` signs requests (AWS; default false) |
+| Control plane URL   | worker, gateway                        | `CONTROL_PLANE_URL` (the API's URL on AWS; SigV4-signed) |
+| Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (the API's URL on AWS); `TOOL_GATEWAY_SIGV4=true` signs requests (AWS; default false) |
 | Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys) |
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
@@ -581,7 +581,7 @@ Goal: no hourly cost while idle ([ADR 0007](adr/0007-serverless-scale-to-zero-de
 ```
 AWS (one region)                                idle cost
 ├── API Gateway HTTP API                        $0    per request
-│   └── custom domain api.<domain>  ◄── CNAME in Cloudflare
+│   └── default endpoint <api-id>.execute-api.<region>.amazonaws.com
 ├── Lambda (not in a VPC)
 │   ├── control-plane   Java 21 + SnapStart     $0    per request
 │   └── tool-gateway    Python + Web Adapter    $0    per request
@@ -598,22 +598,44 @@ AWS (one region)                                idle cost
 └── ECR, CloudWatch logs and alarms, X-Ray      cents
 ```
 
-- **API entry:** one API Gateway HTTP API with a regional custom domain (for example
-  `api.<your-domain>`). The ACM certificate is validated with a DNS record in Cloudflare, and a
-  Cloudflare CNAME points at the API Gateway domain target (DNS only, or proxied with SSL mode
-  Full (strict)). The default `execute-api` endpoint is disabled. Route throttling is on.
-- **Control plane:** Lambda, Java 21 with SnapStart, 1769 MB, arm64, invoked through an alias of a
-  published version (SnapStart only applies to those; each publish waits about 85 s for the
-  snapshot). Code: the `lambdaZip` zip, handler `LambdaHandler::handleRequest`. EventBridge
-  Scheduler invokes the same function with `{"sweep": "all"}` every 5 minutes. Not in a VPC.
-- **Tool gateway:** Lambda, Python 3.12, arm64, with the Lambda Web Adapter layer (ADR 0019),
-  behind the same HTTP API. Not in a VPC.
-- **Workers:** one ECS Fargate service (linux/arm64 image from `worker/Dockerfile`, `make
-  worker-image`; ECR tag = git commit), scaled on SQS queue depth, 0 tasks when idle. Model API
+- **API entry:** one API Gateway HTTP API on its default `execute-api` endpoint, no custom domain
+  ([ADR 0021](adr/0021-default-api-endpoint-no-custom-domain.md)); the address stays the same
+  across deploys and is read from `terraform output api_url`. Stage `$default`, auto-deployed,
+  payload format 2.0. Routes:
+
+  | Route | Function | Authorization |
+  | --- | --- | --- |
+  | `ANY /agents`, `/agents/{proxy+}`, `/runs`, `/runs/{proxy+}` | control plane | none at the API; `X-Api-Key` in the app |
+  | `POST /triggers/github`, `POST /approvals/slack` | control plane | none at the API; webhook and Slack signatures in the app |
+  | `ANY /internal/{proxy+}` | control plane | IAM (SigV4): worker and gateway roles |
+  | `ANY /mcp` | tool gateway | IAM (SigV4): worker role; the gateway also checks the run token |
+  | `GET /oauth/{proxy+}` | tool gateway | none at the API; signed state in the app |
+
+  Access logs (14 days) record route, status, latency and caller, never headers, query strings
+  or bodies. Route throttling comes with the M6 protection task.
+- **Control plane:** Lambda, Java 21 with SnapStart, 1769 MB, arm64, invoked through the alias
+  `live` of a published version (SnapStart only applies to those; each publish waits about 85 s
+  for the snapshot). Code: the `lambdaZip` zip, uploaded through an S3 artifacts bucket (it is
+  close to Lambda's 50 MB direct-upload limit), handler `LambdaHandler::handleRequest`.
+  EventBridge Scheduler invokes the alias with `{"sweep": "all"}` every 5 minutes. Not in a VPC.
+- **Tool gateway:** Lambda, Python 3.12, 512 MB, arm64, with the Lambda Web Adapter layer (ADR
+  0019), behind the same HTTP API; zip through the same bucket. Not in a VPC.
+- **Workers:** one ECS Fargate service (0.5 vCPU, 1 GB, linux/arm64 image from
+  `worker/Dockerfile`, `make worker-image`; ECR tag = git commit), 0 tasks when idle. Model API
   keys reach the container through the task definition's `secrets` from SSM
   (`/agent-platform/dev/worker/model/<provider>/api-key` as `MODEL_<NAME>_API_KEY`). Public
-  subnets with a public IP, no NAT gateway. Scaling from 0 takes a minute or more; a Lambda
-  entrypoint can be added later if that is too slow.
+  subnets with a public IP, no NAT gateway; the security group allows only outbound 443. Step
+  scaling on two CloudWatch alarms: a message waiting in the run queue for one minute adds a task
+  (up to `worker_max_tasks`, 2 in dev; 2-minute cooldown), and five minutes with nothing waiting
+  or in flight sets the service to 0. Measured on dev (2026-11-19): a stub run after idle finished
+  207 s after it was started, nearly all of it a worker starting; the service was back at 0 tasks
+  458 s after the run. A Lambda entrypoint, or starting the service on enqueue, can be added if
+  scale-out is too slow.
+- **Network:** one VPC with two public subnets (two availability zones) and an internet gateway;
+  the default security group has no rules. Only the workers run in it.
+- **IAM:** one role per service, each allowed only what it calls (tables, queue, its own SSM path,
+  the KMS key, `execute-api:Invoke` on `/internal/*` and `/mcp`); the scheduler may invoke only
+  the control plane's alias.
 - **Data:** two DynamoDB tables (control plane, run state), on-demand capacity, built from the
   services' JSON definitions (`control-plane/dynamodb/`, `worker/dynamodb/`), names
   `agent-platform-dev-<table>`. The control-plane table has deletion protection and
@@ -628,7 +650,8 @@ AWS (one region)                                idle cost
   once, local state) holds the state bucket and the budgets ($10 a month on the `project` tag, $90
   for the account), so destroying an environment leaves the alerts on; `infra/envs/dev/` keeps its
   state in that bucket with Terraform's lock file. Every resource is tagged `project =
-  agent-platform`.
+  agent-platform`. Personal values (Slack channel, GitHub OAuth client id, worker image tag) are
+  in git-ignored `terraform.tfvars`.
 - **Not used:** load balancer, NAT gateway, interface VPC endpoints, RDS, RDS Proxy, always-on EC2.
 - **Model providers:** billed per token, nothing when idle. Non-AWS providers (MiniMax, OpenAI,
   OpenRouter) are reached over the internet from the public subnet; their API keys are in SSM

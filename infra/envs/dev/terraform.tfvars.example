@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. The repo is public: these stay local.
+slack_approval_channel = "C0123456789"         # the channel id from Slack's channel details
+github_oauth_client_id = "Iv1.0000000000000000" # the GitHub App's Client ID
+worker_image_tag       = "abc1234"              # the commit `make worker-image` built and you pushed
+
+# Go live (specs task): real GitHub tools in the sandbox repo.
+# gateway_connectors = "github"
+# github_repos       = "owner/repo"

@@ -1,6 +1,8 @@
-# The dev environment. Data (M6 task 3): DynamoDB tables (dynamodb.tf), the run queue (sqs.tf), the
-# worker image repository (ecr.tf), the run-token signing key (kms.tf) and secret parameters
-# (ssm.tf). Compute (Lambdas, HTTP API, Fargate, IAM) comes next (docs/roadmap.md, M6 tasks).
+# The dev environment. Data: DynamoDB tables (dynamodb.tf), the run queue (sqs.tf), the worker
+# image repository (ecr.tf), the run-token signing key (kms.tf), secret parameters (ssm.tf).
+# Compute: Lambda packages (artifacts.tf), the two functions (lambda.tf), the HTTP API (api.tf),
+# the workers' network (network.tf), Fargate (ecs.tf, scaling.tf), sweeps (scheduler.tf), roles
+# (iam.tf), log groups (logs.tf). Personal values in terraform.tfvars (see the .example).
 
 locals {
   environment = "dev"

@@ -25,6 +25,24 @@ output "run_token_key_alias" {
   value       = aws_kms_alias.run_token.name
 }
 
+output "api_url" {
+  description = "The platform's address: agents API, webhooks (/triggers/github), Slack (/approvals/slack), owner login (/oauth/github/...)."
+  value       = aws_apigatewayv2_api.main.api_endpoint
+}
+
+output "worker_service" {
+  description = "ECS cluster and service of the workers (desired count is 0 while idle)."
+  value       = { cluster = aws_ecs_cluster.main.name, service = aws_ecs_service.worker.name }
+}
+
+output "functions" {
+  description = "Lambda function names (control plane is called through its alias live)."
+  value = {
+    control_plane = aws_lambda_function.control_plane.function_name
+    gateway       = aws_lambda_function.gateway.function_name
+  }
+}
+
 output "secret_parameters" {
   description = "SSM parameter name for each secret env var (used by infra/scripts/put_secrets.py)."
   value       = { for k, p in aws_ssm_parameter.secret : local.secrets[k] => p.name }

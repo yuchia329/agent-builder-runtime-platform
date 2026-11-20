@@ -33,7 +33,7 @@ info:
     All requests are signed with AWS SigV4; API Gateway checks the signature (ADR 0007).
 servers:
   - url: /
-    description: Same host as the public API (API Gateway custom domain, or localhost:8080 locally)
+    description: Same host as the public API (the API Gateway endpoint on AWS, or localhost:8080 locally)
 security:
   - sigv4: []
 tags:

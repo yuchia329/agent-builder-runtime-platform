@@ -40,3 +40,6 @@ backend.hcl
 
 # Eval run details (evals suite); baselines are committed
 evals/results/
+
+# Load test results (loadtest driver); the report is committed
+loadtest/results/

@@ -613,7 +613,8 @@ logged and never fails the run.
   the committed baseline failing, or the pass rate dropping more than 5 points. A CI gate on pull
   requests comes later.
 - **Load and chaos** (`loadtest/`, M7, on AWS): the stub model returns scripted tool calls with
-  fixed latency, tools through the gateway's fake connector. A Python driver starts 100, then
+  fixed latency, tools through the gateway's fake connector. A Python driver (its own agent
+  `load-stub`, trigger `manual.load.run`; refuses unless load-test mode is on) starts 100, then
   1,000 runs and measures queue-to-start p50/p95 (the run's `created_at` against its first
   "run.attempt" span in `aws/spans`), runs per minute, worker CPU and memory. Stopping random
   worker tasks mid-run counts lost runs and duplicate side effects (same run, step and arguments
@@ -683,7 +684,10 @@ AWS (one region)                                idle cost
   in dev; 2-minute cooldown; [ADR 0024](adr/0024-load-test-mode-and-backlog-sized-scale-out.md)),
   and five minutes with nothing waiting or in flight sets the service to 0. Measured on dev (2026-11-19): a stub run after idle finished
   207 s after it was started, nearly all of it a worker starting; the service was back at 0 tasks
-  458 s after the run. A Lambda entrypoint, or starting the service on enqueue, can be added if
+  458 s after the run. An idle queue makes scale-out slower: SQS stops sending metrics for a
+  queue inactive over six hours and resumes them up to 15 minutes after it wakes, so the alarm
+  fired about 6 minutes after 100 runs were queued on 2026-11-20 (tasks running 20 s later);
+  with workers up, a run waited 0.1 s (p50) for a worker (M7 load driver). A Lambda entrypoint, or starting the service on enqueue, can be added if
   scale-out is too slow. The task definition sets `TRACING_EXPORTER=xray`: workers send spans
   straight to the X-Ray OTLP endpoint (task role: `xray:PutTraceSegments`, `xray:PutSpans`), and
   `METRICS_NAMESPACE=AgentPlatform/dev` for the model spend metric (Observability).

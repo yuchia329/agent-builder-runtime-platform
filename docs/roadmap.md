@@ -42,6 +42,9 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
+**M7 (scale proof) in progress:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
+done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
+queue's metrics) and warm (start p50 0.1 s, 347 runs per minute).
 
 ## Approach
 
@@ -475,9 +478,9 @@ planning (2026-11-20):
   flood of HTTP requests against one endpoint.
 - Sizes in steps: 100 runs, then 1,000; each paid test only after the user says go, with an
   estimate. Budget for all of M7: $5 (estimated under $1 per 1,000-run test).
-- Limits found (2026-11-20): Lambda concurrent executions 10 (increase to 1,000 requested
-  2026-11-20, `PENDING`; check with `aws service-quotas get-service-quota --service-code lambda
-  --quota-code L-B99A9384`), Fargate 64 vCPU (about 128 workers at 0.5 vCPU), API throttle 5 per
+- Limits found (2026-11-20): Lambda concurrent executions 10 (raised to 1,000 on 2026-11-20;
+  check with `aws service-quotas get-service-quota --service-code lambda --quota-code
+  L-B99A9384`), Fargate 64 vCPU (about 128 workers at 0.5 vCPU), API throttle 5 per
   second per route, `worker_max_tasks` 2, and scale-out of one task per alarm with a 2-minute
   cooldown (20 tasks would take about 40 minutes).
 - Queue-to-start without a contract change: the run's `created_at` (API) against the start of
@@ -507,11 +510,27 @@ Work in this order:
   default 0, empty = unset), `StubModel(latency_seconds, sleep)`; 366 tests pass. Image pushed
   at the commit (tag in the handoff note); not deployed: the load-mode task sets the tag and the
   value (`worker_model_env`).
-- [ ] `[loadtest]` driver: `loadtest/` (uv project, `AGENTS.md`): publish the load agent, start N
+- [x] `[loadtest]` driver: `loadtest/` (uv project, `AGENTS.md`): publish the load agent, start N
   runs at a set rate, poll until each is final; read first "run.attempt" start times from
   `aws/spans`, worker CPU and memory from ECS metrics; print queue-to-start p50 and p95, runs per
   minute, failures, CPU and memory. Check: 100 runs all `SUCCEEDED`, numbers printed (cost
-  estimate first).
+  estimate first). Done: `uv run loadtest --runs N --rate R` publishes `load-stub` (trigger
+  `manual.load.run`), refuses outside load mode; 44 unit tests. Two 100-run tests in load mode,
+  both 100/100 `SUCCEEDED`, 0 redelivered, 0 retried requests. From idle (queue quiet for hours,
+  workers at 0): queue to start p50 377 s, p95 383 s; created to final p50 384 s; 10 workers;
+  about 230 runs per minute once workers were up; CPU avg 10% max 32%, memory 8-9%. Warm (workers
+  up): queue to start p50 0.1 s, p95 1.2 s; created to final p50 6.7 s, p95 7.8 s; 347 runs per
+  minute; 15 workers; CPU avg 3% max 15%, memory 9%. The idle wait is SQS, not Fargate: a queue
+  inactive for over six hours stops sending metrics, and they come back up to 15 minutes after it
+  wakes (AWS docs), so the scale-out alarm fired about 6 minutes after the runs were queued;
+  tasks were running about 20 s later.
+- [ ] `[infra]` scale-out from an idle queue: an idle queue's metrics stop after six hours and
+  come back up to 15 minutes after it wakes, so the first run after a quiet period waits for the
+  alarm (measured about 6 minutes; also the first real issue after a quiet day). Options: keep the
+  queue active (an EventBridge Scheduler call to `sqs:GetQueueAttributes` every few hours, about
+  free) or start a worker on enqueue when the service is at 0 (control plane, ADR 0007 mentions
+  it; a new ADR either way). Check: a run after more than six hours idle starts within about 3
+  minutes; `loadtest` from idle shows it.
 - [ ] `[loadtest]` chaos: stop random worker tasks while runs are in progress (`ecs stop-task`);
   count lost runs (not final, or `FAILED` from the stop) and duplicate side effects from the
   gateway access log. Check: at 100 runs, 0 lost and 0 duplicates.
@@ -569,6 +588,20 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · loadtest** — M7 task 3 (driver). New `loadtest/` uv project: `cli.py` (args,
+  report, `results/<time>-<runs>.json`, git-ignored), `driver.py` (start at a fixed rate, poll
+  until final), `api.py` (public API, retries 429/502/503/504 and counts them), `aws.py` (load-mode
+  check from `terraform output`, SSM tenant key, one Logs Insights query on `aws/spans` for each
+  run's first "run.attempt", ECS CPU and memory with a wait for CloudWatch's lag, task samples),
+  `stats.py`; 44 tests, no AWS. Lambda quota now 1,000. Two 100-run tests in load mode, both all
+  `SUCCEEDED` (numbers in the task); load mode off again, `plan` clean, gateway `github`. New
+  `[infra]` task: scale-out from an idle queue (SQS stops metrics after six hours idle; about 6
+  minutes to the first worker). Next: that task or `[loadtest]` chaos. Gotchas: the second test's
+  results file was not written (datetime in JSON, fixed after, with a test; its numbers are in
+  the task); `wait_for_spans` and the metrics wait add up to about 5 minutes after the runs end;
+  a test right after another finds workers up (warm numbers), wait about 10 minutes for 0
+  workers, and more than six hours of quiet for the cold-queue case.
 
 - **2026-11-20 · infra** — M7 task 1 (load-test mode, ADR 0024). `load_test` switch with
   `load_test_settings` (throttle, workers, gateway `fake`, stub latency via

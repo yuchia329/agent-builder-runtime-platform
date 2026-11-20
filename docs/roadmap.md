@@ -37,8 +37,8 @@ made, not uploaded; its Lambda zip now carries bytecode, cold start about 2.0 s 
 three deployed, and a stub run on AWS shows its worker spans in X-Ray under the run's `trace_id`
 (`aws_demo.py` checks it); protection applied (ADR 0023): routes throttled (5 per second, burst
 10; best-effort, a test stream got 429s), a model spend alarm emails above 1 USD in 24 hours (fired
-on a test value; the worker's `ModelCostUsd` line is still to come), every log group 14 days;
-next `[worker]` spend metric, then `[specs]` go live.
+on a test value), every log group 14 days; the worker writes `ModelCostUsd` per model call
+(deployed, seen in CloudWatch); next `[specs]` go live.
 
 ## Approach
 
@@ -441,13 +441,14 @@ Work in this order:
   `ModelCostUsd` over the last 24 hours, SNS email, fired on a 2 USD test value; metric filters
   cannot read the span's `cost.usd`, so the worker writes the metric (next task);
   `/aws/application-signals/data` imported with 14 days.
-- [ ] `[worker]` spend metric (ADR 0023): one CloudWatch embedded metric format line per model
+- [x] `[worker]` spend metric (ADR 0023): one CloudWatch embedded metric format line per model
   call, namespace `METRICS_NAMESPACE` (unset = none), metric `ModelCostUsd` in US dollars, no
   dimensions; push a new image tag and deploy it (`worker_image_tag`). Check: tests; a real
   MiniMax call on AWS (or the stub with a nonzero test price) shows the value in CloudWatch
   (`aws cloudwatch get-metric-statistics`). Code done (`ports/metrics.py`, `EmfMetrics`; the
-  stub writes 0, so a stub run shows samples); 355 tests pass. AWS check pending: image at the
-  commit, deploy, `aws_demo.py`.
+  stub writes 0, so a stub run shows samples); 355 tests pass. Deployed as image `05cfaf3`:
+  the `aws_demo.py` stub run gave 3 samples (Sum 0) in `AgentPlatform/dev` `ModelCostUsd`, no
+  dimensions.
 - [ ] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL, its OAuth
   callback URL and Slack's Request URL moved to the API's `execute-api` address (no tunnels;
   `terraform output api_url`); `gateway_connectors = "github"` and `github_repos` in
@@ -511,6 +512,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · worker** — M6 spend metric (ADR 0023). New `Metrics` port (`model_cost(usd)`,
+  never raises), `NoopMetrics` default, `EmfMetrics` (one CloudWatch EMF line on stdout per
+  model call: `METRICS_NAMESPACE`, `ModelCostUsd`, `Dimensions: [[]]`, value only; lock for
+  threads; failed write logged by type). `handle_run` reports every call, 0 included. Config
+  checks the namespace; wiring picks the adapter. 355 tests pass (1 live skipped). Image
+  `05cfaf3` checked, pushed and applied (`worker_image_tag`); `aws_demo.py`: run `SUCCEEDED`
+  (217 s waiting for a worker), 11 worker spans, and 3 `ModelCostUsd` samples (Sum 0) with no
+  dimensions. Cross-service entry "Model spend metric" removed. Next: `[specs]` go live (a real
+  MiniMax run gives the first nonzero value). Gotchas: the alarm stays in ALARM from the 2 USD
+  test until about 05:59 UTC on 2026-11-21; `--no-scale-in` was used, so the workers return to 0
+  on their own (about 5-8 minutes).
 
 - **2026-11-20 · infra** — M6 task 13 (protection, ADR 0023). API stage default route throttling
   (`api_throttle_rate` 5, `api_throttle_burst` 10). New `alarms.tf`: SNS topic

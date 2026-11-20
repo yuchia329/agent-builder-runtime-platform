@@ -35,6 +35,7 @@ Rules:
 | [0020](0020-run-token-in-its-own-header.md) | The run token travels in X-Run-Token; Authorization belongs to SigV4 | Proposed |
 | [0021](0021-default-api-endpoint-no-custom-domain.md) | The default execute-api endpoint, no custom domain | Proposed |
 | [0022](0022-run-traces-start-in-the-control-plane.md) | Run traces start in the control plane; Lambda uploads no spans | Proposed |
+| [0023](0023-route-throttling-and-model-spend-alarm.md) | Route throttling at the API, a model spend alarm on a metric the worker writes | Proposed |
 
 ## Template
 

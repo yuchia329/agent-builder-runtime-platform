@@ -27,6 +27,16 @@ resource "aws_apigatewayv2_stage" "default" {
   name        = "$default"
   auto_deploy = true
 
+  # Each route gets its own token bucket (HTTP APIs apply the default to every route separately).
+  # Above it API Gateway answers 429 before any Lambda runs. Kept under the account's Lambda
+  # concurrency (10 in dev), so a burst gets a clean 429 rather than Lambda throttling errors.
+  # Per API, not per caller: a flood also delays Slack clicks and GitHub webhooks (GitHub does not
+  # retry a 429; redeliver from the App's settings).
+  default_route_settings {
+    throttling_rate_limit  = var.api_throttle_rate
+    throttling_burst_limit = var.api_throttle_burst
+  }
+
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api.arn
     # No headers, query strings or bodies: tokens, signatures and login codes never reach the log.

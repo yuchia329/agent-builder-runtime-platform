@@ -47,3 +47,12 @@ output "secret_parameters" {
   description = "SSM parameter name for each secret env var (used by infra/scripts/put_secrets.py)."
   value       = { for k, p in aws_ssm_parameter.secret : local.secrets[k] => p.name }
 }
+
+output "model_spend_alarm" {
+  description = "Alarm on the day's model spend, and the metric the worker writes (namespace, name)."
+  value = {
+    alarm     = aws_cloudwatch_metric_alarm.model_spend.alarm_name
+    namespace = local.metrics_namespace
+    metric    = aws_cloudwatch_metric_alarm.model_spend.metric_name
+  }
+}

@@ -101,3 +101,34 @@ variable "log_retention_days" {
   type        = number
   default     = 14
 }
+
+# --- Protection (M6 task 13).
+
+variable "alert_email" {
+  description = "Address that receives alarm emails (SNS; confirm the subscription once). Set in terraform.tfvars (git-ignored)."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be an email address."
+  }
+}
+
+variable "model_spend_alarm_usd" {
+  description = "Email when model spend in the last 24 hours goes above this many US dollars."
+  type        = number
+  default     = 1
+}
+
+variable "api_throttle_rate" {
+  description = "Steady requests per second each API route accepts before answering 429."
+  type        = number
+  default     = 5
+}
+
+variable "api_throttle_burst" {
+  description = "Requests each API route accepts at once before answering 429."
+  type        = number
+  default     = 10
+}

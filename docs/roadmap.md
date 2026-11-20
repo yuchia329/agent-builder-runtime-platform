@@ -35,7 +35,10 @@ from Lambda); the worker continues it (span per attempt, model call, tool call, 
 can upload straight to X-Ray (`TRACING_EXPORTER=xray`, checked live); the gateway joins it (spans
 made, not uploaded; its Lambda zip now carries bytecode, cold start about 2.0 s from 3.4 s); all
 three deployed, and a stub run on AWS shows its worker spans in X-Ray under the run's `trace_id`
-(`aws_demo.py` checks it); next `[infra]` protection.
+(`aws_demo.py` checks it); protection applied (ADR 0023): routes throttled (5 per second, burst
+10; best-effort, a test stream got 429s), a model spend alarm emails above 1 USD in 24 hours (fired
+on a test value; the worker's `ModelCostUsd` line is still to come), every log group 14 days;
+next `[worker]` spend metric, then `[specs]` go live.
 
 ## Approach
 
@@ -431,9 +434,18 @@ Work in this order:
   exporter that keeps responses fast). Check: tests; the trace id reaches the gateway. Done
   without upload; the access log carries `trace_id`. Lambda trial: OpenTelemetry raised the cold
   start from 3.4 s to about 3.7 s, so the zip now carries precompiled bytecode: about 2.0 s.
-- [ ] `[infra]` protection: route throttling, a daily model spend alarm (cost per run as a metric,
+- [x] `[infra]` protection: route throttling, a daily model spend alarm (cost per run as a metric,
   email above a limit), log retention. Check: a burst above the limit gets 429; the alarm fires
-  on a test value.
+  on a test value. Done (ADR 0023): stage default 5 per second, burst 10 (`throttle_check.py`: 6
+  of 80 got 429; unsigned IAM requests are not counted); alarm on `AgentPlatform/dev`
+  `ModelCostUsd` over the last 24 hours, SNS email, fired on a 2 USD test value; metric filters
+  cannot read the span's `cost.usd`, so the worker writes the metric (next task);
+  `/aws/application-signals/data` imported with 14 days.
+- [ ] `[worker]` spend metric (ADR 0023): one CloudWatch embedded metric format line per model
+  call, namespace `METRICS_NAMESPACE` (unset = none), metric `ModelCostUsd` in US dollars, no
+  dimensions; push a new image tag and deploy it (`worker_image_tag`). Check: tests; a real
+  MiniMax call on AWS (or the stub with a nonzero test price) shows the value in CloudWatch
+  (`aws cloudwatch get-metric-statistics`).
 - [ ] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL, its OAuth
   callback URL and Slack's Request URL moved to the API's `execute-api` address (no tunnels;
   `terraform output api_url`); `gateway_connectors = "github"` and `github_repos` in
@@ -461,7 +473,8 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 - Nothing billed per hour (ADR 0007): no NAT gateway, load balancer, RDS, interface VPC endpoints
   or always-on instance. Public subnets for Fargate tasks; Lambdas outside the VPC.
 - Before sharing the URL with others: API Gateway route throttling, per-run budgets enforced, and a
-  daily model spend alarm.
+  daily model spend alarm (all three in place once the worker writes its spend metric, ADR 0023).
+  Throttling is soft: the account's 10 concurrent Lambdas are the real ceiling.
 - Use the cheapest capable model for evals; use recorded fixtures so evals never call real
   APIs.
 - Workers scale to 0 when idle; run load tests only against the stub model.
@@ -491,11 +504,31 @@ service has followed.
   done: reads `X-Run-Token` (alone when present), Bearer only as a fallback. Must follow, in any
   later session: `worker` drops the Bearer copy (`tools_mcp._run`), then `tool-gateway` drops the
   fallback (`app._run_token`) and its test; then this entry goes.
+- **Model spend metric** (2026-11-20, ADR 0023; no `contracts/` file, the shared name is in
+  `docs/architecture.md` → Observability). `infra` done: task definition sets
+  `METRICS_NAMESPACE=AgentPlatform/dev`; alarm `agent-platform-dev-model-spend` on
+  `ModelCostUsd`. Must follow: `worker` writes one EMF line per model call (next roadmap task);
+  then this entry goes.
 
 ## Handoff notes
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · infra** — M6 task 13 (protection, ADR 0023). API stage default route throttling
+  (`api_throttle_rate` 5, `api_throttle_burst` 10). New `alarms.tf`: SNS topic
+  `agent-platform-dev-alerts` with an email subscription (`alert_email` in git-ignored tfvars,
+  confirmed) and alarm `agent-platform-dev-model-spend` (`AgentPlatform/dev` `ModelCostUsd`, Sum
+  over 86400 s > `model_spend_alarm_usd` 1, missing = OK, emails on ALARM and OK). Worker task
+  definition gains `METRICS_NAMESPACE`. `/aws/application-signals/data` imported (was never
+  expiring): 14 days, `skip_destroy`. New `scripts/throttle_check.py`: 6 of 80 requests got 429.
+  `put-metric-data` 2 USD at 05:59 UTC fired the alarm about 70 s later; email received. `plan`
+  shows no changes. Next: `[worker]` spend metric (new task, added before go live). Gotchas:
+  throttling is best-effort (about 23 per second admitted against a limit of 5), and a burst of
+  30 at once got no 429 but 503s from the account's 10-Lambda limit; unsigned requests to IAM
+  routes get 403 and are not counted, so they cannot test it; a one-day alarm period is the last
+  24 hours, so the test value keeps the alarm in ALARM until about 05:59 UTC on 2026-11-21 (then
+  an OK email); metric filter patterns cannot select keys with dots (span attributes).
 
 - **2026-11-19 · infra** — M6 task 12 (worker traces). Worker task definition
   `TRACING_EXPORTER=xray`; task role statement `Traces` (`xray:PutTraceSegments`, `xray:PutSpans`

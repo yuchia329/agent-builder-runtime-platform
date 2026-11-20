@@ -532,6 +532,7 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys) |
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
+| Metrics             | worker                                 | `METRICS_NAMESPACE` (CloudWatch namespace of the `ModelCostUsd` EMF line; unset = none; `AgentPlatform/dev` on AWS; ADR 0023) |
 | Token store         | gateway                                | `TOKEN_STORE=ssm\|memory`; ssm: `TOKEN_STORE_SSM_PATH` (`/agent-platform/dev/gateway/tokens`) |
 | Tracing             | control plane, worker, gateway         | `TRACING_EXPORTER` (default none: spans and trace context are made, nothing is uploaded; ADR 0022). Control plane and gateway: `none\|logging` (none on Lambda). Worker: `none\|logging\|xray`; `xray` uploads to the X-Ray OTLP endpoint with SigV4 in `AWS_REGION` (Fargate) |
 | Gateway on AWS      | gateway                                | `RUN_TOKEN_KMS_KEY_ID` (instead of `RUN_TOKEN_PUBLIC_KEY`), `SECRETS_SSM_PATH` (`/agent-platform/dev/gateway`: `GITHUB_OAUTH_CLIENT_SECRET`, `OAUTH_STATE_SECRET`), `CONTROL_PLANE_SIGV4=true` with `AWS_REGION`; Lambda: `AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap`, `AWS_LWA_READINESS_CHECK_PATH=/health` |
@@ -583,6 +584,13 @@ One trace per run ([ADR 0022](adr/0022-run-traces-start-in-the-control-plane.md)
   an upload would be one more HTTPS call before every response, since Lambda freezes the process
   after it): the worker's "tool.call" span times each call, and the access log's `trace_id` links
   the gateway's lines to the trace.
+
+Metrics ([ADR 0023](adr/0023-route-throttling-and-model-spend-alarm.md)): the worker writes the
+cost of every model call (US dollars, from `core/models.py` prices) as a CloudWatch embedded
+metric format line on stdout: namespace `METRICS_NAMESPACE`, metric `ModelCostUsd`, no
+dimensions (nothing written when unset). The `awslogs` driver ships it and CloudWatch extracts the
+metric; the model spend alarm (Deployment) sums it. Not built yet in the worker (roadmap,
+Cross-service changes).
 
 ## Testing
 
@@ -645,7 +653,12 @@ AWS (one region)                                idle cost
   | `GET /oauth/{proxy+}` | tool gateway | none at the API; signed state in the app |
 
   Access logs (14 days) record route, status, latency and caller, never headers, query strings
-  or bodies. Route throttling comes with the M6 protection task.
+  or bodies. Route throttling ([ADR 0023](adr/0023-route-throttling-and-model-spend-alarm.md)):
+  the stage gives every route its own limit, 5 requests per second with bursts of 10
+  (`api_throttle_rate`, `api_throttle_burst`), answered 429 before any Lambda runs. It is
+  best-effort (measured: about 23 per second admitted at 25 sent), and requests refused by IAM
+  are not counted; the hard ceiling is the account's 10 concurrent Lambda executions (503 above
+  it).
 - **Control plane:** Lambda, Java 21 with SnapStart, 1769 MB, arm64, invoked through the alias
   `live` of a published version (SnapStart only applies to those; each publish waits about 85 s
   for the snapshot). Code: the `lambdaZip` zip, uploaded through an S3 artifacts bucket (it is
@@ -664,11 +677,21 @@ AWS (one region)                                idle cost
   207 s after it was started, nearly all of it a worker starting; the service was back at 0 tasks
   458 s after the run. A Lambda entrypoint, or starting the service on enqueue, can be added if
   scale-out is too slow. The task definition sets `TRACING_EXPORTER=xray`: workers send spans
-  straight to the X-Ray OTLP endpoint (task role: `xray:PutTraceSegments`, `xray:PutSpans`).
+  straight to the X-Ray OTLP endpoint (task role: `xray:PutTraceSegments`, `xray:PutSpans`), and
+  `METRICS_NAMESPACE=AgentPlatform/dev` for the model spend metric (Observability).
 - **Traces:** X-Ray with Transaction Search, an account setting turned on once by hand (CloudWatch
   console → X-Ray → Transaction Search). It made the `aws/spans` log group, which Terraform took
   over (import) for its retention (14 days) and keeps on `destroy` (`skip_destroy`). Only the
   workers upload; the Lambdas send nothing and have active tracing off (ADR 0022).
+- **Alerts** (ADR 0023): SNS topic `agent-platform-dev-alerts` emails `alert_email`
+  (git-ignored tfvars; the subscription is confirmed once). The alarm
+  `agent-platform-dev-model-spend` fires when `AgentPlatform/dev` `ModelCostUsd` sums above
+  `model_spend_alarm_usd` (1 USD) over the last 24 hours (a one-day period ends at each
+  evaluation, not at midnight), and emails again on OK. It is an email, not a stop: per-run
+  budgets cap each run; stopping everything is setting the worker service to 0. AWS's own bill
+  has the budgets in `bootstrap/`.
+- **Logs:** every log group keeps 14 days (`log_retention_days`), including the two Transaction
+  Search made (`aws/spans`, `/aws/application-signals/data`), imported with `skip_destroy`.
 - **Network:** one VPC with two public subnets (two availability zones) and an internet gateway;
   the default security group has no rules. Only the workers run in it.
 - **IAM:** one role per service, each allowed only what it calls (tables, queue, its own SSM path,

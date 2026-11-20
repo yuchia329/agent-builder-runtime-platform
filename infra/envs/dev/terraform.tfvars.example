@@ -2,6 +2,7 @@
 slack_approval_channel = "C0123456789"         # the channel id from Slack's channel details
 github_oauth_client_id = "Iv1.0000000000000000" # the GitHub App's Client ID
 worker_image_tag       = "abc1234"              # the commit `make worker-image` built and you pushed
+alert_email            = "you@example.com"      # alarm emails (model spend); confirm SNS's email once
 
 # Go live (specs task): real GitHub tools in the sandbox repo.
 # gateway_connectors = "github"

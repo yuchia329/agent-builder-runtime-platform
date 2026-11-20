@@ -33,3 +33,16 @@ resource "aws_cloudwatch_log_group" "spans" {
   retention_in_days = var.log_retention_days
   skip_destroy      = true
 }
+
+# Application Signals made this group with Transaction Search, with no retention (logs kept
+# forever). Taken over like aws/spans: 14 days, kept on destroy.
+import {
+  to = aws_cloudwatch_log_group.application_signals
+  id = "/aws/application-signals/data"
+}
+
+resource "aws_cloudwatch_log_group" "application_signals" {
+  name              = "/aws/application-signals/data"
+  retention_in_days = var.log_retention_days
+  skip_destroy      = true
+}

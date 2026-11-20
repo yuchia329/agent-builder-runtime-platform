@@ -88,7 +88,47 @@ within `APPROVAL_TIMEOUT_HOURS` (72) ends it with `approval_expired`.
    seconds for search to index it, start a run (step 4 above), click in Slack, and check the issue
    on GitHub (`gh issue view <n> --json state,stateReason`).
 
+## Run issue-triage on AWS
+
+The same run on the dev deployment (`infra/`): no tunnels, no local stack. Measured
+(2026-11-20): a planted duplicate was labeled, approved in Slack and closed by `<app>[bot]` in
+4.5 minutes, nearly 4 of them a worker starting from 0; 16 steps, $0.0076.
+
+1. Once: the App credential into SSM (`cd tool-gateway && uv run python
+   scripts/put_app_credential.py`, from `.env`; `--status` to check), and in the git-ignored
+   `infra/envs/dev/terraform.tfvars`: `gateway_connectors = "github"`, `github_repos =
+   "<owner>/<repo>"`; then `terraform -chdir=infra/envs/dev apply`.
+2. Once: point the outside services at the API (`terraform -chdir=infra/envs/dev output -raw
+   api_url`, shown as `<api>`):
+   - GitHub App → General: Webhook **Active**, URL `<api>/triggers/github`, Secret = the
+     `GITHUB_WEBHOOK_SECRET` that is in SSM; a Redirect URI `<api>/oauth/github/callback` next
+     to the localhost one. Permissions & events → Subscribe to events: **Issues** (the list
+     appears only while the webhook is active).
+   - Slack app → Interactivity & Shortcuts → Request URL `<api>/approvals/slack`.
+3. Publish the spec on AWS (the tenant key is in SSM, not `.env`: `infra/scripts/put_secrets.py`
+   generated it): `POST <api>/agents` (409 if it exists), then `POST
+   <api>/agents/issue-triage/versions` with `specs/issue-triage.yaml`, both with `X-Api-Key`.
+4. Open a new issue in the sandbox that restates an open one in other words. The webhook starts
+   the run; after the worker starts (about 4 minutes from 0) the Approve / Reject message
+   appears in Slack.
+5. Check: `GET <api>/runs/<run_id>` (the run id is in the control plane log line
+   `GitHub delivery ... (github.issue.opened): started 1 run(s) [...]`, or in the delivery's
+   response under App → Advanced → Recent Deliveries); the issue on GitHub; the trace in
+   `aws/spans` by `trace_id`; `ModelCostUsd` in CloudWatch (`worker/AGENTS.md`).
+
+Back to local development: point the Webhook URL and Slack's Request URL at smee and the tunnel
+again (the AWS ones can be set back later; the Redirect URIs can stay).
+
 ## Gotchas
+
+- While the AWS gateway runs `CONNECTORS=github`, do not run `infra/scripts/aws_demo.py`: it
+  publishes the stub spec as `issue-triage`, so the next webhook would run the stub, and the
+  stub's tool calls would reach real GitHub. To use it, set `gateway_connectors = "fake"`, apply,
+  run it, then set `github` back and publish this spec again.
+- Only `issues.opened` starts a run: closing and reopening an issue sends `issue.closed` and
+  `issue.reopened`, which start none. Plant a new issue each time.
+- The first delivery after turning the webhook on is GitHub's ping (answered `{"runs":[]}`);
+  accepting changed App permissions sends `installation.new_permissions_accepted` (no run).
 
 - `make demo` republishes `issue-triage` with the stub spec and needs the fake connector; publish
   this one again afterwards.

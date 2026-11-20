@@ -12,6 +12,7 @@ Real agent specs (real model, real tools). Each must validate against
 | Score a spec (evals) | `make eval SPEC=<name>` from the repo root (about $0.40 for issue-triage, $0.02 for needs-info); `make eval-baseline SPEC=<name>` after an accepted change |
 | Publish and run for real | steps in `README.md` (`make up && CONNECTORS=github docker compose up -d --wait tool-gateway`; MiniMax, `GITHUB_REPOS` and `GITHUB_APP_*` in `.env`) |
 | Approve in Slack | `README.md` → Approve a duplicate close in Slack (Slack settings in `.env`, a tunnel to port 8080) |
+| Run on AWS (dev) | `README.md` → Run issue-triage on AWS (App credential in SSM, `gateway_connectors = "github"`, App webhook and Slack Request URL on the API, publish with the SSM tenant key) |
 
 ## Conventions
 

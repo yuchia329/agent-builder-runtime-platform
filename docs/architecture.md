@@ -667,7 +667,10 @@ AWS (one region)                                idle cost
   close to Lambda's 50 MB direct-upload limit), handler `LambdaHandler::handleRequest`.
   EventBridge Scheduler invokes the alias with `{"sweep": "all"}` every 5 minutes. Not in a VPC.
 - **Tool gateway:** Lambda, Python 3.12, 512 MB, arm64, with the Lambda Web Adapter layer (ADR
-  0019), behind the same HTTP API; zip through the same bucket. Not in a VPC.
+  0019), behind the same HTTP API; zip through the same bucket. Not in a VPC. Connectors from
+  `gateway_connectors` (`fake` for stub checks, `github` live, with `github_repos`); the GitHub
+  App credential is in the SSM `TokenStore`, written once with `put_app_credential.py`. Live, the
+  GitHub App's webhook and the Slack app's Request URL point at the API.
 - **Workers:** one ECS Fargate service (0.5 vCPU, 1 GB, linux/arm64 image from
   `worker/Dockerfile`, `make worker-image`; ECR tag = git commit), 0 tasks when idle. Model API
   keys reach the container through the task definition's `secrets` from SSM

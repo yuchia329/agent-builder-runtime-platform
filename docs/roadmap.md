@@ -38,7 +38,10 @@ three deployed, and a stub run on AWS shows its worker spans in X-Ray under the 
 (`aws_demo.py` checks it); protection applied (ADR 0023): routes throttled (5 per second, burst
 10; best-effort, a test stream got 429s), a model spend alarm emails above 1 USD in 24 hours (fired
 on a test value), every log group 14 days; the worker writes `ModelCostUsd` per model call
-(deployed, seen in CloudWatch); next `[specs]` go live.
+(deployed, seen in CloudWatch). **Live on AWS (2026-11-20):** a planted duplicate in the sandbox
+started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
+`<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
+project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
 
 ## Approach
 
@@ -449,12 +452,20 @@ Work in this order:
   stub writes 0, so a stub run shows samples); 355 tests pass. Deployed as image `05cfaf3`:
   the `aws_demo.py` stub run gave 3 samples (Sum 0) in `AgentPlatform/dev` `ModelCostUsd`, no
   dimensions.
-- [ ] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL, its OAuth
+- [ ] `[specs]` go live (all done but the cost check, due 2026-11-21): GitHub App key and settings into SSM, the App's webhook URL, its OAuth
   callback URL and Slack's Request URL moved to the API's `execute-api` address (no tunnels;
   `terraform output api_url`); `gateway_connectors = "github"` and `github_repos` in
   `terraform.tfvars`; a planted duplicate in the sandbox is labeled
   and, after Approve in Slack, closed by `<app>[bot]` on AWS; its trace in X-Ray; a day later the
-  project tag's cost shows no hourly charge. **M6 done.**
+  project tag's cost shows no hourly charge. **M6 done.** Done 2026-11-20: run
+  `SUCCEEDED` from the webhook (`issues.opened`), 16 steps, $0.0076; Approve in Slack (169 ms at
+  the API); issue closed `duplicate` with `bug` and `duplicate` labels, by the App's bot; 9 gateway
+  calls as `team-bot`; 34 worker spans under the run's `trace_id`; `ModelCostUsd` 7 samples,
+  Sum $0.007567. Steps in `specs/README.md` → Run issue-triage on AWS. Left: the cost check.
+- [ ] `[infra]` `aws_demo.py` uses its own agent name (for example `demo-stub`) with a spec whose
+  tools the live gateway can serve, so it can run while dev is live without replacing
+  `issue-triage` (today it republishes `issue-triage` as the stub; see `specs/README.md` →
+  Gotchas). Check: `aws_demo.py` passes with `gateway_connectors = "github"`.
 
 ## Later milestones (draft)
 
@@ -512,6 +523,19 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · specs** — M6 go live. App credential put into the SSM `TokenStore`
+  (`put_app_credential.py`); `gateway_connectors = "github"` and `github_repos` in tfvars
+  (applied); the `project` cost allocation tag activated; the App's webhook (was off and empty:
+  the local setup used a repo webhook through smee), Redirect URI and Slack Request URL moved to
+  the API; Issues events subscribed; `specs/issue-triage.yaml` published on AWS as version 4. A
+  planted duplicate ran end to end (numbers in the task). Docs: `specs/README.md` → Run
+  issue-triage on AWS and gotchas, `specs/AGENTS.md`, architecture (gateway connectors), root
+  Commands table; new `[infra]` task for `aws_demo.py`. Next: the cost check on 2026-11-21 (then
+  tick go live, M6 done), then the new `[infra]` task or the next milestone. Gotchas: don't run
+  `aws_demo.py` while live; only `issues.opened` starts a run (close/reopen does not); GitHub's
+  Subscribe to events list appears only while the webhook is active; the spend alarm stays in
+  ALARM from the 2 USD test until about 05:59 UTC 2026-11-21.
 
 - **2026-11-20 · worker** — M6 spend metric (ADR 0023). New `Metrics` port (`model_cost(usd)`,
   never raises), `NoopMetrics` default, `EmfMetrics` (one CloudWatch EMF line on stdout per

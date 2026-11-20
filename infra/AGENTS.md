@@ -106,7 +106,10 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
 - Emails and other personal values in variables are `sensitive = true`, so plans show
   `(sensitive value)`.
 - Load-test mode is one switch (`load_test`, ADR 0024): change load values in
-  `load_test_settings`, never by editing the normal variables for a test. Turn it off right after
+  `load_test_settings`, never by editing the normal variables for a test. A `load_test_settings`
+  block in tfvars replaces the whole default, so it lists all five values (throttle rate and
+  burst, worker tasks, `worker_concurrency`, stub latency; example in `terraform.tfvars.example`).
+  `terraform output worker_concurrency` shows the runs per worker in use. Turn it off right after
   a test and confirm `plan` shows no changes; `aws_demo.py` refuses while the gateway runs only
   `github` (dev live).
 - `worker_model_env` in tfvars replaces the whole default map; per-mode worker settings go in

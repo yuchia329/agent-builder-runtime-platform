@@ -67,6 +67,17 @@ variable "worker_max_tasks" {
   default     = 2
 }
 
+variable "worker_concurrency" {
+  description = "Runs each worker task executes at once (WORKER_CONCURRENCY, one thread each)."
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.worker_concurrency >= 1 && var.worker_concurrency <= 100
+    error_message = "worker_concurrency must be 1 to 100."
+  }
+}
+
 variable "worker_model_env" {
   description = "Model provider settings for the worker (not secrets; API keys come from SSM)."
   type        = map(string)
@@ -139,18 +150,27 @@ variable "load_test_settings" {
     api_throttle_rate  = number # requests per second per route (/mcp needs about 100 at 80 runs at once)
     api_throttle_burst = number
     worker_max_tasks   = number # 0.5 vCPU each; the account's Fargate limit is 64 vCPU
+    worker_concurrency = number # runs per task at once: 20 tasks x 50 = 1,000 runs executing
     stub_latency_ms    = number # MODEL_STUB_LATENCY_MS: each stub model call waits this long
   })
+  # Throttle: at 1,000 runs at once /mcp needs about 400 requests per second and /internal more;
+  # API Gateway's account limit is 10,000 per second, Lambda's concurrency 1,000.
   default = {
-    api_throttle_rate  = 200
-    api_throttle_burst = 400
+    api_throttle_rate  = 1000
+    api_throttle_burst = 2000
     worker_max_tasks   = 20
+    worker_concurrency = 50
     stub_latency_ms    = 2000
   }
 
   validation {
     condition     = var.load_test_settings.worker_max_tasks <= 100 && var.load_test_settings.stub_latency_ms <= 60000
     error_message = "worker_max_tasks at most 100 (Fargate quota), stub_latency_ms at most 60000 (the worker's limit)."
+  }
+
+  validation {
+    condition     = var.load_test_settings.worker_concurrency >= 1 && var.load_test_settings.worker_concurrency <= 100
+    error_message = "load_test_settings.worker_concurrency must be 1 to 100."
   }
 }
 

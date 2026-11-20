@@ -552,6 +552,11 @@ Work in this order:
   drained), 13 runs taken over by another worker (SQS: 100 sent, 113 received), 200 tool calls,
   0 repeated, 0 lost. Limit: the stub calls only `github.search_issues` (read-only) and
   `github.add_label` (idempotent); a non-idempotent tool (Slack post) under chaos is not covered.
+- [x] `[infra]` runs per worker in load mode: `worker_concurrency` (normal 4) and
+  `load_test_settings.worker_concurrency` (50: 20 tasks x 50 = up to 1,000 runs executing at once,
+  instead of 80), load throttle 1,000 per second, burst 2,000. Check: normal `plan` changes no
+  resource; `plan -var load_test=true` shows `WORKER_CONCURRENCY` 50. Done 2026-11-20 (ADR 0024
+  amendment): both plans as expected, nothing applied (the loadtest session turns load mode on).
 - [ ] `[loadtest]` full test and report: 1,000 runs without and with chaos; `loadtest/report.md`
   (setup, numbers, limits hit, cost); settings back to normal (`plan` shows the dev values).
   **M7 done.**
@@ -606,6 +611,17 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-20 · infra** — M7 runs per worker in load mode (ADR 0024 amendment). New variable
+  `worker_concurrency` (default 4, 1-100) and `load_test_settings.worker_concurrency` (default
+  50); `ecs.tf` sets `WORKER_CONCURRENCY` from `local.worker_concurrency` (`load_test.tf`); load
+  throttle defaults 1,000/2,000; output `worker_concurrency`; tfvars example shows a five-value
+  `load_test_settings` block. Normal `plan`: no resource changes (only the new output); `plan -var
+  load_test=true`: throttle 1,000/2,000, 20 tasks, `WORKER_CONCURRENCY` "4" -> "50". Not applied.
+  Next: `/start loadtest` (full test and report); the first apply with `load_test = true` brings
+  the new output too. Gotchas: a temporary `load_test_settings` block in tfvars now needs five
+  values, `loadtest/AGENTS.md` still shows the four-value chaos block (update it in that
+  session); 50 runs on a 0.5 vCPU task may saturate CPU: lower the value in the block if so.
 
 - **2026-11-20 · loadtest** — M7 chaos. `chaos.py`: `chaos_loop` (a random running task every
   S seconds while runs are open, `ecs.stop_task` reason "loadtest chaos"; stops recorded even if

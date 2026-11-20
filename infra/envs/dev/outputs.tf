@@ -53,6 +53,11 @@ output "load_test" {
   value       = local.load_test
 }
 
+output "worker_concurrency" {
+  description = "Runs each worker task executes at once now (more in load-test mode)."
+  value       = local.worker_concurrency
+}
+
 output "gateway_connectors" {
   description = "Connectors the gateway runs now (fake in load-test mode); aws_demo.py needs fake."
   value       = local.gateway_connectors

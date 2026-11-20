@@ -49,3 +49,15 @@ boolean that switches a fixed set of values.
   call 2,000 ms); `issue-triage` stayed at version 4.
 - Large tests still need the account's Lambda concurrency above 10 (increase requested); until
   then the throttle in load mode is above what Lambda can serve, and excess requests get 503.
+
+## Amendment (2026-11-20): runs per worker and a higher throttle
+
+At 20 workers of 4 runs each, at most 80 runs executed at once, so a 1,000-run test only measured
+a queue being cleared; worker CPU stayed at 15-44% (stub runs mostly wait). Load mode now also
+sets the runs each worker executes at once: `worker_concurrency` (normal variable, default 4;
+`load_test_settings.worker_concurrency`, default 50, so 20 x 50 = 1,000 executing). The load
+throttle rises to 1,000 per second, burst 2,000 (from 200/400): at 1,000 runs at once `/mcp`
+needs about 400 requests per second and `/internal` more, far below API Gateway's account limit
+(10,000) and within Lambda's 1,000 concurrency at about 0.1 s a request. Output
+`worker_concurrency` shows the value in use. A temporary `load_test_settings` block in tfvars
+must list all five values. Whether a 0.5 vCPU task can run 50 at once is what the test finds out.

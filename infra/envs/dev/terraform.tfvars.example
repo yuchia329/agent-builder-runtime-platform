@@ -6,6 +6,14 @@ alert_email            = "you@example.com"      # alarm emails (model spend); co
 
 # Load-test mode (M7): set true for a test, false right after (load_test.tf).
 # load_test = true
+# Load values for one test (all five; replaces the defaults in variables.tf), removed after:
+# load_test_settings = {
+#   api_throttle_rate  = 1000
+#   api_throttle_burst = 2000
+#   worker_max_tasks   = 20
+#   worker_concurrency = 50
+#   stub_latency_ms    = 15000 # chaos: runs outlast the 30 s ECS stop timeout
+# }
 
 # Go live (specs task): real GitHub tools in the sandbox repo.
 # gateway_connectors = "github"

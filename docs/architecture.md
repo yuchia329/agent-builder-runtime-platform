@@ -710,7 +710,8 @@ AWS (one region)                                idle cost
   budgets cap each run; stopping everything is setting the worker service to 0. AWS's own bill
   has the budgets in `bootstrap/`.
 - **Load-test mode** (ADR 0024): `load_test = true` in `terraform.tfvars` switches, for one
-  test, to `load_test_settings`: throttle 200 per second (burst 400), up to 20 workers, the
+  test, to `load_test_settings`: throttle 1,000 per second (burst 2,000), up to 20 workers
+  running 50 runs each at once (`WORKER_CONCURRENCY`, 4 normally: up to 1,000 runs executing), the
   gateway on the fake connector, the stub model at 2,000 ms a call (`MODEL_STUB_LATENCY_MS`);
   `false` restores the normal values with one apply. `aws_demo.py` runs its own agent
   `demo-stub` (trigger `manual.demo.run`) and needs the fake connector.

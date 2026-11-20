@@ -19,3 +19,17 @@ resource "aws_cloudwatch_log_group" "api" {
   name              = "/aws/apigateway/${local.name}"
   retention_in_days = var.log_retention_days
 }
+
+# Transaction Search (X-Ray spans in CloudWatch Logs, ADR 0022) made this group when it was turned
+# on; Terraform takes it over for its retention (it was 30 days). skip_destroy: destroying dev
+# leaves it for the account's Transaction Search.
+import {
+  to = aws_cloudwatch_log_group.spans
+  id = "aws/spans"
+}
+
+resource "aws_cloudwatch_log_group" "spans" {
+  name              = "aws/spans"
+  retention_in_days = var.log_retention_days
+  skip_destroy      = true
+}

@@ -184,6 +184,13 @@ data "aws_iam_policy_document" "worker_task" {
     actions   = ["execute-api:Invoke"]
     resources = [local.internal_route, local.mcp_route]
   }
+  statement {
+    # Spans to the X-Ray OTLP endpoint (ADR 0022). AWS docs name both actions for it; X-Ray has
+    # no resource-level permissions.
+    sid       = "Traces"
+    actions   = ["xray:PutTraceSegments", "xray:PutSpans"]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "worker_task" {

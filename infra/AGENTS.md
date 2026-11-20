@@ -19,7 +19,8 @@ Terraform for every AWS resource (ADR 0007: scale to zero, no hourly cost while 
   `terraform.tfvars.example`).
 - `scripts/put_secrets.py`: puts secret values into the SSM parameters (ADR 0018).
 - `scripts/aws_demo.py`: `make demo` on AWS. Publishes the example spec (stub model), runs it to
-  `SUCCEEDED`, reports the wait for a worker, then waits for 0 workers. A few cents.
+  `SUCCEEDED`, reports the wait for a worker, finds the run's trace in `aws/spans` (worker span
+  names and counts, never attributes), then waits for 0 workers. A few cents.
 
 ## Deploy order
 
@@ -53,7 +54,8 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
 | New random secret (tenant API key) | `uv run --with boto3 python scripts/put_secrets.py --generate TENANT_API_KEY` |
 | Read one back | `aws ssm get-parameter --with-decryption --name <name> --query Parameter.Value --output text --profile default` |
 | API address | `terraform -chdir=envs/dev output -raw api_url` |
-| End-to-end check on AWS (a few cents) | `uv run --with boto3 python scripts/aws_demo.py` (`--no-scale-in` skips the wait for 0 workers) |
+| End-to-end check on AWS (a few cents) | `uv run --with boto3 python scripts/aws_demo.py` (`--no-trace` skips the trace lookup, `--no-scale-in` the wait for 0 workers) |
+| Transaction Search on? | `aws xray get-trace-segment-destination --profile default` (must say `CloudWatchLogs` / `ACTIVE`) |
 | Workers running now | `aws ecs describe-services --cluster agent-platform-dev --services agent-platform-dev-worker --query 'services[0].[desiredCount,runningCount]' --profile default` |
 | Activate the cost tag (once, after a tagged resource exists, up to 24 h) | `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=project,Status=Active --profile default` |
 
@@ -83,6 +85,10 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
 - Access logs and other log formats never include headers, query strings or bodies (tokens,
   signatures, login codes).
 - Right after the API is created, routes can answer 404 for up to a minute (stage auto-deploy).
+- Resources an AWS feature made by itself (the `aws/spans` log group of Transaction Search) are
+  taken over with an `import` block and `skip_destroy = true`, never re-created by Terraform.
+- Check a new worker image before pushing it: tags are immutable, so a bad push costs a new tag
+  (`docker run --rm --entrypoint /app/.venv/bin/python <image> -c "import worker..."`).
 - Nothing that bills by the hour (ADR 0007): no NAT gateway, load balancer, interface endpoints,
   RDS or always-on instance. Prefer free options (SSE-S3 over KMS for state, SSM over Secrets
   Manager).

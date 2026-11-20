@@ -33,8 +33,9 @@ queue depth): the stub demo runs to `SUCCEEDED` on AWS and the workers return to
 plane starts each run's trace and passes it on the queue message (ADR 0022; it uploads no spans
 from Lambda); the worker continues it (span per attempt, model call, tool call, checkpoint) and
 can upload straight to X-Ray (`TRACING_EXPORTER=xray`, checked live); the gateway joins it (spans
-made, not uploaded; its Lambda zip now carries bytecode, cold start about 2.0 s from 3.4 s); next
-`[infra]` worker traces.
+made, not uploaded; its Lambda zip now carries bytecode, cold start about 2.0 s from 3.4 s); all
+three deployed, and a stub run on AWS shows its worker spans in X-Ray under the run's `trace_id`
+(`aws_demo.py` checks it); next `[infra]` protection.
 
 ## Approach
 
@@ -417,12 +418,14 @@ Work in this order:
   Transaction Search confirmed (`CloudWatchLogs` / `ACTIVE`). Checked: tests; a live span from the
   laptop found in `aws/spans`; `make demo`. The stub run's whole trace on AWS moves to the infra
   task below (needs the task definition and IAM changes).
-- [ ] `[infra]` worker traces: task definition `TRACING_EXPORTER=xray`; worker task role
+- [x] `[infra]` worker traces: task definition `TRACING_EXPORTER=xray`; worker task role
   `xray:PutTraceSegments` and `xray:PutSpans` (AWS docs name both for the OTLP endpoint); 14-day
   retention on `aws/spans` (Transaction Search made it, so import or manage only its retention);
   push a new worker image tag; rebuild the gateway zip first (`lambda_zip.py`, now with bytecode)
   so the same apply deploys it. Check: `aws_demo.py` run's `trace_id` shows one trace in X-Ray with
   "run.start" (control plane, not uploaded, so the root is missing) and the worker's spans.
+  Done: `aws/spans` imported (14 days, `skip_destroy`); `aws_demo.py` now finds the trace (11
+  worker spans for the stub run).
 - [x] `[tool-gateway]` tracing: read `traceparent`, span per tool call joined to the worker's
   trace. The gateway is on Lambda too: uploading follows ADR 0022 (none unless a trial shows an
   exporter that keeps responses fast). Check: tests; the trace id reaches the gateway. Done
@@ -481,16 +484,6 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
-- **Run trace context** (ADR 0022, 2026-11-19). The control plane sets the SQS message attribute
-  `traceparent` (W3C) on every run message and owns `trace_id` (a worker's PATCH value is ignored
-  once the run has one). Declared in `contracts/run-message.schema.json`,
-  `internal-api.openapi.yaml` and `mcp-tool-call.schema.json` (descriptions only). Must follow:
-  `worker` done (reads the attribute, continues the trace, sends `traceparent` on internal API and
-  `/mcp` calls, no longer sends `trace_id`). `tool-gateway` done (continues it on `/mcp`, sends it
-  to the control plane). Must follow: `infra` (the `[infra]` worker traces task: `TRACING_EXPORTER=xray`, X-Ray permissions on the
-  worker task role, 14-day retention on `aws/spans`, new image; no active tracing on the
-  Lambdas).
-
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
   `contracts/mcp-tool-call.schema.json` and `internal-api.openapi.yaml` (`run_token`). `worker`
@@ -503,6 +496,18 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-19 · infra** — M6 task 12 (worker traces). Worker task definition
+  `TRACING_EXPORTER=xray`; task role statement `Traces` (`xray:PutTraceSegments`, `xray:PutSpans`
+  on `*`); `aws/spans` imported (`import` block) with 14-day retention (was 30) and
+  `skip_destroy`. Rebuilt and deployed all three at `01116ee` (control plane with tracing, gateway
+  zip with bytecode, worker image `01116ee`). `aws_demo.py` gains a trace lookup (`--no-trace` to
+  skip): the stub run `SUCCEEDED`, its `trace_id` held 11 worker spans in `aws/spans` (run.attempt
+  1, model.call 3, tool.call 2, checkpoint 5); workers back to 0 after 432 s. `plan` shows no
+  changes after apply. Cross-service entry "Run trace context" removed: every service followed.
+  Next: `[infra]` protection. Gotchas: the run waited 300 s for a worker (207 s last time; one
+  sample each); `filter-log-events --limit 1` can return an empty first page, so page through
+  (the script does); verify a worker image before pushing (immutable tags).
 
 - **2026-11-19 · tool-gateway** — M6 task 11. New `gateway/tracing.py` (OpenTelemetry SDK, own
   `TracerProvider`; `TRACING_EXPORTER=none|logging`, no upload, ADR 0022). `/mcp` handlers continue

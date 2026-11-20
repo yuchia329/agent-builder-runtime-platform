@@ -1,8 +1,9 @@
 """End-to-end check on AWS, like `make demo` locally: publish the example spec (stub model), start
-a run, wait for SUCCEEDED, then wait for the workers to scale back to 0.
+a run, wait for SUCCEEDED, find the run's trace in X-Ray (its spans in the `aws/spans` log group,
+Transaction Search; ADR 0022), then wait for the workers to scale back to 0.
 
     cd infra
-    uv run --with boto3 python scripts/aws_demo.py              # --no-scale-in to skip the wait
+    uv run --with boto3 python scripts/aws_demo.py   # --no-trace, --no-scale-in to skip those
 
 Reads the API address from `terraform output` and the tenant API key from SSM (never printed).
 Reports how long the run waited for a worker (scale-out from 0 is the slow part, ADR 0007).
@@ -19,6 +20,10 @@ import urllib.request
 from pathlib import Path
 
 import boto3
+
+SPANS_LOG_GROUP = "aws/spans"
+WORKER_SPANS = ("run.attempt", "model.call", "tool.call", "checkpoint")
+TRACE_WAIT_SECONDS = 240
 
 INFRA = Path(__file__).resolve().parent.parent
 SPEC = INFRA.parent / "contracts" / "examples" / "agent-spec.valid.yaml"
@@ -62,6 +67,7 @@ def main() -> int:
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--timeout", type=int, default=1200, help="seconds to wait for the run")
     parser.add_argument("--no-scale-in", action="store_true", help="do not wait for 0 workers")
+    parser.add_argument("--no-trace", action="store_true", help="do not look for the run's trace")
     args = parser.parse_args()
     if args.profile == "prod":
         sys.exit("This project never uses the prod profile.")
@@ -83,6 +89,7 @@ def main() -> int:
     print(f"   version {published.get('version')}")
     print("3. Start a run")
     started = time.monotonic()
+    started_ms = int((time.time() - 60) * 1000)
     _, run = api.call("POST", "/runs", json.dumps({"agent": AGENT, "input": RUN_INPUT}).encode())
     run_id = run["run_id"]
     print(f"   {run_id}")
@@ -105,9 +112,12 @@ def main() -> int:
         sys.exit(f"Run ended {run['status']}")
     print(f"Run SUCCEEDED in {time.monotonic() - started:.0f} s ({picked_up:.0f} s waiting for a worker)")
 
+    if not args.no_trace:
+        print(f"5. Find trace {run['trace_id']} in {SPANS_LOG_GROUP} (up to {TRACE_WAIT_SECONDS} s)")
+        find_trace(session.client("logs"), run["trace_id"], started_ms)
     if args.no_scale_in:
         return 0
-    print("5. Wait for the workers to scale back to 0 (about 5-8 minutes)")
+    print("6. Wait for the workers to scale back to 0 (about 5-8 minutes)")
     finished = time.monotonic()
     while True:
         described = ecs.describe_services(cluster=service["cluster"], services=[service["service"]])
@@ -118,6 +128,41 @@ def main() -> int:
         if time.monotonic() - finished > 1200:
             sys.exit("Workers still running 20 minutes after the run")
         time.sleep(30)
+
+
+def find_trace(logs, trace_id: str, since_ms: int) -> None:
+    """Waits until the worker's spans of the run are in `aws/spans` and prints how many of each
+    name arrived, per service (names only: never attributes). Spans take about 20-30 s to show."""
+    deadline = time.monotonic() + TRACE_WAIT_SECONDS
+    while True:
+        counts: dict[tuple[str, str], int] = {}
+        for event in span_events(logs, trace_id, since_ms):
+            span = json.loads(event["message"])
+            service = span.get("resource", {}).get("attributes", {}).get("service.name", "?")
+            key = (service, span.get("name", "?"))
+            counts[key] = counts.get(key, 0) + 1
+        missing = [n for n in WORKER_SPANS if ("worker", n) not in counts]
+        if not missing:
+            for (service, name), count in sorted(counts.items()):
+                print(f"   {service:<14} {name:<16} {count}")
+            print(f"Trace {trace_id}: {sum(counts.values())} spans (the control plane's run.start "
+                  "is not uploaded, ADR 0022)")
+            return
+        if time.monotonic() > deadline:
+            sys.exit(f"Trace {trace_id}: no {', '.join(missing)} span after {TRACE_WAIT_SECONDS} s "
+                     f"(found {sorted(counts)}); check the worker log for exporter errors")
+        time.sleep(15)
+
+
+def span_events(logs, trace_id: str, since_ms: int):
+    kwargs = {"logGroupName": SPANS_LOG_GROUP, "startTime": since_ms,
+              "filterPattern": f'{{ $.traceId = "{trace_id}" }}'}
+    while True:
+        page = logs.filter_log_events(**kwargs)
+        yield from page["events"]
+        if not page.get("nextToken"):
+            return
+        kwargs["nextToken"] = page["nextToken"]
 
 
 if __name__ == "__main__":

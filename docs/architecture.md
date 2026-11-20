@@ -663,7 +663,12 @@ AWS (one region)                                idle cost
   or in flight sets the service to 0. Measured on dev (2026-11-19): a stub run after idle finished
   207 s after it was started, nearly all of it a worker starting; the service was back at 0 tasks
   458 s after the run. A Lambda entrypoint, or starting the service on enqueue, can be added if
-  scale-out is too slow.
+  scale-out is too slow. The task definition sets `TRACING_EXPORTER=xray`: workers send spans
+  straight to the X-Ray OTLP endpoint (task role: `xray:PutTraceSegments`, `xray:PutSpans`).
+- **Traces:** X-Ray with Transaction Search, an account setting turned on once by hand (CloudWatch
+  console → X-Ray → Transaction Search). It made the `aws/spans` log group, which Terraform took
+  over (import) for its retention (14 days) and keeps on `destroy` (`skip_destroy`). Only the
+  workers upload; the Lambdas send nothing and have active tracing off (ADR 0022).
 - **Network:** one VPC with two public subnets (two availability zones) and an internet gateway;
   the default security group has no rules. Only the workers run in it.
 - **IAM:** one role per service, each allowed only what it calls (tables, queue, its own SSM path,

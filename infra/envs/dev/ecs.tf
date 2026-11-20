@@ -39,6 +39,7 @@ resource "aws_ecs_task_definition" "worker" {
       TOOL_GATEWAY_URL   = local.api_url
       TOOL_GATEWAY_SIGV4 = "true"
       WORKER_CONCURRENCY = "4"
+      TRACING_EXPORTER   = "xray" # spans to the X-Ray OTLP endpoint (ADR 0022)
     }) : { name = k, value = v }]
     # ECS reads these from SSM when the task starts; the container sees plain env vars.
     secrets = [{

@@ -347,6 +347,17 @@ The worker core is one function, `handle_run(run_id)`, called from an entrypoint
    (canonical JSON) equal the call; it then goes through the usual idempotency key, so a later
    resume reuses its result. No or another decision pauses again; the worker never calls a
    rejected call and never sets `approval_*` reasons.
+7. Tenant limits ([ADR 0026](adr/0026-tenant-limits-checked-at-start.md), [ADR
+   0027](adr/0027-set-runs-aside-on-model-rate-limits.md)). A start the control plane puts off at the
+   tenant's cap (429 with the `Deferred` problem type) is not retried: the control plane has
+   already re-queued the run, so the attempt ends with the run `QUEUED` and the message is
+   deleted. A start refused over the daily spend cap (409, run now `FAILED` `tenant_budget`) ends
+   the same way. When a model adapter is still rate limited after its retries
+   (`ModelRateLimited`), the loop reports its progress (steps, cost), then calls `defer` with the
+   provider's `Retry-After` clamped to 1-900 s, else 30 s ± 20%; it returns what the control
+   plane answers (`QUEUED`, or `FAILED` `rate_limited` after 15 minutes set aside) and the message
+   is deleted. The run resumes from its checkpoints when it comes back. The worker never sends
+   `rate_limited` or `tenant_budget` itself.
 
 The message is deleted once `handle_run` returns, whatever status the run ended in. It is kept,
 so SQS delivers it again and after 5 receives moves it to the DLQ, when the body does not match
@@ -377,7 +388,8 @@ the profile still starts.
 Price and context window live in `core/models.py` per `provider/model` (or `provider/*`); a run
 whose model is not listed fails before its first step, because every spec has a dollar budget.
 Adapters retry throttling, server errors and timeouts with backoff (honoring `Retry-After`)
-before raising `ModelError`. Before each call, once the conversation passes 70% of the context
+before raising `ModelError`, or `ModelRateLimited` when the last try was rate limited (HTTP 429,
+MiniMax rate-limit codes, Bedrock `ThrottlingException`). Before each call, once the conversation passes 70% of the context
 window, `core/trim.py` shortens old tool results, then drops the oldest steps (always keeping the
 run input and the latest two steps); if it still does not fit, the run fails. Cost is checked before
 each step, so one model turn can overshoot `max_usd` before the run stops. What a provider needs
@@ -540,7 +552,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `ToolClient`        | worker        | `describe(names, context)` returns tool schemas; `call(name, args, context)` returns a result or raises `ToolError`; `context` is the run id, run token, step and idempotency key | Fake (tests), direct calls (M1), MCP gateway (M4) |
 | `Tracer`            | worker        | `span(name, attributes, parent=traceparent)` as a context manager, `annotate` the current span, `traceparent()` of the current span; failures mark the span with the exception type only | No-op (core default), OpenTelemetry |
 | `Metrics`           | worker        | `model_cost(usd)` per model call; never raises (a lost value must not fail the run); safe from many threads | No-op (core default), CloudWatch EMF on stdout |
-| `ControlPlane`      | worker        | Internal run API: get a run, report a status change; 409 becomes `RunConflict`                      | In-memory (tests), HTTP + SigV4             |
+| `ControlPlane`      | worker        | Internal run API: get a run, report a status change, set a run aside (`defer_run`); 409 becomes `RunConflict`, a `Deferred` 429 `RunDeferred` (not retried) | In-memory (tests; simulates tenant caps), HTTP + SigV4 |
 | `RunTokenSigner`    | control plane | `keyId()` (RFC 7638 thumbprint), `publicKey()`, `sign(input)` returns an ES256 signature in JOSE form; no network call at construction | Local key pair, KMS |
 | `SecretSource`      | control plane | `get(secret)` (null = not set; may load on first use, never at startup), `peek` (only what is held), `configured`, `prefetch` | Env, SSM Parameter Store |
 | `ApprovalChannel`   | control plane | Post an approval request, return where it went; show its outcome on that message; failures raise `ApprovalChannelException` | Slack, in-memory (logs only)               |
@@ -567,7 +579,7 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Run-state table     | worker                                 | `STATE_BACKEND=dynamodb\|memory`, `STATE_TABLE`         |
 | Control plane URL   | worker, gateway                        | `CONTROL_PLANE_URL` (the API's URL on AWS; SigV4-signed) |
 | Gateway URL         | worker (from M4)                       | `TOOL_GATEWAY_URL` (the API's URL on AWS); `TOOL_GATEWAY_SIGV4=true` signs requests (AWS; default false) |
-| Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys). Built-in `stub`: optional `MODEL_STUB_LATENCY_MS` (0 to 60000, default 0), a fixed wait before each reply (load tests) |
+| Model providers     | worker                                 | `MODEL_PROVIDERS` (names); per name `MODEL_<NAME>_PROTOCOL=openai\|bedrock`; optional `MODEL_<NAME>_MAX_TOKENS`, `MODEL_<NAME>_TEMPERATURE`, `MODEL_<NAME>_EXTRA_BODY` (JSON added to each request, for example `{"reasoning_split":true}` for MiniMax); `openai`: `MODEL_<NAME>_BASE_URL`, `MODEL_<NAME>_API_KEY` (secret); `bedrock`: optional `MODEL_<NAME>_REGION` (else `AWS_REGION`), `MODEL_<NAME>_AWS_PROFILE` (named profile; ignores the env-var keys). Built-in `stub`: optional `MODEL_STUB_LATENCY_MS` (0 to 60000, default 0), a fixed wait before each reply; `MODEL_STUB_429_RATE` (0 to 1, default 0), the share of calls still rate limited after retries; `MODEL_STUB_PRICE_USD` (0 to 1, default 0), the cost of each call (load tests) |
 | Tools               | worker                                 | `TOOLS_PROVIDER=fake\|local\|mcp`; for `local` (M1): `GITHUB_TOKEN` (secret), `GITHUB_REPOS` (allowlist), optional `GITHUB_API_URL`; for `mcp` (M4): `TOOL_GATEWAY_URL`, no GitHub token |
 | Worker runtime      | worker                                 | `WORKER_CONCURRENCY` (runs per task), `RUN_VISIBILITY_SECONDS` |
 | Metrics             | worker                                 | `METRICS_NAMESPACE` (CloudWatch namespace of the `ModelCostUsd` EMF line; unset = none; `AgentPlatform/dev` on AWS; ADR 0023) |

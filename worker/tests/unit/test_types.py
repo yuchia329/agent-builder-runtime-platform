@@ -1,7 +1,8 @@
 """Core types round-trip the contract shapes."""
 
 import pytest
-from contracts import contract_errors, example_run
+import yaml
+from contracts import API_FILE, contract_errors, example_run
 
 from worker.adapters.control_plane_memory import InMemoryControlPlane
 from worker.core.types import (
@@ -106,3 +107,11 @@ def test_tool_call_key_depends_on_run_step_tool_and_arguments_only():
     assert key != tool_call_key("run_2", 4, call)
     other = ToolCall("call_1", "github.add_label", {"label": "duplicate", "issue_number": 42})
     assert key != tool_call_key("run_1", 4, other)
+
+
+def test_failure_reasons_match_the_contract():
+    schemas = yaml.safe_load(API_FILE.read_text())["components"]["schemas"]
+
+    assert {r.value for r in FailureReason} == set(
+        schemas["Failure"]["properties"]["reason"]["enum"]
+    )

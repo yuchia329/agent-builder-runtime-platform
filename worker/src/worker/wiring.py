@@ -10,7 +10,7 @@ from worker.adapters.metrics_emf import EmfMetrics
 from worker.adapters.model_bedrock import BedrockConverseModel
 from worker.adapters.model_openai_compat import OpenAICompatModel
 from worker.adapters.model_router import ModelRouter
-from worker.adapters.model_stub import StubModel, demo_turns
+from worker.adapters.model_stub import StubModel, demo_turns, price_per_call
 from worker.adapters.queue_memory import InMemoryRunQueue
 from worker.adapters.queue_sqs import SqsRunQueue
 from worker.adapters.run_state_dynamodb import DynamoDbRunStateStore
@@ -22,6 +22,7 @@ from worker.adapters.tracing_otel import OtelTracer, build_tracer, trace_headers
 from worker.config import Config
 from worker.core.handle_run import Deps
 from worker.core.metrics import NoopMetrics
+from worker.core.models import MODELS, ModelInfo
 from worker.ports.metrics import Metrics
 from worker.ports.model import Model
 from worker.ports.queue import RunQueue
@@ -59,8 +60,16 @@ def build(config: Config) -> App:
         config.control_plane_url, default_signer(config.aws_region), trace_headers=headers
     )
     providers: dict[str, Model] = {
-        "stub": StubModel(demo_turns(), latency_seconds=config.stub_latency_ms / 1000)
+        "stub": StubModel(
+            demo_turns(),
+            latency_seconds=config.stub_latency_ms / 1000,
+            rate_limited_share=config.stub_429_rate,
+        )
     }
+    models = dict(MODELS)
+    if config.stub_price_usd > 0:
+        stub = MODELS["stub/*"]
+        models["stub/*"] = ModelInfo(price_per_call(config.stub_price_usd), stub.context_tokens)
     for p in config.model_providers:
         if p.protocol == "bedrock":
             providers[p.name] = BedrockConverseModel(
@@ -90,5 +99,14 @@ def build(config: Config) -> App:
         if config.metrics_namespace
         else NoopMetrics()
     )
-    deps = Deps(control_plane, model, tools, clock, state=state, tracer=tracer, metrics=metrics)
+    deps = Deps(
+        control_plane,
+        model,
+        tools,
+        clock,
+        models=models,
+        state=state,
+        tracer=tracer,
+        metrics=metrics,
+    )
     return App(queue, deps, state, tracer)

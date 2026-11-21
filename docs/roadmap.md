@@ -42,8 +42,9 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
-**M8 (production limits) in progress:** planned 2026-11-21; contracts and control-plane
-(tenants, limits) done; next `[worker]` limits.
+**M8 (production limits) in progress:** planned 2026-11-21; contracts, control-plane
+(tenants, limits) and worker limits done (neither limits change deployed yet); next `[infra]`
+(load-mode settings, deploy both together).
 **M6 done (2026-11-21):** the cost check shows only the KMS key's fixed $1 a month, nothing
 billed by the hour. **M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
@@ -629,9 +630,11 @@ Work in this order:
   Check: tests (Testcontainers DynamoDB); the contract examples pass the control plane's checks.
   Done 2026-11-21: 403 tests (from 355); the recount became a stalled-run sweep (ADR 0028). Not
   deployed yet: deploy with the worker task (today's worker does not handle the 429 at start).
-- [ ] `[worker]` limits: 429 at start (drop the message), `defer` on model rate limits after the
+- [x] `[worker]` limits: 429 at start (drop the message), `defer` on model rate limits after the
   retries (drop the message, release the lease), `approval_expired` in its failure reasons; stub
-  settings `MODEL_STUB_429_RATE` and `MODEL_STUB_PRICE_USD`. Check: tests; image pushed.
+  settings `MODEL_STUB_429_RATE` and `MODEL_STUB_PRICE_USD`. Check: tests; image pushed. Done
+  2026-11-21: 409 tests (from 366); image tagged with the task's commit, pushed to ECR, not
+  deployed (deploy with the control plane in the infra task).
 - [ ] `[infra]` load mode sets the stub's 429 rate and price (in `load_test_settings`); the queue
   works as a fair queue (no setting needed; check the docs); IAM if anything new is called.
   Check: `plan` as expected in both modes.
@@ -705,7 +708,8 @@ service has followed.
   message with `MessageGroupId` = tenant. `worker` must: on 429 at start drop the message; call
   `defer` instead of failing when the model keeps answering 429; never send `rate_limited` or
   `tenant_budget`; add `approval_expired` to its failure reasons. Remove this entry when both
-  have followed. `control-plane` followed 2026-11-21 (not deployed yet); `worker` still to do.
+  have followed and are deployed. `control-plane` and `worker` followed 2026-11-21; neither is
+  deployed yet (infra task, both together).
 
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
@@ -720,6 +724,20 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-21 · worker** — M8 task 4 done: limits. New core errors `RunDeferred` (PATCH to
+  RUNNING answered 429 with the `Deferred` problem type; `HttpControlPlane` does not retry it,
+  other 429s still are) and `ModelRateLimited(ModelError)` (OpenAI-compatible: last try 429 or
+  MiniMax codes 1002, 1039, 1041, 1045, 2045-2047; Bedrock: `ThrottlingException`). `handle_run`:
+  deferred start returns QUEUED; a 409 at start re-reads the run (FAILED `tenant_budget`);
+  `ModelRateLimited` reports progress (RUNNING, steps, cost), then `defer_run` (provider
+  Retry-After clamped 1-900, else 30 s ± 20%, `set_aside_delay`) and returns its answer. Port
+  `ControlPlane.defer_run`; `InMemoryControlPlane(max_running=...)`, `over_budget`, 15-minute
+  total; the fake HTTP server serves `/defer` and the 429. `FailureReason` matches the contract
+  enum. Stub: `MODEL_STUB_429_RATE`, `MODEL_STUB_PRICE_USD` (per call, through the `stub/*` price
+  in `Deps.models`). Next: `[infra]` load-mode settings and deploy control plane + worker
+  together (worker image first or at the same apply: an old worker retries the 429 three times,
+  then keeps the message). Gotchas: `make worker-image` tags with HEAD, so build after the commit;
+  a stub run set aside resumes at the same script position (counted from assistant messages).
 - **2026-11-21 · control-plane** — M8 task 3 done: limits. `RunStore` reads a run, then writes
   on the condition that status, cost and `holdsSlot` are unchanged (retried, backoff, 10 tries);
   QUEUED → RUNNING and leaving RUNNING are one transaction with `TENANT#<t>/USAGE` (`running`,

@@ -30,7 +30,9 @@ puts in .env do not leak into Bedrock calls. The client is created on first use,
 without that profile (for example in Docker) still starts; only runs on this provider fail.
 
 Retries: botocore's standard mode (throttling, 5xx, connection errors) with ``attempts`` tries,
-then ``ModelError``. Errors never include credentials.
+then ``ModelError``; ``ModelRateLimited`` if Bedrock was still throttling
+(``ThrottlingException``), so the loop sets the run aside (ADR 0027). Errors never include
+credentials.
 """
 
 from __future__ import annotations
@@ -45,11 +47,13 @@ import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
-from worker.core.errors import ModelError
+from worker.core.errors import ModelError, ModelRateLimited
 from worker.core.types import Message, ModelTurn, StopReason, ToolCall, ToolSpec, Usage
 
 THINKING = re.compile(r"<thinking>.*?</thinking>", re.DOTALL)
 RESPONSE = re.compile(r"<response>(.*?)</response>", re.DOTALL)
+
+RATE_LIMIT_CODES = frozenset({"ThrottlingException"})
 
 STOP_REASONS = {
     "end_turn": StopReason.END_TURN,
@@ -108,9 +112,12 @@ class BedrockConverseModel:
             response = self._bedrock().converse(**request)
         except ClientError as e:
             error = e.response.get("Error", {})
-            raise ModelError(
+            message = (
                 f"Bedrock returned {error.get('Code', 'an error')}: {error.get('Message', '')}"
-            ) from e
+            )
+            if error.get("Code") in RATE_LIMIT_CODES:
+                raise ModelRateLimited(message) from e
+            raise ModelError(message) from e
         except BotoCoreError as e:  # no credentials, unknown profile, connection failures
             raise ModelError(f"Bedrock request failed: {type(e).__name__}: {e}") from e
         try:

@@ -21,6 +21,7 @@ TRACING_EXPORTERS = ("none", "logging", "xray")  # ADR 0022
 PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # matches the spec's model pattern
 BUILT_IN_PROVIDERS = ("stub",)
 STUB_LATENCY_MS_MAX = 60_000  # a minute per call; the example spec's budget is 300 s
+STUB_PRICE_USD_MAX = 1.0  # per stub call; enough to reach any daily spend cap in a load test
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # CloudWatch namespace rules (ADR 0023); "AWS/" is reserved for AWS's own metrics.
 METRICS_NAMESPACE = re.compile(r"^(?!AWS/)[A-Za-z0-9.\-_/#: ]{1,255}$")
@@ -62,6 +63,8 @@ class Config:
     tracing_exporter: str  # where spans go: none, logging, xray (OTLP to X-Ray, SigV4)
     metrics_namespace: str | None  # CloudWatch namespace of the EMF lines; None: no metrics
     stub_latency_ms: int  # how long each call to the built-in stub model waits (load tests)
+    stub_429_rate: float  # share of stub calls that are still rate limited (load tests, M8)
+    stub_price_usd: float  # what each stub call costs in US dollars (load tests, M8)
     aws_region: str
     concurrency: int
     visibility_seconds: int
@@ -91,6 +94,17 @@ class Config:
                 return default
             return int(raw)
 
+        def bounded_float(name: str, high: float) -> float:
+            raw = env.get(name, "").strip() or "0"  # empty means unset
+            try:
+                value = float(raw)
+            except ValueError:
+                value = -1.0
+            if not 0 <= value <= high:  # also rejects nan
+                errors.append(f"{name}={raw!r}: expected a number from 0 to {high:g}")
+                return 0.0
+            return value
+
         config = cls(
             queue_backend=choice("QUEUE_BACKEND", QUEUE_BACKENDS, "sqs"),
             run_queue_url=env.get("RUN_QUEUE_URL") or None,
@@ -109,6 +123,8 @@ class Config:
             tracing_exporter=choice("TRACING_EXPORTER", TRACING_EXPORTERS, "none"),
             metrics_namespace=env.get("METRICS_NAMESPACE", "").strip() or None,
             stub_latency_ms=bounded_int("MODEL_STUB_LATENCY_MS", 0, STUB_LATENCY_MS_MAX),
+            stub_429_rate=bounded_float("MODEL_STUB_429_RATE", 1.0),
+            stub_price_usd=bounded_float("MODEL_STUB_PRICE_USD", STUB_PRICE_USD_MAX),
             aws_region=env.get("AWS_REGION", "us-east-1"),
             concurrency=positive_int("WORKER_CONCURRENCY", 4),
             visibility_seconds=positive_int("RUN_VISIBILITY_SECONDS", 60),

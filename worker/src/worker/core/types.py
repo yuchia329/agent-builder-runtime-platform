@@ -22,7 +22,11 @@ class FailureReason(StrEnum):
     BUDGET_STEPS = "budget_steps"
     BUDGET_USD = "budget_usd"
     BUDGET_SECONDS = "budget_seconds"
+    # Set by the control plane only: a worker reads them, never sends them.
     APPROVAL_REJECTED = "approval_rejected"
+    APPROVAL_EXPIRED = "approval_expired"
+    RATE_LIMITED = "rate_limited"  # set aside for 15 minutes in total (ADR 0027)
+    TENANT_BUDGET = "tenant_budget"  # tenant over its daily spend cap at start (ADR 0026)
     ERROR = "error"
 
 

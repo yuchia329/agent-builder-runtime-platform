@@ -20,6 +20,11 @@ Every model reply passes through this loop before anything acts on it:
   of calling again, and a call whose outcome a crash left unknown is repeated only if the tool
   is read-only or idempotent, else the run fails (never a duplicate side effect);
 - a model with no known price or context size fails the run before its first step;
+- a start the control plane put off (tenant at its cap on runs at once, ``RunDeferred``) ends
+  the attempt with the run still QUEUED: the control plane already re-queued it (ADR 0026);
+- a provider that still rate limits after the adapter's retries (``ModelRateLimited``) sets the
+  run aside: progress is reported, then ``defer_run`` re-queues it after the provider's
+  Retry-After (clamped to 1-900 s) or about 30 s; it resumes from its checkpoints (ADR 0027);
 - a copy of the conversation is trimmed before a call once it nears the model's context window;
 - any unexpected error ends the run as FAILED with reason ``error``.
 
@@ -40,6 +45,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -47,7 +54,14 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from worker.core.budget import BudgetExceeded, BudgetTracker
-from worker.core.errors import LeaseLost, RunConflict, StateError, ToolError
+from worker.core.errors import (
+    LeaseLost,
+    ModelRateLimited,
+    RunConflict,
+    RunDeferred,
+    StateError,
+    ToolError,
+)
 from worker.core.metrics import NoopMetrics
 from worker.core.models import MODELS, ModelInfo, UnknownModel, model_info
 from worker.core.tracing import NoopTracer
@@ -80,6 +94,9 @@ log = logging.getLogger(__name__)
 MAX_FAILURE_MESSAGE = 2000  # contract limit on failure.message
 TRIM_AT = 0.7  # share of the context window the conversation may fill; the rest is for the reply
 DEFAULT_TOKENS_PER_CHAR = 1 / 3  # until the first reply reports real usage; errs high for English
+SET_ASIDE_SECONDS = 30  # wait before a rate-limited run is tried again, if the provider said none
+SET_ASIDE_SPREAD = 0.2  # +-20%, so runs set aside together do not all come back together
+MAX_SET_ASIDE_SECONDS = 900  # contract DelaySeconds (SQS DelaySeconds)
 
 
 @dataclass(frozen=True)
@@ -137,9 +154,18 @@ def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunSt
     try:
         # QUEUED -> RUNNING, or RUNNING -> RUNNING when a run is picked up again.
         deps.control_plane.update_run(run_id, RunUpdate(RunStatus.RUNNING, steps=resume.steps))
+    except RunDeferred as e:
+        log.info(
+            "run %s: tenant at its cap on runs at once; the control plane re-queued it in %ds",
+            run_id,
+            e.retry_after_seconds,
+        )
+        return RunStatus.QUEUED
     except RunConflict:
-        log.info("run %s was claimed or finished elsewhere; skipping", run_id)
-        return deps.control_plane.get_run(run_id).status
+        # Claimed or finished elsewhere, or failed at start (tenant over its daily spend cap).
+        status = deps.control_plane.get_run(run_id).status
+        log.info("run %s could not start (it is %s); skipping", run_id, status)
+        return status
 
     budget = BudgetTracker(
         run.spec.budget, deps.clock, resume.steps, resume.cost_usd, resume.elapsed
@@ -153,6 +179,8 @@ def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunSt
     except StateError:
         log.error("run %s: run-state store failed; stopping, resumes later", run_id)
         raise
+    except ModelRateLimited as e:
+        return _set_aside(run_id, deps, budget, e)
     except (UnknownModel, ContextTooLarge, ToolOutcomeUnknown) as e:
         final = _failed(budget, FailureReason.ERROR, str(e))
     except BudgetExceeded as e:
@@ -192,6 +220,38 @@ def _resume(checkpoints: Sequence[Checkpoint]) -> _Resume:
             last_turn = (turn, StopReason(c.data["stop_reason"]))
     steps = checkpoints[-1].step if checkpoints else 0
     return _Resume(messages, steps, cost, elapsed, last_turn)
+
+
+def set_aside_delay(
+    retry_after: float | None, spread: Callable[[float, float], float] = random.uniform
+) -> int:
+    """Seconds to set a rate-limited run aside: the provider's Retry-After if it gave one, else
+    SET_ASIDE_SECONDS spread by SET_ASIDE_SPREAD; always 1 to MAX_SET_ASIDE_SECONDS."""
+    if retry_after is not None:
+        seconds = math.ceil(retry_after)
+    else:
+        seconds = round(SET_ASIDE_SECONDS * spread(1 - SET_ASIDE_SPREAD, 1 + SET_ASIDE_SPREAD))
+    return min(max(seconds, 1), MAX_SET_ASIDE_SECONDS)
+
+
+def _set_aside(
+    run_id: str, deps: Deps, budget: BudgetTracker, error: ModelRateLimited
+) -> RunStatus:
+    """Reports progress so far, then asks the control plane to re-queue the run later. Returns
+    the status it answers: QUEUED, or FAILED (rate_limited) after 15 minutes set aside."""
+    delay = set_aside_delay(error.retry_after)
+    log.warning(
+        "run %s: model still rate limited (%s); setting it aside for %ds", run_id, error, delay
+    )
+    try:
+        deps.control_plane.update_run(
+            run_id, RunUpdate(RunStatus.RUNNING, steps=budget.steps, cost_usd=_cost(budget))
+        )
+        status = deps.control_plane.defer_run(run_id, delay)
+    except RunConflict:  # no longer RUNNING (a retried defer that had gone through)
+        status = deps.control_plane.get_run(run_id).status
+    log.info("run %s is %s after setting it aside", run_id, status)
+    return status
 
 
 def _failed(budget: BudgetTracker, reason: FailureReason, message: str) -> RunUpdate:

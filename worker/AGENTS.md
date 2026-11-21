@@ -21,6 +21,7 @@ Run from `worker/`.
 | Real Bedrock locally | In `../.env`: add `bedrock` to `MODEL_PROVIDERS` and the `MODEL_BEDROCK_*` lines from `../.env.example` (profile from `~/.aws`, no keys in `.env`); run the worker on the host (the image has no `~/.aws`); spec `model: bedrock/amazon.nova-lite-v1:0` |
 | See spans locally | `TRACING_EXPORTER=logging` (each span printed as JSON on stdout) |
 | Slow stub model (load tests) | `MODEL_STUB_LATENCY_MS=2000` (each `stub/*` call waits 2 s; 0 to 60000, default 0; on AWS through `worker_model_env` in tfvars) |
+| Rate-limited or priced stub (load tests, M8) | `MODEL_STUB_429_RATE=0.2` (that share of `stub/*` calls raise `ModelRateLimited`, so runs are set aside) and `MODEL_STUB_PRICE_USD=0.001` (each call costs that much; both 0 to 1, default 0) |
 | See metric lines locally | `METRICS_NAMESPACE=AgentPlatform/local` (one `ModelCostUsd` JSON line on stdout per model call) |
 | Metric on AWS (after a run) | `aws cloudwatch get-metric-statistics --namespace AgentPlatform/dev --metric-name ModelCostUsd --statistics Sum SampleCount --period 3600 --start-time <ISO> --end-time <ISO> --profile default` |
 | Live X-Ray check (dev AWS, fraction of a cent) | `LIVE_AWS=1 uv run pytest tests/unit/test_live_xray.py -s` (profile `default`; one span through the OTLP endpoint, found in `aws/spans` in about 20-30 s; needs Transaction Search on) |
@@ -68,8 +69,9 @@ Run from `worker/`.
   throwaway P-256 key) and `RunTokens` signing run tokens like the control plane; session
   fixtures `live_gateway` and `run_tokens` in `conftest.py`.
 - `tests/fake_control_plane_server.py`: local HTTP server for the internal API (state from
-  `InMemoryControlPlane`, PATCH bodies checked against `RunUpdate`, SigV4 header required,
-  `fail_next` for retry tests).
+  `InMemoryControlPlane`, PATCH bodies checked against `RunUpdate`, defer bodies against
+  `RunDefer`, a `Deferred` 429 at the tenant cap, SigV4 header required, `fail_next` for retry
+  tests).
 
 ## Conventions
 
@@ -156,5 +158,12 @@ Run from `worker/`.
   line carries the value only: no dimensions, run ids, model names or anything from the run
   (each dimension combination is a billed metric). It goes to stdout, logs to stderr; keep it
   that way so a metric line is never part of a log record. `config.py` owns the namespace rule.
+- Tenant limits (ADR 0026, ADR 0027): a 429 whose problem `type` is
+  `urn:agent-platform:problem:deferred` is an answer (`RunDeferred`), never retried; any other
+  429 is throttling and is. A model adapter whose retries end on a rate limit raises
+  `ModelRateLimited`, never plain `ModelError`; the loop sets the run aside with `defer_run`. Test
+  caps with `InMemoryControlPlane(max_running=...)` and `.over_budget`, not by editing runs.
+- `make worker-image` tags with `git rev-parse --short HEAD`: build after committing, or the new
+  code goes out under the previous commit's tag (ECR tags are immutable).
 - The fake tools and scripted model are shared test infrastructure (later: chaos and load tests);
   keep them deterministic.

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import itertools
+import random
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from worker.core.errors import ModelError
+from worker.core.errors import ModelError, ModelRateLimited
+from worker.core.models import Price
 from worker.core.types import (
     Message,
     ModelTurn,
@@ -19,6 +21,13 @@ from worker.core.types import (
 )
 
 _ids = itertools.count(1)
+STUB_USAGE = Usage(input_tokens=100, output_tokens=20)  # every scripted turn reports this
+
+
+def price_per_call(usd: float) -> Price:
+    """A price that makes every stub call cost `usd` (MODEL_STUB_PRICE_USD; load tests, M8)."""
+    per_million = usd * 1_000_000 / (STUB_USAGE.input_tokens + STUB_USAGE.output_tokens)
+    return Price(per_million, per_million)
 
 
 def tool_turn(*calls: tuple[str, dict[str, Any]], text: str = "") -> ModelTurn:
@@ -27,14 +36,12 @@ def tool_turn(*calls: tuple[str, dict[str, Any]], text: str = "") -> ModelTurn:
         StopReason.TOOL_USE,
         text=text,
         tool_calls=tuple(ToolCall(f"call_{next(_ids)}", name, args) for name, args in calls),
-        usage=Usage(input_tokens=100, output_tokens=20),
+        usage=STUB_USAGE,
     )
 
 
 def final_turn(text: str) -> ModelTurn:
-    return ModelTurn(
-        StopReason.END_TURN, text=text, usage=Usage(input_tokens=100, output_tokens=20)
-    )
+    return ModelTurn(StopReason.END_TURN, text=text, usage=STUB_USAGE)
 
 
 @dataclass(frozen=True)
@@ -70,6 +77,10 @@ class StubModel:
 
     `latency_seconds` makes every call wait that long before answering, like a real model
     (MODEL_STUB_LATENCY_MS; load tests, M7). `sleep` is injectable so tests never wait.
+
+    `rate_limited_share` of calls (0 to 1, MODEL_STUB_429_RATE; load tests, M8) raise
+    ModelRateLimited after the wait, as a provider still answering 429 after the retries would.
+    `draw` (a number from 0 to 1) is injectable so tests are deterministic.
     """
 
     def __init__(
@@ -77,18 +88,27 @@ class StubModel:
         turns: Sequence[ModelTurn],
         latency_seconds: float = 0.0,
         sleep: Callable[[float], None] = time.sleep,
+        *,
+        rate_limited_share: float = 0.0,
+        draw: Callable[[], float] = random.random,
     ) -> None:
         if latency_seconds < 0:
             raise ValueError("latency_seconds must not be negative")
+        if not 0 <= rate_limited_share <= 1:
+            raise ValueError("rate_limited_share must be from 0 to 1")
         self._turns = list(turns)
         self._latency = latency_seconds
         self._sleep = sleep
+        self._rate_limited_share = rate_limited_share
+        self._draw = draw
 
     def complete(
         self, model: str, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
     ) -> ModelTurn:
         if self._latency > 0:
             self._sleep(self._latency)
+        if self._rate_limited_share > 0 and self._draw() < self._rate_limited_share:
+            raise ModelRateLimited("Stub model: rate limited (MODEL_STUB_429_RATE)")
         position = sum(1 for m in messages if m.role == "assistant")
         if position >= len(self._turns):
             return final_turn("Stub model: script finished.")

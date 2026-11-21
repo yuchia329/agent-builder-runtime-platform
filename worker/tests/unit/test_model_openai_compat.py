@@ -6,7 +6,7 @@ import pytest
 from fake_openai_server import FakeOpenAIServer, fixture
 
 from worker.adapters.model_openai_compat import OpenAICompatModel
-from worker.core.errors import ModelError
+from worker.core.errors import ModelError, ModelRateLimited
 from worker.core.types import (
     Message,
     ModelTurn,
@@ -285,3 +285,33 @@ def test_minimax_balance_error_is_not_retried(server):
         model(server).complete("m", "s", [Message.user("hi")], [])
 
     assert len(server.requests) == 1
+
+
+def test_still_rate_limited_after_the_retries_is_model_rate_limited(server):
+    server.reply(*[{"error": "slow down"}] * 4, status=429, headers={"Retry-After": "45"})
+
+    with pytest.raises(ModelRateLimited, match="gave up after 4 attempts") as limited:
+        model(server).complete("m", "s", [Message.user("hi")], [])
+
+    assert limited.value.retry_after == 45.0  # the provider's wait, not capped like retries
+
+
+def test_still_minimax_rate_limited_is_model_rate_limited(server):
+    throttled = copy.deepcopy(fixture("minimax", "final_turn"))
+    throttled["base_resp"] = {"status_code": 1002, "status_msg": "rate limit"}
+    server.reply(*[throttled] * 4)
+
+    with pytest.raises(ModelRateLimited) as limited:
+        model(server).complete("m", "s", [Message.user("hi")], [])
+
+    assert limited.value.retry_after is None
+
+
+def test_server_errors_after_the_retries_are_not_rate_limits(server):
+    server.reply({"error": "busy"}, {"error": "busy"}, status=429)
+    server.reply({"error": "busy"}, {"error": "busy"}, status=503)  # the last failure decides
+
+    with pytest.raises(ModelError) as failed:
+        model(server).complete("m", "s", [Message.user("hi")], [])
+
+    assert not isinstance(failed.value, ModelRateLimited)

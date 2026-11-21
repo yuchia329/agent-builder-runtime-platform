@@ -6,7 +6,7 @@ import pytest
 from fake_bedrock import fixture, stub_client, stubbed_bedrock
 
 from worker.adapters.model_bedrock import BedrockConverseModel
-from worker.core.errors import ModelError
+from worker.core.errors import ModelError, ModelRateLimited
 from worker.core.types import Message, ModelTurn, StopReason, ToolCall, ToolResult, ToolSpec, Usage
 
 MODEL = "amazon.nova-lite-v1:0"
@@ -197,3 +197,16 @@ def test_uses_botocore_standard_retries():
     model = BedrockConverseModel(attempts=4)
 
     assert model._boto_config.retries == {"mode": "standard", "max_attempts": 4}
+
+
+def test_throttling_after_botocore_retries_is_model_rate_limited():
+    client, stubber = stub_client()
+    stubber.add_client_error(
+        "converse",
+        service_error_code="ThrottlingException",
+        service_message="Too many requests, please wait before trying again.",
+        http_status_code=429,
+    )
+
+    with pytest.raises(ModelRateLimited, match="ThrottlingException"):
+        BedrockConverseModel(client=client).complete(MODEL, "s", [Message.user("x")], TOOLS)

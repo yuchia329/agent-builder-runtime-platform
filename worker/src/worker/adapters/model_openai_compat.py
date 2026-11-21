@@ -15,7 +15,9 @@ Translation rules:
 
 Retries: throttling (429, MiniMax rate-limit codes), server errors (5xx, MiniMax server codes) and
 network errors or timeouts are retried with exponential backoff and jitter, honoring
-``Retry-After`` up to ``MAX_RETRY_AFTER``; then ``ModelError``. Everything else (bad key, no
+``Retry-After`` up to ``MAX_RETRY_AFTER``; then ``ModelError``, or ``ModelRateLimited`` when
+the last attempt was rate limited (429 or a MiniMax rate-limit code), so the loop sets the run
+aside instead of failing it (ADR 0027). Everything else (bad key, no
 balance, invalid request, unreadable reply) fails at once. A request that timed out may still
 have been billed by the provider.
 """
@@ -31,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from worker.core.errors import ModelError
+from worker.core.errors import ModelError, ModelRateLimited
 from worker.core.types import Message, ModelTurn, StopReason, ToolCall, ToolSpec, Usage
 
 log = logging.getLogger(__name__)
@@ -40,16 +42,18 @@ MAX_ERROR_BODY = 500
 MAX_RETRY_AFTER = 30.0
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 # MiniMax base_resp codes worth retrying (platform.minimax.io/docs/api-reference/errorcode,
-# checked 2026-11-16): rate limits, timeouts, server errors.
-RETRY_PROVIDER_CODES = frozenset(
-    {1002, 1039, 1041, 1045, 2045, 2046, 2047, 1001, 2066, 1000, 1024, 1033, 2064}
-)
+# checked 2026-11-16, rate limits again 2026-11-21): rate limits, timeouts, server errors.
+RATE_LIMIT_PROVIDER_CODES = frozenset({1002, 1039, 1041, 1045, 2045, 2046, 2047})
+RETRY_PROVIDER_CODES = RATE_LIMIT_PROVIDER_CODES | {1001, 2066, 1000, 1024, 1033, 2064}
 
 
 class _Retryable(ModelError):
-    def __init__(self, message: str, retry_after: float | None = None) -> None:
+    def __init__(
+        self, message: str, retry_after: float | None = None, *, rate_limited: bool = False
+    ) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+        self.rate_limited = rate_limited
 
 
 def wire_tool_name(name: str) -> str:
@@ -101,7 +105,10 @@ class OpenAICompatModel:
                 return self._send(body)
             except _Retryable as e:
                 if attempt == self._attempts:
-                    raise ModelError(f"{e} (gave up after {attempt} attempts)") from e
+                    message = f"{e} (gave up after {attempt} attempts)"
+                    if e.rate_limited:
+                        raise ModelRateLimited(message, e.retry_after) from e
+                    raise ModelError(message) from e
                 delay = self._delay(attempt, e.retry_after)
                 log.warning(
                     "model call attempt %d failed: %s; retrying in %.1fs", attempt, e, delay
@@ -128,7 +135,9 @@ class OpenAICompatModel:
                 f"{response.text[:MAX_ERROR_BODY]}"
             )
             if response.status_code in RETRY_STATUSES:
-                raise _Retryable(message, _retry_after(response))
+                raise _Retryable(
+                    message, _retry_after(response), rate_limited=response.status_code == 429
+                )
             raise ModelError(message)
         try:
             return _parse_turn(response.json())
@@ -192,7 +201,9 @@ def _parse_turn(data: dict[str, Any]) -> ModelTurn:
     code = base.get("status_code", 0)
     if code != 0:
         message = f"Model provider error {code}: {base.get('status_msg', '')}"
-        raise _Retryable(message) if code in RETRY_PROVIDER_CODES else ModelError(message)
+        if code in RETRY_PROVIDER_CODES:
+            raise _Retryable(message, rate_limited=code in RATE_LIMIT_PROVIDER_CODES)
+        raise ModelError(message)
     choice = data["choices"][0]
     message = choice["message"]
     finish = choice.get("finish_reason")

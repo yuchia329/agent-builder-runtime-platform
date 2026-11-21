@@ -284,3 +284,48 @@ def test_wiring_gives_the_stub_its_latency():
     env = {"QUEUE_BACKEND": "memory", "STATE_BACKEND": "memory", "MODEL_STUB_LATENCY_MS": "250"}
     stub = build(Config.from_env(env)).deps.model._providers["stub"]
     assert stub._latency == 0.25
+
+
+def test_stub_429_rate_and_price_default_to_zero_and_read_numbers():
+    config = Config.from_env(LOCAL)
+    assert (config.stub_429_rate, config.stub_price_usd) == (0.0, 0.0)
+
+    env = {**LOCAL, "MODEL_STUB_429_RATE": "0.1", "MODEL_STUB_PRICE_USD": "0.002"}
+    config = Config.from_env(env)
+    assert (config.stub_429_rate, config.stub_price_usd) == (0.1, 0.002)
+    assert Config.from_env({**LOCAL, "MODEL_STUB_429_RATE": " "}).stub_429_rate == 0.0
+
+
+@pytest.mark.parametrize(
+    ("name", "raw"),
+    [
+        ("MODEL_STUB_429_RATE", "-0.1"),
+        ("MODEL_STUB_429_RATE", "1.5"),
+        ("MODEL_STUB_429_RATE", "often"),
+        ("MODEL_STUB_429_RATE", "nan"),
+        ("MODEL_STUB_PRICE_USD", "2"),
+        ("MODEL_STUB_PRICE_USD", "-1"),
+        ("MODEL_STUB_PRICE_USD", "inf"),
+    ],
+)
+def test_bad_stub_429_rate_or_price(name, raw):
+    with pytest.raises(ConfigError, match=name):
+        Config.from_env({**LOCAL, name: raw})
+
+
+def test_wiring_gives_the_stub_its_429_rate_and_price():
+    from worker.adapters.model_stub import STUB_USAGE
+    from worker.core.models import model_info
+    from worker.wiring import build
+
+    env = {"QUEUE_BACKEND": "memory", "STATE_BACKEND": "memory"}
+    plain = build(Config.from_env(env)).deps
+    assert model_info("stub/demo", dict(plain.models)).price.cost_usd(STUB_USAGE) == 0
+
+    priced = build(
+        Config.from_env({**env, "MODEL_STUB_429_RATE": "0.25", "MODEL_STUB_PRICE_USD": "0.01"})
+    ).deps
+    assert priced.model._providers["stub"]._rate_limited_share == 0.25
+    cost = model_info("stub/demo", dict(priced.models)).price.cost_usd(STUB_USAGE)
+    assert cost == pytest.approx(0.01)
+    assert model_info("minimax/MiniMax-M3", dict(priced.models)).price.input_per_million == 0.30

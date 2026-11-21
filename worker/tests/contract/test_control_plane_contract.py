@@ -6,7 +6,7 @@ from contracts import example_run
 from fake_control_plane_server import FakeControlPlaneServer, http_client
 
 from worker.adapters.control_plane_memory import InMemoryControlPlane
-from worker.core.errors import RunConflict, RunNotFound
+from worker.core.errors import RunConflict, RunDeferred, RunNotFound
 from worker.core.types import Decision, Failure, FailureReason, RunStatus, RunUpdate
 
 DECIDED_ID = "run_decided"
@@ -102,3 +102,88 @@ def test_disallowed_status_change_raises_conflict(control_plane):
     cp.update_run(run_id, RunUpdate(RunStatus.FAILED, failure=Failure(FailureReason.ERROR, "x")))
     with pytest.raises(RunConflict):
         cp.update_run(run_id, RunUpdate(RunStatus.RUNNING))
+
+
+# Tenant limits (ADR 0026, ADR 0027). `limited` gives the adapter and the state behind it.
+
+OTHER_ID = "run_other"
+
+
+def _limited_memory():
+    cp = InMemoryControlPlane()
+    return cp, cp, None
+
+
+def _limited_http():
+    server = FakeControlPlaneServer().__enter__()
+    return http_client(server), server.state, server.__exit__
+
+
+LIMITED = {"memory": _limited_memory, "http": _limited_http}
+
+
+@pytest.fixture(params=LIMITED.values(), ids=LIMITED.keys())
+def limited(request):
+    cp, state, cleanup = request.param()
+    state.add_run(example_run())
+    state.add_run(example_run() | {"run_id": OTHER_ID})
+    yield cp, state
+    if cleanup:
+        cleanup()
+
+
+def test_start_at_the_tenant_cap_raises_deferred_and_leaves_the_run_queued(limited):
+    cp, state = limited
+    state.max_running = 1
+    run_id = example_run()["run_id"]
+    cp.update_run(OTHER_ID, RunUpdate(RunStatus.RUNNING))
+
+    with pytest.raises(RunDeferred) as deferred:
+        cp.update_run(run_id, RunUpdate(RunStatus.RUNNING))
+
+    assert 1 <= deferred.value.retry_after_seconds <= 900
+    assert cp.get_run(run_id).status is RunStatus.QUEUED
+
+
+def test_start_over_the_daily_spend_cap_raises_conflict_and_fails_the_run(limited):
+    cp, state = limited
+    state.over_budget.add(example_run()["tenant_id"])
+    run_id = example_run()["run_id"]
+
+    with pytest.raises(RunConflict):
+        cp.update_run(run_id, RunUpdate(RunStatus.RUNNING))
+
+    assert cp.get_run(run_id).status is RunStatus.FAILED
+    assert state.run_json(run_id)["failure"]["reason"] == "tenant_budget"
+
+
+def test_defer_sets_a_running_run_aside(limited):
+    cp, state = limited
+    run_id = example_run()["run_id"]
+    cp.update_run(run_id, RunUpdate(RunStatus.RUNNING))
+
+    assert cp.defer_run(run_id, 60) is RunStatus.QUEUED
+
+    assert cp.get_run(run_id).status is RunStatus.QUEUED
+    assert state.deferrals == [(run_id, {"reason": "rate_limited", "retry_after_seconds": 60})]
+
+
+def test_defer_after_fifteen_minutes_set_aside_fails_the_run(limited):
+    cp, state = limited
+    run_id = example_run()["run_id"]
+    cp.update_run(run_id, RunUpdate(RunStatus.RUNNING))
+    cp.defer_run(run_id, 900)
+    cp.update_run(run_id, RunUpdate(RunStatus.RUNNING))
+
+    assert cp.defer_run(run_id, 60) is RunStatus.FAILED
+
+    assert state.run_json(run_id)["failure"]["reason"] == "rate_limited"
+
+
+def test_defer_of_a_run_that_is_not_running_raises(limited):
+    cp, _ = limited
+
+    with pytest.raises(RunConflict):
+        cp.defer_run(example_run()["run_id"], 30)
+    with pytest.raises(RunNotFound):
+        cp.defer_run("run_missing", 30)

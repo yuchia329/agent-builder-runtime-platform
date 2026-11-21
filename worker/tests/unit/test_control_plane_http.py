@@ -1,11 +1,13 @@
 """HttpControlPlane details beyond the ControlPlane contract: signing, retries, error mapping."""
 
+import json
+
 import pytest
-from contracts import example_run
-from fake_control_plane_server import fake_signer, http_client
+from contracts import CONTRACTS, contract_errors, example_run
+from fake_control_plane_server import deferred_problem, fake_signer, http_client
 
 from worker.adapters.control_plane_http import HttpControlPlane
-from worker.core.errors import ControlPlaneError
+from worker.core.errors import ControlPlaneError, RunDeferred
 from worker.core.types import RunStatus, RunUpdate
 
 RUN_ID = example_run()["run_id"]
@@ -71,3 +73,42 @@ def test_client_error_is_not_retried(server):
     with pytest.raises(ControlPlaneError, match="400"):
         http_client(server).get_run(RUN_ID)
     assert len(server.requests) == 1
+
+
+def test_fake_server_problems_and_summaries_match_contract(server):
+    assert contract_errors("DeferredProblem", deferred_problem(30)) == []
+    example = json.loads((CONTRACTS / "examples" / "deferred-problem.valid.json").read_text())
+    assert deferred_problem(30).keys() == example.keys()
+    assert contract_errors("RunSummary", server.summary(RUN_ID)) == []
+
+
+def test_deferred_start_is_not_retried(server):
+    server.state.max_running = 0  # every start is put off
+
+    with pytest.raises(RunDeferred) as deferred:
+        http_client(server, attempts=3).update_run(RUN_ID, RunUpdate(RunStatus.RUNNING))
+
+    assert deferred.value.retry_after_seconds == 30
+    assert len(server.requests) == 1
+
+
+def test_plain_429_throttling_is_still_retried(server):
+    server.fail_next(429, times=2)  # API Gateway throttling: problem type about:blank
+
+    http_client(server, attempts=3).update_run(RUN_ID, RunUpdate(RunStatus.RUNNING))
+
+    assert len(server.requests) == 3
+    assert server.state.run_json(RUN_ID)["status"] == "RUNNING"
+
+
+def test_defer_posts_a_contract_body(server):
+    cp = http_client(server)
+    cp.update_run(RUN_ID, RunUpdate(RunStatus.RUNNING))
+
+    assert cp.defer_run(RUN_ID, 45) is RunStatus.QUEUED
+
+    method, path, _ = server.requests[-1]
+    assert (method, path) == ("POST", f"/internal/runs/{RUN_ID}/defer")
+    assert server.state.deferrals == [
+        (RUN_ID, {"reason": "rate_limited", "retry_after_seconds": 45})
+    ]

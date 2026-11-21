@@ -2,7 +2,9 @@
 
 Every request is signed with AWS SigV4 for service `execute-api`; in AWS, API Gateway checks the
 signature (ADR 0007). Locally the control plane ignores it, and the fake .env credentials sign.
-Connection errors, 429 and 5xx are retried with backoff, then raised as ControlPlaneError.
+Connection errors, 429 and 5xx are retried with backoff, then raised as ControlPlaneError. A 429
+with the `Deferred` problem type is an answer, not throttling: the control plane put off a run's
+start (tenant at its cap, ADR 0026), so it is never retried and becomes RunDeferred.
 """
 
 from __future__ import annotations
@@ -20,12 +22,14 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
-from worker.core.errors import ControlPlaneError, RunConflict, RunNotFound
-from worker.core.types import RunRecord, RunUpdate
+from worker.core.errors import ControlPlaneError, RunConflict, RunDeferred, RunNotFound
+from worker.core.types import RunRecord, RunStatus, RunUpdate
 
 log = logging.getLogger(__name__)
 
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+DEFERRED_PROBLEM = "urn:agent-platform:problem:deferred"
+MAX_DELAY_SECONDS = 900  # contract DelaySeconds
 
 # (method, url, headers, body) -> headers to send, including the signature.
 Signer = Callable[[str, str, Mapping[str, str], bytes], dict[str, str]]
@@ -90,10 +94,24 @@ class HttpControlPlane:
             raise RunNotFound(run_id)
         if response.status_code == 409:
             raise RunConflict(run_id, update.status, _detail(response))
+        if response.status_code == 429:  # only a Deferred problem gets here (not retried)
+            raise RunDeferred(run_id, _retry_after(response))
         self._expect_ok(response)
 
-    def _request(self, method: str, run_id: str, body: dict[str, Any] | None = None):
-        url = f"{self._base}/internal/runs/{quote(run_id, safe='')}"
+    def defer_run(self, run_id: str, retry_after_seconds: int) -> RunStatus:
+        body = {"reason": "rate_limited", "retry_after_seconds": retry_after_seconds}
+        response = self._request("POST", run_id, body, suffix="/defer")
+        if response.status_code == 404:
+            raise RunNotFound(run_id)
+        if response.status_code == 409:
+            raise RunConflict(run_id, RunStatus.QUEUED, _detail(response))
+        self._expect_ok(response)
+        return RunStatus(response.json()["status"])
+
+    def _request(
+        self, method: str, run_id: str, body: dict[str, Any] | None = None, suffix: str = ""
+    ):
+        url = f"{self._base}/internal/runs/{quote(run_id, safe='')}{suffix}"
         content = b"" if body is None else json.dumps(body).encode()
         headers = {"Accept": "application/json", **self._trace_headers()}
         if body is not None:
@@ -108,7 +126,7 @@ class HttpControlPlane:
             except httpx.TransportError as e:
                 problem = f"{type(e).__name__}: {e}"
             else:
-                if response.status_code not in RETRY_STATUSES:
+                if response.status_code not in RETRY_STATUSES or _is_deferred(response):
                     return response
                 problem = f"HTTP {response.status_code}: {_detail(response)}"
             if attempt < self._attempts:
@@ -123,6 +141,28 @@ class HttpControlPlane:
                 f"{response.request.method} {response.request.url} returned "
                 f"{response.status_code}: {_detail(response)}"
             )
+
+
+def _is_deferred(response: httpx.Response) -> bool:
+    if response.status_code != 429:
+        return False
+    try:
+        return response.json().get("type") == DEFERRED_PROBLEM
+    except (ValueError, AttributeError):
+        return False
+
+
+def _retry_after(response: httpx.Response) -> int:
+    """Seconds until a deferred run is delivered again: the problem's retry_after_seconds, else
+    the Retry-After header, else 1."""
+    try:
+        seconds = int(response.json()["retry_after_seconds"])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        try:
+            seconds = int(response.headers.get("Retry-After", "1"))
+        except ValueError:
+            seconds = 1
+    return min(max(seconds, 1), MAX_DELAY_SECONDS)
 
 
 def _detail(response: httpx.Response) -> str:

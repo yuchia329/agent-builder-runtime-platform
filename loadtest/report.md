@@ -74,8 +74,9 @@ every run succeeded.
 - **An idle queue delays scale-out** (test 1): SQS stops sending a queue's metrics after six hours
   with no call to it and resumes them up to 15 minutes after it wakes, so the scale-out alarm
   fired about 6 minutes after the runs were queued; the tasks then ran within 20 s. Fixed by an
-  hourly `TagQueue` call that keeps the queue active (ADR 0025). Measured after a quiet night:
-  _pending (2026-11-21)_.
+  hourly `TagQueue` call that keeps the queue active (ADR 0025); the calls succeed
+  (CloudTrail). Not yet confirmed over a quiet night (an optional follow-up: the queue's metric
+  points should keep coming after six hours without runs).
 - **Scale-out from 0 with an active queue takes about 3-4 minutes** (tests 3-5, queue to start
   p50 172-275 s; in test 3 the alarm fired 3.5 minutes after the runs were queued and the tasks
   ran 30 s later): CloudWatch's lag on SQS metrics plus the alarm's one-minute period. The first step also adds only 5 workers when
@@ -111,7 +112,7 @@ every run succeeded.
 Estimate: well under $1 for all seven tests (budget for M7: $5). Mostly Fargate (up to 20 tasks
 at about $0.02 per task-hour, for the tests and the scale-in after each), plus Lambda and API
 Gateway requests (about 75,000 in all) and CloudWatch logs; no model cost (stub). Actual, from
-Cost Explorer on the `project` tag: _pending (2026-11-21)_.
+Cost Explorer on the `project` tag: _pending (M6 cost check)_.
 
 ## Reproduce
 

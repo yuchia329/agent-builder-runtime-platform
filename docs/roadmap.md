@@ -42,13 +42,13 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
-**M7 (scale proof) in progress:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
+**M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
 queue's metrics; an hourly keep-alive applied, ADR 0025) and warm (start p50 0.1 s, 347 runs per
 minute); chaos at 100 runs (8 workers stopped, 5 killed mid-run, 13 runs taken over): 0 lost,
 0 repeated tool calls. 1,000-run tests at 50 runs per worker: all `SUCCEEDED`, up to 918
 executing at once; chaos at 1,000 (12 stopped, 88 taken over): 0 lost, 0 duplicate side effects
-(`loadtest/report.md`). M7 is done once the 2026-11-21 checks fill the report's last two lines.
+(`loadtest/report.md`). **M7 done (2026-11-21).**
 
 ## Approach
 
@@ -89,7 +89,7 @@ can run alongside 2 to 5. Start a session with
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind one API Gateway HTTP API, workers at 0; traces in X-Ray; no hourly cost when idle | In progress |
-| M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Planned     |
+| M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Done        |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
 ## MVP scope (M0 + M1)
@@ -528,7 +528,7 @@ Work in this order:
   inactive for over six hours stops sending metrics, and they come back up to 15 minutes after it
   wakes (AWS docs), so the scale-out alarm fired about 6 minutes after the runs were queued;
   tasks were running about 20 s later.
-- [ ] `[infra]` scale-out from an idle queue: an idle queue's metrics stop after six hours and
+- [x] `[infra]` scale-out from an idle queue: an idle queue's metrics stop after six hours and
   come back up to 15 minutes after it wakes, so the first run after a quiet period waits for the
   alarm (measured about 6 minutes; also the first real issue after a quiet day). Options: keep the
   queue active (an EventBridge Scheduler call to `sqs:GetQueueAttributes` every few hours, about
@@ -542,6 +542,12 @@ Work in this order:
   the sandbox, live `issue-triage`, about $0.01) reaches a worker within about 4 minutes. For
   scale: with an active queue and 0 workers (chaos test, 23:18 UTC), runs queued at 23:18:00, the
   alarm fired 23:21:29, tasks ran from 23:21:57 (metric lag plus the one-minute alarm period).
+  Closed 2026-11-21 without the overnight check (not needed for M7's goal): the hourly calls
+  succeed (CloudTrail `TagQueue`, 22:58 and 23:57 UTC), and AWS documents that any call keeps a
+  queue active. Optional follow-up, free, no run needed: after six hours without runs, the run
+  queue's `ApproximateNumberOfMessagesVisible` still has a point every minute (`infra/AGENTS.md`
+  → "Is the run queue reporting?"); if not, reopen with another call or a worker started on
+  enqueue.
 - [x] `[loadtest]` chaos: stop random worker tasks while runs are in progress (`ecs stop-task`);
   count lost runs (not final, or `FAILED` from the stop) and duplicate side effects from the
   gateway access log. Check: at 100 runs, 0 lost and 0 duplicates. Done: `--chaos-every S
@@ -561,8 +567,7 @@ Work in this order:
   amendment): both plans as expected, nothing applied (the loadtest session turns load mode on).
 - [x] `[loadtest]` full test and report: 1,000 runs without and with chaos; `loadtest/report.md`
   (setup, numbers, limits hit, cost); settings back to normal (`plan` shows the dev values).
-  **M7 done.** Done 2026-11-21 except two report lines (cold start after a quiet night, actual
-  cost) left for the 2026-11-21 checks: four 1,000-run tests at 50 runs per worker, all 1,000/1,000
+  **M7 done.** Done 2026-11-21 (the report's actual cost line waits for the M6 cost check): four 1,000-run tests at 50 runs per worker, all 1,000/1,000
   `SUCCEEDED`; up to 918 executing at once (20 workers up, 15 s model calls); chaos at 1,000 (12
   workers stopped, 6 killed mid-run): 88 runs taken over, 0 lost, one idempotent `add_label`
   repeated by design (ADR 0013), 0 duplicate side effects; 0 Lambda throttles or errors. Limits:
@@ -619,6 +624,13 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-21 · M7 closed** — M7 marked done: its goal (1,000 runs, chaos report) is met; the
+  `[infra]` idle-queue task is ticked without the overnight confirmation (calls verified in
+  CloudTrail; an optional, free follow-up check is in the task). `loadtest/report.md`: cold-start
+  line says so; cost line waits for the M6 cost check. Next: the M6 cost check (Cost Explorer,
+  tag `project`, probably readable now; it also fills the report's cost line), then M8 planning
+  (needs a new goal). Gotchas: none new.
 
 - **2026-11-21 · loadtest** — M7 full test and report. `loadtest/report.md` (setup, seven tests,
   chaos, limits, what it does not show, cost, reproduce); two lines pending: cold start after a

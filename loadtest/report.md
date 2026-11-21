@@ -1,4 +1,4 @@
-# M7 load and chaos report
+# Load, chaos and tenant-limits report (M7, M8)
 
 Runs on the dev deployment on AWS, 2026-11-20 and 2026-11-21 (UTC), with the stub model and the
 gateway's fake connector. Driver: `loadtest/` (`AGENTS.md` there has the commands). Raw results
@@ -100,8 +100,8 @@ every run succeeded.
 
 - **Real model and tools**: the stub answers after a fixed wait and the fake connector at once,
   with no rate limits. A real provider would limit 1,000 runs at once long before the platform
-  does (and cost money), and GitHub limits an App to about 5,000 requests an hour. Per-tenant
-  limits on runs at once are not built yet.
+  does (and cost money), and GitHub limits an App to about 5,000 requests an hour. Tenant limits
+  came in M8 (below).
 - **A tool that is not safe to repeat under chaos**: the stub calls only a read-only and an
   idempotent tool. A kill during, say, a Slack post would fail that run by design (ADR 0013),
   not repeat it; that path is tested locally (`make chaos`, unit tests), not here.
@@ -116,6 +116,85 @@ Cost Explorer on the `project` tag cannot show it yet: the worker tasks
 carried no tags during the tests (a follow-up adds them), and the tagged costs were only the KMS
 key's fixed $1 a month.
 
+## M8: tenant limits
+
+Three test tenants at once on the dev deployment, 2026-11-21 (UTC), in load-test mode with the
+stub model answering 429 ("still rate limited after the retries") on 20% of calls and costing
+$0.0001 a call. Driver: `uv run loadtest-limits` (`loadtest/AGENTS.md`).
+
+| Tenant | Limits | Traffic |
+| --- | --- | --- |
+| `load-a` (burst) | 100 runs at once, $5 a day | 1,000 runs at 50 a second |
+| `load-b` (trickle) | 50 at once, $5 a day | 1 run a second for 180 s, during the burst |
+| `load-c` (spend) | 50 at once, $0.005 a day left | one run at a time until refused, then 5 more starts |
+
+Before the test, a warm-up (300 `load-a` runs, not counted) brought 10 workers up.
+
+**Summary.** 1,197 of 1,197 runs `SUCCEEDED` while 20% of model calls were rate limited: 579
+runs were set aside 878 times, re-queued and resumed from their checkpoints, none failed
+`rate_limited`. `load-a` was put off at its cap 938 times and was at exactly its cap at the
+busiest moment; `load-b`'s runs were picked up within 0.1 s (p95) through the whole burst.
+`load-c` was refused after 17 runs and stayed refused. All seven checks of the M8 goal passed.
+
+| | `load-a` | `load-b` | `load-c` |
+| --- | --- | --- | --- |
+| Runs | 1,000/1,000 `SUCCEEDED` | 180/180 | 17/17, then 6 starts refused |
+| Queue to start (created to first attempt) p50 / p95 | 0.0 / 0.1 s | 0.0 / 0.1 s | 0.0 / 0.1 s |
+| Created to final p50 / p95 | 58 / 133 s | 34 / 103 s | 36 / 72 s |
+| Runs at once (slot bracket, see below) | 100 to 107 | 14 | 1 |
+| Starts put off at the cap | 938 (660 runs) | 0 | 0 |
+| Set aside on a 429 | 725 (479 runs) | 141 (90 runs) | 12 (10 runs) |
+| Redelivered (an error kept the message) | 0 | 0 | 0 |
+| Spend (stub price) | $0.30 | $0.054 | $0.0051 of $0.005 left |
+
+- **Runs at once.** The worker records a span around each control-plane call (`control_plane.update`,
+  `control_plane.defer`). A slot is taken inside the start PATCH and freed inside the final PATCH
+  or defer, so two counts bracket the true number: from the start's answer to sending the
+  freeing call (inside every slot) and from sending the start to the freeing call's answer
+  (contains every slot). `load-a`: 100 and 107. The inner count would pass 100 if the cap leaked;
+  it reached 100 and no more. The 7 above are calls in flight (p95 0.12 s each). The client
+  cannot see the instant of the conditional write, so this shows the cap was reached and held,
+  not a proof from inside the control plane.
+- **Times to final** include set-asides: a run set aside waits about 30 s (± 20%) before it is
+  delivered again, so a run hit once or twice by the 429s finishes 30-60 s later. Waiting is not
+  working time (ADR 0012).
+- **Control-plane calls** under the burst (warm Lambdas): start PATCH p95 0.12 s, put off at the
+  cap 0.19 s, defer 0.13 s, final PATCH 0.11 s.
+- **Spend cap.** `load-c` started each run when the last was final; once its day's spend passed
+  the cap, every `POST /runs` answered 429 `tenant_budget` (6 of 6). Spend ended $0.0001 over the
+  cap: the last run was already executing (runs already executing finish within their own budget).
+
+### Earlier runs: what went wrong first
+
+Two runs before the passing one, same traffic, failed checks for reasons that are findings too:
+
+- **Short of workers, the fair queue did not keep the quiet tenant fast.** Run 2 started with 1
+  worker (one warm-up run brings up one task; the service scales out a step at a time): 1 worker
+  for 2.5 minutes, then 2, then 11. `load-b`'s runs waited in the queue a p50 of 110 s while
+  there was 1 worker and 27 s as the others arrived (p95 137 s overall). SQS fairness reorders
+  delivery but does not add capacity; the cap is what keeps one tenant from taking every worker.
+- **Starts wait on the busy slot counter when the control plane is cold.** In run 1, a start
+  PATCH took up to 20.8 s (p95 4.8 s) under the burst: every start of one tenant is a
+  transaction on the same item, retried with backoff on conflicts. In run 3, with Lambdas warm
+  from the warm-up, p95 was 0.12 s.
+- **Measuring runs at once from attempt spans overcounts** (123 in run 1): an attempt also covers
+  that waiting. This is why the worker got its control-plane spans before run 3.
+- **The spend cap refuses only once spend is counted**, which is when runs finish: with 60 starts
+  sent before any `load-c` run had executed, none was refused and 42 queued runs failed
+  `tenant_budget` at start instead.
+
+### What M8 does not show
+
+- A real provider's 429s (the stub's are random and independent; a real one comes in waves) and
+  a day boundary for the spend cap (counters are per UTC day).
+- Fairness with workers short and the cap high: the cap (100 here) is what bounded `load-a`.
+
+### Cost
+
+About $1-2 for the three runs (Fargate up to 11 workers, Lambda, API Gateway, DynamoDB, logs);
+no model cost. The stub's price is fake spend that still goes into `ModelCostUsd`, so the $1
+spend alarm may email once for the day.
+
 ## Reproduce
 
 From the repo root, with the AWS profile `default` and the dev deployment applied:
@@ -126,3 +205,6 @@ From the repo root, with the AWS profile `default` and the dev deployment applie
 2. `cd loadtest && uv run loadtest --runs 1000 --rate 20 --poll 15` (add `--chaos-every 10
    --chaos-max 12` for chaos).
 3. `load_test = false` (remove the block), apply, and check that `plan` shows no changes.
+
+Tenant limits (M8): create the three test tenants once (`loadtest/AGENTS.md`), then with load
+mode on `cd loadtest && uv run loadtest-limits`.

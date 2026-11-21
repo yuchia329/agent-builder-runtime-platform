@@ -86,3 +86,30 @@ def test_error_message_has_no_key():
     with pytest.raises(ApiError) as caught:
         asyncio.run(api.start_run("load-stub", {}))
     assert "secret-key" not in str(caught.value)
+
+
+def test_over_the_daily_spend_cap_is_not_retried():
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append(request.url.path)
+        return httpx.Response(429, json={"status": 429, "reason": "tenant_budget"})
+
+    api, sleeps = make_api(handler)
+    with pytest.raises(ApiError) as refused:
+        asyncio.run(api.start_run("load-stub", {}))
+
+    assert (refused.value.status, refused.value.reason) == (429, "tenant_budget")
+    assert calls == ["/runs"] and sleeps == []
+    assert api.retries.by_status == {}
+
+
+def test_plain_429_throttling_is_still_retried():
+    answers = iter([httpx.Response(429, json={"message": "Too Many Requests"})])
+
+    def handler(request: httpx.Request):
+        return next(answers, httpx.Response(201, json={"run_id": "run_1"}))
+
+    api, sleeps = make_api(handler)
+    assert asyncio.run(api.start_run("load-stub", {}))["run_id"] == "run_1"
+    assert api.retries.by_status == {429: 1} and sleeps == [0.5]

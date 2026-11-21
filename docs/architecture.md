@@ -677,6 +677,13 @@ logged and never fails the run.
   repeat) and not a duplicate. Takeovers are counted from the run message's
   `queue.receive_count`, not from span counts: a killed worker never uploads the spans it still
   holds. Results: `loadtest/report.md`.
+- **Tenant limits** (`loadtest-limits`, M8, on AWS): three test tenants at once in load mode
+  (stub 429s on 20% of calls, a price per call): a burst for one, a trickle for another, a tiny
+  spend cap for the third, after a warm-up that brings the workers up. Runs at once per tenant
+  are bracketed from the worker's `control_plane.update` / `control_plane.defer` spans (the slot
+  is taken and freed inside those calls; the control plane's own spans are not uploaded);
+  put-off and set-aside attempts are counted from `run.attempt` spans; refusals from `POST /runs`
+  answers. It checks the M8 goal and exits non-zero otherwise.
 
 ## Deployment
 

@@ -1,6 +1,6 @@
 # loadtest
 
-Python 3.12, uv. Load driver against the AWS dev deployment (M7): stub model, gateway's fake
+Python 3.12, uv. Load driver against the AWS dev deployment (M7, M8): stub model, gateway's fake
 connector, never real providers or GitHub. Design: `docs/architecture.md` → Testing (Load and
 chaos) and Deployment (Load-test mode); ADR 0024. A client of the public API and a reader of
 CloudWatch, ECS and Terraform outputs: it changes no AWS resource and touches no table.
@@ -16,6 +16,8 @@ Run from `loadtest/`.
 | Lint / format | `uv run ruff check . && uv run ruff format --check .` / `uv run ruff format .` |
 | Load test | `uv run loadtest --runs 100 --rate 10` (needs load-test mode; costs money, see below) |
 | Chaos test | `uv run loadtest --runs 100 --rate 10 --chaos-every 20 --chaos-max 8`; at 1,000: `--runs 1000 --rate 20 --poll 15 --chaos-every 10 --chaos-max 12` (load mode with `stub_latency_ms = 15000`, see Gotchas) |
+| Tenant-limits test (M8) | `uv run loadtest-limits` (load mode on; three test tenants, see "Tenant-limits test"; about $0.6-1) |
+| Test tenants (once; table writes through the control plane's code) | from `control-plane/`, per tenant: `umask 077; ./gradlew -q tenantAdmin --args="create load-a --max-running 100 --daily-usd 5 --table agent-platform-dev-control-plane" > ~/.config/agent-platform/.load-a.out`, then keep only the `ap_...` line in `~/.config/agent-platform/load-a.key` (0600) and delete the `.out` file; `load-b` with the defaults, `load-c` with `--daily-usd 0.005`. Never print the output |
 | Results | `report.md` (committed); raw runs in `results/` (git-ignored) |
 
 ## A test, step by step
@@ -56,6 +58,27 @@ Run from `loadtest/`.
 - Retried answers: 429 (throttle), 502/503/504 (Lambda limit, timeouts) by status; each request
   is tried 4 times with backoff.
 
+## Tenant-limits test
+
+`loadtest-limits` (M8; ADR 0026, ADR 0027), in order:
+
+1. Warm-up (not counted): 300 `load-a` runs, then waits until 8 workers run. Without it the
+   test starts on 1 worker and measures capacity, not fairness.
+2. At once: `load-a` 1,000 runs at 50/s (cap 100); `load-b` 1/s for 180 s; `load-c` one run at a
+   time (each when the last is final, since spend is counted as runs finish) until a start is
+   refused, then 5 more starts, at most 60.
+3. Reads `run.attempt`, `model.call` and the worker's `control_plane.update` /
+   `control_plane.defer` spans per 60 s window (Logs Insights stops at 10,000 rows), the queue's
+   visible and quiet-tenant metrics, ECS metrics.
+4. Checks (exit 0 only if all pass): `load-a`'s inner slot count at most its cap; every `load-a`
+   and `load-b` run `SUCCEEDED`; `load-b` p95 queue to start within 30 s once workers are up;
+   `load-c` refused, nothing created after the first refusal, failures `tenant_budget` only.
+
+Slot counts: inner = start PATCH answered to freeing call sent (inside the slot; above the cap
+means a leak), outer = start sent to freeing call answered (contains it). Attempt spans also
+count the wait on a busy slot counter, so they overcount. Put off = an attempt that ended
+`QUEUED` without a model call; set aside = one that called the model and ended `QUEUED`.
+
 ## Layout
 
 - `src/loadtest/cli.py`: arguments, wiring, report, results file.
@@ -67,6 +90,8 @@ Run from `loadtest/`.
   `repeated_calls`.
 - `stats.py`: percentiles, `RunRecord`, `summarize`.
 - `spec.py`: the load agent's spec (name and trigger swapped in the example spec).
+- `limits.py`: tenant-limits numbers (overlaps, put-off and set-aside counts, refusals) and the
+  M8 checks; `limits_cli.py`: the `loadtest-limits` command (warm-up, the three tenants, report).
 
 ## Gotchas
 
@@ -93,6 +118,12 @@ Run from `loadtest/`.
 - A killed worker's spans are lost, so some runs may have no "run.attempt" span after a chaos
   test; queue-to-start then leaves them out ("without a span").
 - A 100-run test costs about $0.10-0.25 (Fargate while it scales in); nothing calls a real model.
+- Spend counters are per UTC day: `load-c` stays refused until 00:00 UTC. To test again the same
+  day, raise its cap to the day's spend plus $0.005 (`tenantAdmin set-limits load-c --daily-usd
+  X`; the spend so far is the sum of `cost_usd` of its runs in today's results).
+- The stub's price goes into the real `ModelCostUsd`: two tenant-limits tests in 24 hours pass
+  the $1 spend alarm (an email, no real cost).
+- Keys of the test tenants are read from `~/.config/agent-platform/<tenant>.key` (must be 0600).
 
 ## Conventions
 

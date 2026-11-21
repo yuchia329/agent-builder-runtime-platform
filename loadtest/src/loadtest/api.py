@@ -1,4 +1,8 @@
-"""The platform's public API, as the driver uses it (tenant API key in `X-Api-Key`)."""
+"""The platform's public API, as the driver uses it (tenant API key in `X-Api-Key`).
+
+429 and 5xx answers are retried (API Gateway throttling, Lambda limits), except a 429 whose
+problem `reason` is `tenant_budget`: the tenant is over its daily spend cap (ADR 0026), an answer
+that does not change by retrying. It raises ApiError with that reason at once."""
 
 import asyncio
 import json
@@ -7,12 +11,22 @@ from dataclasses import dataclass, field
 import httpx
 
 RETRY_STATUSES = frozenset({429, 502, 503, 504})
+TENANT_BUDGET = "tenant_budget"
 
 
 class ApiError(Exception):
-    def __init__(self, method: str, path: str, status: int, body: str) -> None:
+    def __init__(self, method: str, path: str, status: int, body: str, reason: str | None = None):
         super().__init__(f"{method} {path} answered {status}: {body[:300]}")
         self.status = status
+        self.reason = reason  # the problem's `reason`, if it had one
+
+
+def _reason(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body.get("reason") if isinstance(body, dict) else None
 
 
 @dataclass
@@ -82,10 +96,13 @@ class Api:
             response = await self._client.request(method, path, content=content, headers=headers)
             if response.status_code in ok:
                 return response.status_code, (response.json() if response.content else {})
+            reason = _reason(response) if response.status_code >= 400 else None
+            if response.status_code == 429 and reason == TENANT_BUDGET:
+                raise ApiError(method, path, 429, response.text, reason)
             if response.status_code in RETRY_STATUSES:
                 self.retries.add(response.status_code)
                 if attempt < self._attempts:
                     await self._sleep(self._backoff_s * 2 ** (attempt - 1))
                     continue
-            raise ApiError(method, path, response.status_code, response.text)
+            raise ApiError(method, path, response.status_code, response.text, reason)
         raise AssertionError("unreachable")

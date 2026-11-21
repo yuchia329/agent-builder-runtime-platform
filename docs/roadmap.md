@@ -42,9 +42,12 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
-**M8 (production limits) in progress:** planned 2026-11-21; contracts, control-plane
-(tenants, limits), worker limits and infra done, limits deployed on AWS (2026-11-21); next
-`[loadtest]` (two tenants, 429 injection, spend cap).
+**M8 (production limits) done (2026-11-21):** tenant records and hashed keys, a cap on runs at
+once checked at start, setting runs aside on model 429s, a daily spend cap and a fair queue,
+deployed. On AWS, with a 1,000-run burst from one tenant and 20% of stub calls answering 429:
+1,197 of 1,197 runs `SUCCEEDED` (579 set aside and resumed), the burst tenant at exactly its cap
+of 100, the quiet tenant picked up within 0.1 s (p95), the spend tenant refused after 17 runs
+(`loadtest/report.md`). Next: plan the next milestone, or the follow-ups below.
 **M6 done (2026-11-21):** the cost check shows only the KMS key's fixed $1 a month, nothing
 billed by the hour. **M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
@@ -94,7 +97,7 @@ can run alongside 2 to 5. Start a session with
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind one API Gateway HTTP API, workers at 0; traces in X-Ray; no hourly cost when idle | Done        |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Done        |
-| M8  | Production limits | Two tenants on AWS: while tenant A starts 1,000 runs at once and tenant B 1 a second, B's runs start within 30 s (p95, workers up) and A never exceeds its cap on runs at once; with 20% of stub model calls answering 429 no run fails; a tenant over its daily spend cap gets new runs refused; numbers in `loadtest/report.md` | In progress |
+| M8  | Production limits | Two tenants on AWS: while tenant A starts 1,000 runs at once and tenant B 1 a second, B's runs start within 30 s (p95, workers up) and A never exceeds its cap on runs at once; with 20% of stub model calls answering 429 no run fails; a tenant over its daily spend cap gets new runs refused; numbers in `loadtest/report.md` | Done |
 
 ## MVP scope (M0 + M1)
 
@@ -641,10 +644,13 @@ Work in this order:
   `stub_price_usd` $0.0001 a call in load mode; fair queue confirmed in the SQS guide (no
   setting, no consumer change); no IAM, route or table change. Control plane (version 4) and
   worker `5ef8358` deployed in one apply; a sweep answered `"stalled":0`, no run started.
-- [ ] `[loadtest]` two tenants: a burst for one, a trickle for the other (start times per tenant),
+- [x] `[loadtest]` two tenants: a burst for one, a trickle for the other (start times per tenant),
   the cap held (runs executing per tenant over time), 429 injection (0 failed, runs set aside
   counted), spend cap (refusals counted); a section in `loadtest/report.md`. Check: the M8 row's
-  numbers. **M8 done.**
+  numbers. **M8 done.** Done 2026-11-21: `uv run loadtest-limits`, three test tenants
+  (`load-a` cap 100, `load-b`, `load-c` $0.005 a day); all 7 checks passed on the third run (the
+  first two found the one-worker start and the spend tenant's timing; the worker got
+  control-plane spans in between to bracket slots). 76 tests.
 
 ## Follow-ups
 
@@ -660,6 +666,10 @@ them.
   fallback (Cross-service changes).
 - [ ] `[specs]` `specs/README.md`: the gotcha "do not run `aws_demo.py` while live" is outdated
   (it runs its own `demo-stub` and refuses without the fake connector).
+- [ ] `[control-plane]` cold slot counter: in the first M8 run (Lambdas cold) a start PATCH took
+  up to 20.8 s (p95 4.8 s) under a 1,000-run burst, warm p95 0.12 s. Measure whether a cheap read
+  of `running` before the transaction (defer at once when at the cap) cuts the conflicts; only
+  if it does, change it. Check: the M8 test's start-PATCH times, cold.
 - [ ] `[ci]` GitHub Actions: each component's tests on push and pull request (control plane with
   Docker, the Python services, contracts, `terraform validate`), a status badge in the README;
   later an eval gate on spec changes (a model key as a GitHub secret).
@@ -716,6 +726,18 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-21 · loadtest** — M8 task 6 done, **M8 done**. `loadtest-limits` (`limits.py`,
+  `limits_cli.py`): warm-up of 300 runs until 8 workers, then `load-a` 1,000 runs at 50/s (cap
+  100), `load-b` 1/s for 180 s, `load-c` one run at a time until refused; numbers from spans
+  (slot bracket from the worker's `control_plane.*` spans, put-off and set-aside attempts), the
+  queue's quiet-tenant metric. `api.py` no longer retries a `tenant_budget` 429. Run 3 passed
+  all 7 checks (`report.md` → M8). Found on the way: with 1 worker the fair queue did not keep
+  the quiet tenant fast (p50 110 s; capacity, not fairness); cold, a start waits on the busy
+  slot counter up to 20.8 s (follow-up); attempt spans overcount runs at once. Tenants `load-a`,
+  `load-b`, `load-c` stay on the table; keys in `~/.config/agent-platform/` (0600). Load mode
+  off, `plan` clean. Next: plan the next milestone or the follow-ups. Gotchas: `load-c`'s spend
+  counter resets at 00:00 UTC (raise its cap to test again the same day); the stub's fake spend
+  can trip the $1 spend alarm.
 - **2026-11-21 · worker** — Spans around control-plane calls (for M8 task 6, not a roadmap
   task): the first M8 load test could not tell a start waiting on the busy slot counter (up to
   20.8 s under a 1,000-run burst) from time holding a slot, and control-plane spans are not

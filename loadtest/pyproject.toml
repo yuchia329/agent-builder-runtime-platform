@@ -1,7 +1,7 @@
 [project]
 name = "loadtest"
 version = "0.0.1"
-description = "Load driver against the AWS dev deployment: stub model, fake connector (M7)"
+description = "Load driver against the AWS dev deployment: stub model, fake connector (M7, M8)"
 requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.35",
@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 loadtest = "loadtest.cli:main"
+loadtest-limits = "loadtest.limits_cli:main"
 
 [dependency-groups]
 dev = [

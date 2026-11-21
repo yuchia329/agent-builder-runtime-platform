@@ -619,7 +619,10 @@ One trace per run ([ADR 0022](adr/0022-run-traces-start-in-the-control-plane.md)
   IAM-authorized on AWS) may join a caller's trace.
 - **Spans:** in the control plane one SERVER span per request (`<METHOD> <route>`, status, run id
   from the route) and one per AWS SDK call (DynamoDB, SQS, KMS, SSM); in the worker one per model
-  call ("model.call"), tool call ("tool.call") and checkpoint write ("checkpoint"), all under one
+  call ("model.call"), tool call ("tool.call"), checkpoint write ("checkpoint") and control-plane
+  call ("control_plane.update" with the status asked for, "control_plane.defer" with the status
+  answered; `outcome` ok, deferred, conflict or error: when a run's slot was taken and freed, since
+  the control plane's own spans are not uploaded), all under one
   "run.attempt" span per queue delivery whose parent is the message's `traceparent`; in the
   gateway "mcp.tools_list" and "tool.execute" (children of the worker's span, with the outcome),
   "approval.check", and "connector.request" per HTTP attempt (connector, operationId, status,

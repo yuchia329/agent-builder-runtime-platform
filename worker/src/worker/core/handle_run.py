@@ -36,8 +36,12 @@ not saved; it is rebuilt from the run. If the run-state store fails (StateError)
 stops without reporting, and the run resumes later from its last checkpoint.
 
 Tracing (``deps.tracer``, ADR 0022): a span per model call (``model.call``), tool call
-(``tool.call``) and checkpoint write (``checkpoint``), children of the caller's span (the poll
-loop's ``run.attempt``). Attributes are ids, counts and names; never input, output or arguments.
+(``tool.call``), checkpoint write (``checkpoint``) and control-plane call
+(``control_plane.update`` with the status asked for, ``control_plane.defer`` with the status
+answered; both with an ``outcome``: ok, deferred, conflict or error), children of the caller's
+span (the poll loop's ``run.attempt``). The control-plane spans show when a run's slot was taken
+and freed (ADR 0026), apart from time spent waiting on the control plane. Attributes are ids,
+counts and names; never input, output or arguments.
 """
 
 from __future__ import annotations
@@ -47,7 +51,8 @@ import json
 import logging
 import math
 import random
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -153,7 +158,7 @@ def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunSt
         log.info("run %s: resuming after step %d", run_id, resume.steps)
     try:
         # QUEUED -> RUNNING, or RUNNING -> RUNNING when a run is picked up again.
-        deps.control_plane.update_run(run_id, RunUpdate(RunStatus.RUNNING, steps=resume.steps))
+        _update(deps, run_id, RunUpdate(RunStatus.RUNNING, steps=resume.steps))
     except RunDeferred as e:
         log.info(
             "run %s: tenant at its cap on runs at once; the control plane re-queued it in %ds",
@@ -189,7 +194,7 @@ def handle_run(run_id: str, deps: Deps, attempt: Attempt | None = None) -> RunSt
         log.exception("run %s crashed", run_id)
         final = _failed(budget, FailureReason.ERROR, f"{type(e).__name__}: {e}")
 
-    deps.control_plane.update_run(run_id, final)
+    _update(deps, run_id, final)
     return final.status
 
 
@@ -222,6 +227,30 @@ def _resume(checkpoints: Sequence[Checkpoint]) -> _Resume:
     return _Resume(messages, steps, cost, elapsed, last_turn)
 
 
+@contextmanager
+def _control_plane_span(deps: Deps, name: str, attributes: Mapping[str, str]) -> Iterator[Any]:
+    """A span around one control-plane call, with its outcome: ok, deferred (429 at the tenant's
+    cap), conflict (409) or error (anything else, re-raised)."""
+    with deps.tracer.span(name, attributes) as span:
+        try:
+            yield span
+        except RunDeferred:
+            span.set("outcome", "deferred")
+            raise
+        except RunConflict:
+            span.set("outcome", "conflict")
+            raise
+        except Exception:
+            span.set("outcome", "error")
+            raise
+        span.set("outcome", "ok")
+
+
+def _update(deps: Deps, run_id: str, update: RunUpdate) -> None:
+    with _control_plane_span(deps, "control_plane.update", {"run.status": update.status.value}):
+        deps.control_plane.update_run(run_id, update)
+
+
 def set_aside_delay(
     retry_after: float | None, spread: Callable[[float, float], float] = random.uniform
 ) -> int:
@@ -244,10 +273,12 @@ def _set_aside(
         "run %s: model still rate limited (%s); setting it aside for %ds", run_id, error, delay
     )
     try:
-        deps.control_plane.update_run(
-            run_id, RunUpdate(RunStatus.RUNNING, steps=budget.steps, cost_usd=_cost(budget))
+        _update(
+            deps, run_id, RunUpdate(RunStatus.RUNNING, steps=budget.steps, cost_usd=_cost(budget))
         )
-        status = deps.control_plane.defer_run(run_id, delay)
+        with _control_plane_span(deps, "control_plane.defer", {}) as span:
+            status = deps.control_plane.defer_run(run_id, delay)
+            span.set("run.status", status.value)
     except RunConflict:  # no longer RUNNING (a retried defer that had gone through)
         status = deps.control_plane.get_run(run_id).status
     log.info("run %s is %s after setting it aside", run_id, status)

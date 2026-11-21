@@ -1,6 +1,6 @@
 """A run's spans (ADR 0022): the poll loop continues the trace from the queue message, handle_run
-adds a span per model call, tool call and checkpoint, and nothing from the run's input, output or
-tool arguments reaches a span."""
+adds a span per model call, tool call, checkpoint and control-plane call, and nothing from the
+run's input, output or tool arguments reaches a span."""
 
 import json
 
@@ -23,16 +23,16 @@ TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 TRACE_PARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 
 
-def _run_traced(trace_parent=TRACE_PARENT):
+def _run_traced(trace_parent=TRACE_PARENT, *, control_plane=None, model=None, ends="SUCCEEDED"):
     spans = InMemorySpanExporter()
     tracer = build_tracer("none", "us-east-1", span_exporter=spans)
-    control_plane = InMemoryControlPlane()
+    control_plane = control_plane or InMemoryControlPlane()
     control_plane.add_run(example_run())
     clock = SystemClock()
     state = InMemoryRunStateStore(clock)
     deps = Deps(
         control_plane,
-        StubModel(demo_turns()),
+        model or StubModel(demo_turns()),
         issue_triage_tools(),
         clock,
         state=state,
@@ -44,7 +44,7 @@ def _run_traced(trace_parent=TRACE_PARENT):
     loop = PollLoop(queue, deps, state, wait_seconds=0)
     assert loop.poll_once() == 1
     loop.drain()
-    assert control_plane.run_json(RUN_ID)["status"] == "SUCCEEDED"
+    assert control_plane.run_json(RUN_ID)["status"] == ends
     return {s.context.span_id: s for s in spans.get_finished_spans()}, deps
 
 
@@ -105,3 +105,52 @@ def test_a_message_without_trace_context_starts_its_own_trace():
     [attempt] = _named(spans, "run.attempt")
     assert attempt.parent is None
     assert len({s.context.trace_id for s in spans.values()}) == 1
+
+
+def _control_plane_calls(spans):
+    """(name, status, outcome) of the control-plane spans in time order, after checking each is
+    a child of the attempt."""
+    [attempt] = _named(spans, "run.attempt")
+    calls = sorted(
+        (s for s in spans.values() if s.name.startswith("control_plane.")),
+        key=lambda s: s.start_time,
+    )
+    for call in calls:
+        assert call.parent.span_id == attempt.context.span_id
+    return [(c.name, c.attributes.get("run.status"), c.attributes["outcome"]) for c in calls]
+
+
+def test_control_plane_calls_have_spans_with_the_status_and_outcome():
+    spans, _ = _run_traced()
+
+    assert _control_plane_calls(spans) == [
+        ("control_plane.update", "RUNNING", "ok"),
+        ("control_plane.update", "SUCCEEDED", "ok"),
+    ]
+
+
+def test_a_start_put_off_at_the_cap_is_a_deferred_update():
+    spans, _ = _run_traced(control_plane=InMemoryControlPlane(max_running=0), ends="QUEUED")
+
+    assert _control_plane_calls(spans) == [("control_plane.update", "RUNNING", "deferred")]
+
+
+def test_a_start_over_the_spend_cap_is_a_conflict():
+    control_plane = InMemoryControlPlane()
+    control_plane.over_budget.add(RUN["tenant_id"])
+
+    spans, _ = _run_traced(control_plane=control_plane, ends="FAILED")
+
+    assert _control_plane_calls(spans) == [("control_plane.update", "RUNNING", "conflict")]
+
+
+def test_a_run_set_aside_reports_progress_then_defers():
+    model = StubModel(demo_turns(), rate_limited_share=1.0)
+
+    spans, _ = _run_traced(model=model, ends="QUEUED")
+
+    assert _control_plane_calls(spans) == [
+        ("control_plane.update", "RUNNING", "ok"),
+        ("control_plane.update", "RUNNING", "ok"),
+        ("control_plane.defer", "QUEUED", "ok"),
+    ]

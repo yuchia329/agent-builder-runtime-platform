@@ -152,6 +152,9 @@ Run from `worker/`.
   only the exception type; `tests/integration/test_tracing.py` checks for leaks). Adapters that
   call another service take `trace_headers(tracer)` and add `traceparent`; `GatewayTools` reads it
   on the caller's thread, before its event loop.
+- Every control-plane call in `handle_run` goes through `_update` or `_control_plane_span`
+  (spans `control_plane.update` / `control_plane.defer` with `outcome`): the M8 load test reads
+  slot times from them (`loadtest/`), so a new call gets one too.
 - Tracing tests use `build_tracer("none", ..., span_exporter=InMemorySpanExporter())`; the
   exporter drops spans after `shutdown()`, so read them before.
 - Metrics (ADR 0023): `Deps.metrics.model_cost(cost)` after every model call, 0 included. The EMF

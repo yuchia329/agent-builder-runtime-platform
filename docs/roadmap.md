@@ -716,6 +716,12 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-21 · worker** — Spans around control-plane calls (for M8 task 6, not a roadmap
+  task): the first M8 load test could not tell a start waiting on the busy slot counter (up to
+  20.8 s under a 1,000-run burst) from time holding a slot, and control-plane spans are not
+  uploaded. `handle_run` now wraps every `update_run` / `defer_run` in `control_plane.update`
+  (`run.status` asked) / `control_plane.defer` (`run.status` answered), `outcome` ok, deferred,
+  conflict or error. 413 tests. Next: image, apply (tag only, load mode on), rerun the M8 test.
 - **2026-11-21 · infra** — M8 task 5 done. `load_test_settings` has seven values now:
   `stub_429_rate` (0.2) and `stub_price_usd` ($0.0001 a call) become the worker's
   `MODEL_STUB_429_RATE` / `MODEL_STUB_PRICE_USD` in load mode (`load_test.tf`). The run queue is

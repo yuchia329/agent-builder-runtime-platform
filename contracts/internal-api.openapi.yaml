@@ -11,7 +11,8 @@ info:
         QUEUED ─▶ RUNNING ─▶ WAITING_APPROVAL ─▶ (control plane re-queues) ─▶ QUEUED ─▶ RUNNING
                      │
                      ├─▶ SUCCEEDED
-                     └─▶ FAILED
+                     ├─▶ FAILED
+                     └─▶ (set aside: POST .../defer) ─▶ QUEUED, re-queued after a delay
 
     Status changes a caller may request with PATCH:
 
@@ -24,6 +25,24 @@ info:
     Any other change returns 409. Moving WAITING_APPROVAL back to QUEUED after an approval, or to
     FAILED after a rejection (`approval_rejected`) or a timeout (`approval_expired`), is done by
     the control plane itself (ADR 0002), not through this API.
+
+    Tenant limits (M8): each tenant has a cap on runs executing at once and a daily spend cap,
+    checked when a run starts (QUEUED → RUNNING):
+
+    - At the cap on runs at once, PATCH answers 429 with a `Deferred` problem and a
+      `Retry-After` header. The control plane has already re-queued the run with that delay; the
+      run stays QUEUED. The worker deletes its queue message and does nothing else.
+    - Over the daily spend cap, the control plane moves the run to FAILED (`tenant_budget`) and
+      PATCH answers 409 (the run is no longer QUEUED). The worker deletes its message.
+
+    A run holds its slot while RUNNING and frees it when it ends, waits for an approval or is set
+    aside. Resuming a RUNNING run after a crash (RUNNING → RUNNING) takes no new slot.
+
+    Setting aside (M8): a worker that cannot go on for a while (the model provider keeps
+    answering 429) calls POST /internal/runs/{run_id}/defer. The control plane moves the run from
+    RUNNING to QUEUED and re-queues it after the delay; after 15 minutes set aside in total it
+    moves the run to FAILED (`rate_limited`) instead. Time set aside is not working time, so it
+    does not count against budget.max_seconds (ADR 0012).
 
     Approvals: once a pending call is decided, the control plane clears `pending_approval` and
     sets `approval` (the latest decision). A worker that picks the run up again makes the call it
@@ -92,7 +111,52 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The requested status change is not allowed from the run's current status
+          description: |
+            The requested status change is not allowed from the run's current status. Also
+            returned when a start was refused because the tenant is over its daily spend cap: the
+            control plane has moved the run to FAILED (`tenant_budget`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          $ref: "#/components/responses/Deferred"
+
+  /internal/runs/{run_id}/defer:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: deferRun
+      tags: [runs]
+      summary: Set a running run aside and re-queue it after a delay
+      description: |
+        For a RUNNING run only. The control plane moves it to QUEUED, frees its slot and
+        re-queues it with `retry_after_seconds` as the delay, then answers with the run (QUEUED).
+        If the run has been set aside for 15 minutes or more in total, it moves the run to FAILED
+        (`rate_limited`) instead and answers with the FAILED run. Either way the worker deletes
+        its queue message and releases its lease. Steps already checkpointed stay done: the run
+        resumes after them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunDefer"
+      responses:
+        "200":
+          description: The run after setting it aside (QUEUED), or FAILED if it waited too long
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The run is not RUNNING
           content:
             application/problem+json:
               schema:
@@ -130,6 +194,21 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+    Deferred:
+      description: |
+        The tenant is at its cap on runs executing at once. The control plane has re-queued the
+        run after `retry_after_seconds`; the run stays QUEUED and the caller drops its message.
+      headers:
+        Retry-After:
+          description: Seconds until the run is delivered again (equal to retry_after_seconds).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 900
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/DeferredProblem"
 
   schemas:
     RunId:
@@ -328,12 +407,52 @@ components:
         reason:
           type: string
           description: |
-            approval_rejected and approval_expired are set by the control plane, never by a worker.
-          enum: [budget_steps, budget_usd, budget_seconds, approval_rejected, approval_expired, error]
+            approval_rejected, approval_expired, rate_limited (set aside for 15 minutes in total)
+            and tenant_budget (tenant over its daily spend cap at start) are set by the control
+            plane, never by a worker.
+          enum: [budget_steps, budget_usd, budget_seconds, approval_rejected, approval_expired,
+                 rate_limited, tenant_budget, error]
         message:
           description: Human-readable detail. Must not contain secrets.
           type: string
           maxLength: 2000
+
+    RunDefer:
+      description: Why and for how long a worker sets a running run aside.
+      type: object
+      additionalProperties: false
+      required: [reason, retry_after_seconds]
+      properties:
+        reason:
+          description: rate_limited = the model provider still answers 429 after the worker's retries.
+          type: string
+          enum: [rate_limited]
+        retry_after_seconds:
+          $ref: "#/components/schemas/DelaySeconds"
+
+    DelaySeconds:
+      description: Seconds before the run is delivered again (SQS DelaySeconds, at most 900).
+      type: integer
+      minimum: 1
+      maximum: 900
+
+    DeferredProblem:
+      description: RFC 9457 problem details for a start refused for now (429).
+      type: object
+      required: [type, title, status, reason, retry_after_seconds]
+      properties:
+        type:
+          const: "urn:agent-platform:problem:deferred"
+        title: { type: string }
+        status:
+          const: 429
+        detail: { type: string }
+        reason:
+          description: tenant_running_limit = the tenant is at its cap on runs executing at once.
+          type: string
+          enum: [tenant_running_limit]
+        retry_after_seconds:
+          $ref: "#/components/schemas/DelaySeconds"
 
     Problem:
       description: RFC 9457 problem details.

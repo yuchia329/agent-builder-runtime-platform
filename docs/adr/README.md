@@ -38,6 +38,8 @@ Rules:
 | [0023](0023-route-throttling-and-model-spend-alarm.md) | Route throttling at the API, a model spend alarm on a metric the worker writes | Proposed |
 | [0024](0024-load-test-mode-and-backlog-sized-scale-out.md) | Load-test mode as one Terraform switch; scale-out sized to the backlog | Proposed |
 | [0025](0025-keep-the-run-queue-active.md) | Keep the run queue active with an hourly scheduled call | Proposed |
+| [0026](0026-tenant-limits-checked-at-start.md) | Tenant limits checked at start, fairness from an SQS fair queue | Proposed |
+| [0027](0027-set-runs-aside-on-model-rate-limits.md) | Set a run aside when the model keeps answering 429 | Proposed |
 
 ## Template
 

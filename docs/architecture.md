@@ -80,6 +80,14 @@ sequenceDiagram
   Note over Q,W: queue empty: workers scale back to 0
 ```
 
+Tenant limits (M8, being built; shapes in `contracts/internal-api.openapi.yaml`): a run takes
+one of its tenant's slots when it starts. At the tenant's cap on runs at once, the control plane
+re-queues it with a delay and the start answers 429; over the tenant's daily spend cap the run
+fails `tenant_budget`. A worker whose model keeps answering 429 sets the run aside (`POST
+/internal/runs/{id}/defer`): it goes back to QUEUED and is re-queued after a delay, and fails
+`rate_limited` after 15 minutes set aside in total. Run messages carry the tenant as their SQS
+`MessageGroupId`, so a fair queue serves a quiet tenant ahead of another's backlog.
+
 Nothing is billed per hour while idle: the control plane and gateway are Lambda functions, workers
 scale to 0, both data stores are DynamoDB on-demand, and model providers bill per token
 ([ADR 0007](adr/0007-serverless-scale-to-zero-deployment.md)).

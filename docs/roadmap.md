@@ -42,6 +42,7 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
+**M8 (production limits) in progress:** planned 2026-11-21; contracts done.
 **M6 done (2026-11-21):** the cost check shows only the KMS key's fixed $1 a month, nothing
 billed by the hour. **M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
@@ -91,7 +92,7 @@ can run alongside 2 to 5. Start a session with
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
 | M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind one API Gateway HTTP API, workers at 0; traces in X-Ray; no hourly cost when idle | Done        |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Done        |
-| M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
+| M8  | Production limits | Two tenants on AWS: while tenant A starts 1,000 runs at once and tenant B 1 a second, B's runs start within 30 s (p95, workers up) and A never exceeds its cap on runs at once; with 20% of stub model calls answering 429 no run fails; a tenant over its daily spend cap gets new runs refused; numbers in `loadtest/report.md` | In progress |
 
 ## MVP scope (M0 + M1)
 
@@ -581,6 +582,60 @@ Work in this order:
   scale-out from 0 about 3-4 minutes (first step can be +5, then 2-minute cooldown), 0.5 vCPU at
   100% with 50 runs of 2 s calls. Load mode off, `plan` clean.
 
+## M8 tasks: production limits
+
+M7 measured the platform with infinitely patient model and tools. Real use has several tenants
+sharing workers and providers that answer 429. Planned 2026-11-21:
+
+- Real tenants for the API: a tenant record holds its limits (`max_running`, `daily_usd`); per-
+  tenant API keys stored hashed (`APIKEY#<hash>`, planned in the table design); a script creates a
+  tenant and shows its key once; today's tenant becomes the first record. GitHub webhooks and
+  Slack stay on that tenant (mapping App installations to tenants is later).
+- Fairness: every run message carries `MessageGroupId` = tenant, so SQS fair queues deliver a
+  quiet tenant's runs ahead of another tenant's backlog. No queue per tenant.
+- Cap on runs at once, checked at start: QUEUED → RUNNING takes a slot (DynamoDB conditional
+  update on the tenant's counter); at the cap the control plane re-queues the run with a delay
+  (SQS `DelaySeconds`) and answers 429, and the worker drops its message (the control plane is
+  the only sender, and a re-sent message does not count toward the dead-letter queue's 5
+  receives). A slot is freed at the end, at WAITING_APPROVAL (can last 72 h) and when set aside;
+  a sweep recounts slots in case one leaks.
+- Rate limits set a run aside instead of failing it: when the model still answers 429 after the
+  worker's retries, the worker calls `POST /internal/runs/{id}/defer`; the control plane moves
+  the run back to QUEUED and re-queues it with the delay; after 15 minutes set aside in total the
+  run fails `rate_limited`. Waiting is not working time (ADR 0012).
+- Daily spend cap: the control plane adds each run's cost to a counter per tenant per day; over
+  the cap `POST /runs` answers 429 (`tenant_budget`) and a queued run fails `tenant_budget` at
+  start; runs already executing finish within their own budgets.
+- Tests with the stub: a 429 rate and a test price per call (worker settings, set in load mode).
+  AWS tests about $1-2 in all; no real model.
+
+Work in this order:
+
+- [x] `[contracts]` shapes: PATCH to RUNNING may answer 429 (`Deferred` problem, `Retry-After`)
+  or 409 after a spend refusal; `POST /internal/runs/{run_id}/defer` (`RunDefer`: reason
+  `rate_limited`, `retry_after_seconds` 1-900); failure reasons `rate_limited`, `tenant_budget`
+  (control plane only); run message documents `MessageGroupId` = tenant. Check: tests. Done
+  2026-11-21: 115 tests (from 96); ADR 0026 (limits at start, fair queue) and ADR 0027 (set
+  runs aside on rate limits).
+- [ ] `[control-plane]` tenants: tenant records with limits, hashed per-tenant API keys (the
+  single `TENANT_API_KEY` becomes the first tenant's key), a create-tenant script (key shown once,
+  never stored in clear). Check: tests; two tenants on AWS, each sees only its own agents and
+  runs.
+- [ ] `[control-plane]` limits: slots at start (429 and delayed re-queue), `defer` (15-minute
+  total, then `rate_limited`), daily spend counter (refuse `POST /runs`, fail at start), message
+  group = tenant, slot recount in the sweep; `POST /runs` 429 documented in the architecture.
+  Check: tests (Testcontainers DynamoDB); the contract examples pass the control plane's checks.
+- [ ] `[worker]` limits: 429 at start (drop the message), `defer` on model rate limits after the
+  retries (drop the message, release the lease), `approval_expired` in its failure reasons; stub
+  settings `MODEL_STUB_429_RATE` and `MODEL_STUB_PRICE_USD`. Check: tests; image pushed.
+- [ ] `[infra]` load mode sets the stub's 429 rate and price (in `load_test_settings`); the queue
+  works as a fair queue (no setting needed; check the docs); IAM if anything new is called.
+  Check: `plan` as expected in both modes.
+- [ ] `[loadtest]` two tenants: a burst for one, a trickle for the other (start times per tenant),
+  the cap held (runs executing per tenant over time), 429 injection (0 failed, runs set aside
+  counted), spend cap (refusals counted); a section in `loadtest/report.md`. Check: the M8 row's
+  numbers. **M8 done.**
+
 ## Follow-ups
 
 Small tasks found along the way, outside a milestone. The next session for the component takes
@@ -595,14 +650,18 @@ them.
   fallback (Cross-service changes).
 - [ ] `[specs]` `specs/README.md`: the gotcha "do not run `aws_demo.py` while live" is outdated
   (it runs its own `demo-stub` and refuses without the fake connector).
+- [ ] `[ci]` GitHub Actions: each component's tests on push and pull request (control plane with
+  Docker, the Python services, contracts, `terraform validate`), a status badge in the README;
+  later an eval gate on spec changes (a model key as a GitHub secret).
 
 ## Later milestones (draft)
 
 Rough lists so the path is visible. Each milestone's planning session rewrites its own list.
 
-- **M8 open source:** needs a new goal. The worker no longer uses the Strands Agents SDK
-  (ADR 0009, ADR 0010), so "fix Strands bugs upstream" has almost nothing to rest on. Candidates:
-  libraries the platform does use (MCP Python SDK, ...). Decide when planning M8.
+- **Later candidates:** open source (send a fix upstream when the platform hits a real bug in a
+  library it uses: MCP Python SDK, OpenTelemetry, the Lambda Web Adapter; the old goal, Strands
+  fixes, no longer fits since ADR 0009); users and roles (Open questions); GitHub App
+  installations mapped to tenants.
 
 ## Cost guardrails
 
@@ -634,6 +693,16 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
+- **Tenant limits and setting runs aside** (2026-11-21, M8, `internal-api.openapi.yaml`,
+  `run-message.schema.json` description; no `schema_version` change). `control-plane` must:
+  answer PATCH to RUNNING with 429 + `Deferred` + `Retry-After` at a tenant's cap (after
+  re-queuing the run with that delay), fail a start over the daily spend cap with
+  `tenant_budget` and answer 409, serve `POST /internal/runs/{run_id}/defer`, send every run
+  message with `MessageGroupId` = tenant. `worker` must: on 429 at start drop the message; call
+  `defer` instead of failing when the model keeps answering 429; never send `rate_limited` or
+  `tenant_budget`; add `approval_expired` to its failure reasons. Remove this entry when both
+  have followed.
+
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
   `contracts/mcp-tool-call.schema.json` and `internal-api.openapi.yaml` (`run_token`). `worker`
@@ -646,6 +715,16 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-21 · contracts** — M8 planned (row, decisions, tasks above) and task 1 done. The
+  internal API: PATCH to RUNNING may answer 429 (`Deferred` response: `DeferredProblem` with
+  `reason` `tenant_running_limit` and `retry_after_seconds`, header `Retry-After`) or 409 after a
+  spend refusal; new `POST /internal/runs/{run_id}/defer` (`RunDefer`); failure reasons
+  `rate_limited` and `tenant_budget`; the run-state description covers slots and setting aside.
+  Run message: `MessageGroupId` = tenant (description). Examples `internal-run-defer.*`,
+  `deferred-problem.valid.json`; 115 tests. Cross-service entry added. Next: `[control-plane]`
+  tenants. Gotchas: the public API (`POST /runs`, its 429) has no contract file: the control
+  plane documents it; delays are capped at 900 s by SQS.
 
 - **2026-11-21 · M6 closed** — Cost check: Cost Explorer filtered on tag `project` shows only
   KMS (about $0.01 so far; the key is a fixed $1 a month); no NAT, load balancer, RDS or instance

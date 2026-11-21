@@ -1,0 +1,8 @@
+{
+  "type": "urn:agent-platform:problem:deferred",
+  "title": "Tenant at its limit of runs at once",
+  "status": 429,
+  "detail": "Run re-queued; it will be delivered again in 30 seconds.",
+  "reason": "tenant_running_limit",
+  "retry_after_seconds": 30
+}

@@ -25,6 +25,10 @@ Shared shapes between services. Language-neutral: JSON Schema (draft 2020-12) an
 - Tests per schema: the valid and invalid example, plus a `<NAME>_BREAKS` table of single-rule
   breaks of the valid example.
 - JSON field names are snake_case.
+- Problem types (RFC 9457 `type`) are `urn:agent-platform:problem:<name>`; a problem with its own
+  fields gets its own component schema (`DeferredProblem`) and example.
+- Examples for an OpenAPI component are named after it (`internal-run-defer.valid.json` for
+  `RunDefer`); a component used only in responses needs a valid example only.
 
 - One schema per file: `<name>.schema.json`.
 - Every schema has exactly one `examples/<name>.valid.*` and one `examples/<name>.invalid.*`

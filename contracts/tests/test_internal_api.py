@@ -124,6 +124,10 @@ OK_UPDATES = {
     "failed with reason": {"status": "FAILED", "failure": {"reason": "budget_steps", "message": "20 steps"}},
     "approval_expired is a known reason": {
         "status": "FAILED", "failure": {"reason": "approval_expired", "message": "72 h"}},
+    "rate_limited is a known reason": {
+        "status": "FAILED", "failure": {"reason": "rate_limited", "message": "15 min set aside"}},
+    "tenant_budget is a known reason": {
+        "status": "FAILED", "failure": {"reason": "tenant_budget", "message": "daily cap"}},
 }
 
 BAD_UPDATES = {
@@ -151,3 +155,67 @@ def test_run_update_accepts(update):
 @pytest.mark.parametrize("update", BAD_UPDATES.values(), ids=BAD_UPDATES.keys())
 def test_run_update_rejects(update):
     assert not component("RunUpdate").is_valid(update)
+
+
+def test_run_defer_example_passes():
+    errors = list(component("RunDefer").iter_errors(load(EXAMPLES / "internal-run-defer.valid.json")))
+    assert errors == [], [e.message for e in errors]
+
+
+def test_run_defer_invalid_example_fails():
+    assert not component("RunDefer").is_valid(load(EXAMPLES / "internal-run-defer.invalid.json"))
+
+
+RUN_DEFER_BREAKS = {
+    "missing reason": lambda d: d.pop("reason"),
+    "unknown reason": lambda d: d.__setitem__("reason", "busy"),
+    "missing delay": lambda d: d.pop("retry_after_seconds"),
+    "zero delay": lambda d: d.__setitem__("retry_after_seconds", 0),
+    "delay over SQS maximum": lambda d: d.__setitem__("retry_after_seconds", 901),
+    "fractional delay": lambda d: d.__setitem__("retry_after_seconds", 1.5),
+    "unknown field": lambda d: d.__setitem__("attempt", 2),
+}
+
+
+@pytest.mark.parametrize("break_defer", RUN_DEFER_BREAKS.values(), ids=RUN_DEFER_BREAKS.keys())
+def test_run_defer_rule(break_defer):
+    defer = copy.deepcopy(load(EXAMPLES / "internal-run-defer.valid.json"))
+    break_defer(defer)
+    assert not component("RunDefer").is_valid(defer)
+
+
+def test_deferred_problem_example_passes():
+    errors = list(
+        component("DeferredProblem").iter_errors(load(EXAMPLES / "deferred-problem.valid.json"))
+    )
+    assert errors == [], [e.message for e in errors]
+
+
+DEFERRED_PROBLEM_BREAKS = {
+    "other problem type": lambda d: d.__setitem__("type", "about:blank"),
+    "status not 429": lambda d: d.__setitem__("status", 409),
+    "unknown reason": lambda d: d.__setitem__("reason", "busy"),
+    "missing delay": lambda d: d.pop("retry_after_seconds"),
+    "delay over SQS maximum": lambda d: d.__setitem__("retry_after_seconds", 1000),
+    "missing reason": lambda d: d.pop("reason"),
+}
+
+
+@pytest.mark.parametrize(
+    "break_problem", DEFERRED_PROBLEM_BREAKS.values(), ids=DEFERRED_PROBLEM_BREAKS.keys()
+)
+def test_deferred_problem_rule(break_problem):
+    problem = copy.deepcopy(load(EXAMPLES / "deferred-problem.valid.json"))
+    break_problem(problem)
+    assert not component("DeferredProblem").is_valid(problem)
+
+
+def test_start_and_defer_document_their_responses():
+    paths = api_doc()["paths"]
+    patch = paths["/internal/runs/{run_id}"]["patch"]["responses"]
+    assert patch["429"] == {"$ref": "#/components/responses/Deferred"}
+    defer = paths["/internal/runs/{run_id}/defer"]["post"]
+    assert defer["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RunDefer"
+    }
+    assert set(defer["responses"]) == {"200", "400", "403", "404", "409"}

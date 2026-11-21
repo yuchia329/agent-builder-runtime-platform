@@ -21,7 +21,7 @@ flowchart LR
   W -->|model turn| BR[Model provider<br/>MiniMax · OpenAI-compatible · Bedrock · self-hosted]
   W -->|MCP call + run token<br/>SigV4| API
   API --> GW[Tool gateway<br/>Python · Lambda]
-  GW -->|acts_as credential| EXT[GitHub · Slack · Notion · Calendar]
+  GW -->|acts_as credential| EXT[GitHub API]
 ```
 
 One OpenTelemetry trace per run, started by the control plane and continued by the worker and the
@@ -431,8 +431,8 @@ partition per run, keys in `worker/dynamodb/run-state-table.json`, TTL in `run-s
 
 - Input: an OpenAPI 3 spec plus an allowlist of `operationId`s per connector. Output: one MCP tool
   per allowed operation, with a JSON Schema built from its parameters and request body.
-- Connectors: GitHub (M4), later Slack, Notion, Google Calendar. Adding one means adding a folder
-  with `openapi.yaml` and `allowlist.yaml`; code only for a named hook
+- Connectors: GitHub (M4); Slack, Notion or Google Calendar would be next. Adding one means
+  adding a folder with `openapi.yaml` and `allowlist.yaml`; code only for a named hook
   ([ADR 0014](adr/0014-connector-rules-and-hooks.md)).
 - Operations not on the allowlist do not exist as tools.
 - The allowlist also limits each tool: argument rules (allowed values such as repos, enums, text

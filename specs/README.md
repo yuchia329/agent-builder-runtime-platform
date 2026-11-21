@@ -121,10 +121,9 @@ again (the AWS ones can be set back later; the Redirect URIs can stay).
 
 ## Gotchas
 
-- While the AWS gateway runs `CONNECTORS=github`, do not run `infra/scripts/aws_demo.py`: it
-  publishes the stub spec as `issue-triage`, so the next webhook would run the stub, and the
-  stub's tool calls would reach real GitHub. To use it, set `gateway_connectors = "fake"`, apply,
-  run it, then set `github` back and publish this spec again.
+- `infra/scripts/aws_demo.py` never touches `issue-triage`: it publishes the stub spec as its own
+  agent `demo-stub` and refuses while the AWS gateway runs only `github` (its stub tool calls
+  must not reach real GitHub). Run it in load-test mode (fake connector), then switch back.
 - Only `issues.opened` starts a run: closing and reopening an issue sends `issue.closed` and
   `issue.reopened`, which start none. Plant a new issue each time.
 - The first delivery after turning the webhook on is GitHub's ping (answered `{"runs":[]}`);

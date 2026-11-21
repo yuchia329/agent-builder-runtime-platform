@@ -37,10 +37,11 @@ team is a tenant.
 | Run            | One execution of an agent version for one trigger event.                                      |
 | Step           | One model turn or one tool call inside a run.                                                 |
 | Tool           | One allowed API operation the agent can call, for example `github.add_label`.                 |
-| Connector      | The set of tools for one outside service (GitHub, Slack, Notion, Google Calendar).            |
+| Connector      | The set of tools for one outside service (GitHub today; generated from its OpenAPI spec).     |
 | `acts_as`      | Whose credentials a run uses: the agent owner, or a team bot.                                 |
 | Approval       | A human decision required before a tool listed in `require_approval` runs.                    |
 | Budget         | Per-run limits on steps, dollars and seconds.                                                 |
+| Tenant limits  | Per-tenant caps: runs executing at once, and dollars spent per day (ADR 0026).                |
 
 ## Agent spec
 
@@ -61,7 +62,7 @@ require_approval: [github.close_issue]
 budget: { max_steps: 20, max_usd: 0.10, max_seconds: 300 }
 ```
 
-The authoritative field list will live in `contracts/agent-spec.schema.json`. Rules:
+The authoritative field list is `contracts/agent-spec.schema.json`. Rules:
 
 - A published version never changes. A change publishes a new version.
 - The platform numbers versions (1, 2, 3, ...); the spec file has no version field.
@@ -71,12 +72,18 @@ The authoritative field list will live in `contracts/agent-spec.schema.json`. Ru
 ## Run states
 
 ```
-QUEUED ─▶ RUNNING ─▶ WAITING_APPROVAL ─▶ RUNNING ─▶ SUCCEEDED
-             │                                 └──▶ FAILED   (budget, step cap, rejected, or error)
-             └─ worker crashes ─▶ redelivered ─▶ RUNNING (resumes from last step)
+QUEUED ─▶ RUNNING ─▶ SUCCEEDED
+  ▲          ├──▶ FAILED            (budget, error, rate limited too long,
+  │          │                       tenant over its daily spend cap at start)
+  │          ├──▶ WAITING_APPROVAL ─▶ approved: QUEUED ─▶ RUNNING, makes the approved call
+  │          │                     └▶ rejected, or no decision in 72 h: FAILED
+  │          └──▶ set aside (model still rate limited) ─▶ QUEUED after a delay
+  └── at the tenant's cap on runs at once: stays QUEUED, delivered again after a delay
+worker crashes ─▶ message redelivered ─▶ RUNNING, resumes after the last saved step
 ```
 
-A run that keeps crashing moves to a dead-letter queue for inspection.
+A run that keeps crashing moves to a dead-letter queue for inspection; one with no progress for
+90 minutes fails.
 
 ## Use case 1: GitHub issue triage (demo)
 
@@ -84,9 +91,9 @@ When an issue is opened in a repo, the agent:
 
 1. reads the issue,
 2. searches existing issues for duplicates,
-3. adds labels,
-4. posts a short summary to a Slack channel,
-5. asks a human (Slack Approve / Reject buttons) before closing anything as a duplicate.
+3. adds a type label, and `duplicate` when it is confident,
+4. asks a human (Slack Approve / Reject buttons) before closing a confirmed duplicate,
+5. ends with a short summary (label, duplicate, confidence) as the run's output.
 
 What happens end to end:
 
@@ -99,10 +106,13 @@ What happens end to end:
 5. If a worker crashes at any point, another worker resumes from the last saved step. No label,
    message or close happens twice.
 
-## Use case 2: meeting prep (stretch)
+## Use case 2: needs-info
 
-A Notion + Google Calendar agent that prepares notes before meetings. It exists to prove the
-platform is generic: a second agent with different tools and triggers and no platform code changes.
+A second agent on the same trigger, `specs/needs-info.yaml`: it labels a new bug report
+`needs-info` when it does not say how to reproduce the problem. Labels only, so no approval step.
+It shows that a new agent is a spec file, scored by its own eval tasks, with no platform code
+changes. (A meeting-prep agent on Notion and Google Calendar was an early idea; those connectors
+were not built.)
 
 ## Non-goals
 

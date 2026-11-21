@@ -42,7 +42,8 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
-**M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
+**M6 done (2026-11-21):** the cost check shows only the KMS key's fixed $1 a month, nothing
+billed by the hour. **M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
 queue's metrics; an hourly keep-alive applied, ADR 0025) and warm (start p50 0.1 s, 347 runs per
 minute); chaos at 100 runs (8 workers stopped, 5 killed mid-run, 13 runs taken over): 0 lost,
@@ -88,7 +89,7 @@ can run alongside 2 to 5. Start a session with
 | M3  | Approvals      | Close-issue pauses; Slack buttons resume or reject the run                                                                                                    | Done        |
 | M4  | Gateway        | Tool calls move into the gateway; OpenAPI → MCP generator; OAuth and team bots                                                                                | Done        |
 | M5  | Evals          | `make eval` scores any spec that has eval tasks (real model, simulated services) and flags a regression; issue-triage and a second spec                        | Done        |
-| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind one API Gateway HTTP API, workers at 0; traces in X-Ray; no hourly cost when idle | In progress |
+| M6  | AWS deploy     | Terraform deploys everything scale-to-zero (ADR 0007): Lambdas behind one API Gateway HTTP API, workers at 0; traces in X-Ray; no hourly cost when idle | Done        |
 | M7  | Scale proof    | 1,000 concurrent runs on the stub model against the AWS deployment; chaos test report in `loadtest/report.md`                                                 | Done        |
 | M8  | Open source    | Bugs found in the Strands Agents SDK reported and fixed upstream                                                                                              | Not started |
 
@@ -459,7 +460,7 @@ Work in this order:
   stub writes 0, so a stub run shows samples); 355 tests pass. Deployed as image `05cfaf3`:
   the `aws_demo.py` stub run gave 3 samples (Sum 0) in `AgentPlatform/dev` `ModelCostUsd`, no
   dimensions.
-- [ ] `[specs]` go live (all done but the cost check, due 2026-11-21): GitHub App key and settings into SSM, the App's webhook URL, its OAuth
+- [x] `[specs]` go live: GitHub App key and settings into SSM, the App's webhook URL, its OAuth
   callback URL and Slack's Request URL moved to the API's `execute-api` address (no tunnels;
   `terraform output api_url`); `gateway_connectors = "github"` and `github_repos` in
   `terraform.tfvars`; a planted duplicate in the sandbox is labeled
@@ -468,7 +469,13 @@ Work in this order:
   `SUCCEEDED` from the webhook (`issues.opened`), 16 steps, $0.0076; Approve in Slack (169 ms at
   the API); issue closed `duplicate` with `bug` and `duplicate` labels, by the App's bot; 9 gateway
   calls as `team-bot`; 34 worker spans under the run's `trace_id`; `ModelCostUsd` 7 samples,
-  Sum $0.007567. Steps in `specs/README.md` → Run issue-triage on AWS. Left: the cost check.
+  Sum $0.007567. Steps in `specs/README.md` → Run issue-triage on AWS. Cost check done
+  2026-11-21: Cost Explorer on the `project` tag shows only KMS (the key's fixed $1 a month);
+  nothing billed by the hour. Worker tasks are not tagged yet (Fargate cost shows untagged;
+  see Follow-ups), which does not change the result: Fargate is $0 at 0 workers. Account-wide
+  the same day: ECS $0.02 (load tests, so far), EC2-Other $0.06 from an unrelated instance's
+  disk (this stack has no EBS, NAT gateway or Elastic IP), VPC $0.12 a day mostly that
+  instance's public IPv4 ($0.005 an hour); worker tasks add $0.005 an hour each while running.
 (The `aws_demo.py` agent-name task added here moved into M7 task 1.)
 
 ## M7 tasks: scale proof
@@ -574,6 +581,21 @@ Work in this order:
   scale-out from 0 about 3-4 minutes (first step can be +5, then 2-minute cooldown), 0.5 vCPU at
   100% with 50 runs of 2 s calls. Load mode off, `plan` clean.
 
+## Follow-ups
+
+Small tasks found along the way, outside a milestone. The next session for the component takes
+them.
+
+- [ ] `[infra]` tag the worker tasks: the ECS service has no `propagate_tags`, so Fargate tasks
+  carry no `project` tag and their cost is untagged (the $10 project budget misses it; the $90
+  account budget still counts it). Set `propagate_tags = "SERVICE"` and
+  `enable_ecs_managed_tags = true` on `aws_ecs_service.worker`. Check: a running task's tags
+  include `project`; a day later Cost Explorer shows ECS under the tag.
+- [ ] `[worker]` then `[tool-gateway]`: drop the run token's `Authorization: Bearer` copy and
+  fallback (Cross-service changes).
+- [ ] `[specs]` `specs/README.md`: the gotcha "do not run `aws_demo.py` while live" is outdated
+  (it runs its own `demo-stub` and refuses without the fake connector).
+
 ## Later milestones (draft)
 
 Rough lists so the path is visible. Each milestone's planning session rewrites its own list.
@@ -624,6 +646,13 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-21 · M6 closed** — Cost check: Cost Explorer filtered on tag `project` shows only
+  KMS (about $0.01 so far; the key is a fixed $1 a month); no NAT, load balancer, RDS or instance
+  charges. M6 marked done. Found: worker tasks carry no tags (no `propagate_tags` on the ECS
+  service), so Fargate cost is untagged; new "Follow-ups" section in this file has it, the
+  run-token cleanup and the `specs/README.md` fix. Next: M8 planning (needs a new goal).
+  Gotchas: the Cost Explorer API costs $0.01 a request (the console is free).
 
 - **2026-11-21 · M7 closed** — M7 marked done: its goal (1,000 runs, chaos report) is met; the
   `[infra]` idle-queue task is ticked without the overnight confirmation (calls verified in

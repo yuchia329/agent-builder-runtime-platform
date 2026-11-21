@@ -112,7 +112,9 @@ every run succeeded.
 Estimate: well under $1 for all seven tests (budget for M7: $5). Mostly Fargate (up to 20 tasks
 at about $0.02 per task-hour, for the tests and the scale-in after each), plus Lambda and API
 Gateway requests (about 75,000 in all) and CloudWatch logs; no model cost (stub). Actual, from
-Cost Explorer on the `project` tag: _pending (M6 cost check)_.
+Cost Explorer on the `project` tag cannot show it yet: the worker tasks
+carried no tags during the tests (a follow-up adds them), and the tagged costs were only the KMS
+key's fixed $1 a month.
 
 ## Reproduce
 

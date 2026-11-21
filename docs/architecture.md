@@ -638,6 +638,7 @@ AWS (one region)                                idle cost
 │   └── tool-gateway    Python + Web Adapter    $0    per request
 ├── ECS Fargate (public subnet, no NAT)
 │   └── worker service, 0..N tasks              $0 at 0 tasks, per second while running
+│       (+ a public IPv4 each, $0.005 an hour, instead of a NAT gateway at about $32 a month)
 ├── DynamoDB on-demand
 │   ├── control-plane table                     ~$0   storage only
 │   └── run-state table (from M2)               ~$0   storage only

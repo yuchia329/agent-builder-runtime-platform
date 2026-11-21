@@ -62,6 +62,7 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
 | Load-test mode on / off | `load_test = true` (or `false`) in `envs/dev/terraform.tfvars`, then `plan` and `apply`; `terraform -chdir=envs/dev output load_test` shows the mode |
 | Lambda concurrency quota | `aws service-quotas get-service-quota --service-code lambda --quota-code L-B99A9384 --profile default` (1,000 since 2026-11-20; was 10) |
 | Route throttling (some 429s) | `uv run python scripts/throttle_check.py` (keep `--concurrency` under 10: the account's Lambda limit) |
+| Run the sweeps once (what the scheduler does every 5 min) | `aws lambda invoke --function-name agent-platform-dev-control-plane --qualifier live --cli-binary-format raw-in-base64-out --payload '{"sweep":"all"}' --profile default out.json` (answers `{"requeued":n,"posted":n,"expired":n,"stalled":n}`; the result is not logged) |
 | Spend alarm state | `aws cloudwatch describe-alarms --alarm-names agent-platform-dev-model-spend --query 'MetricAlarms[0].StateValue' --profile default` |
 | Test the spend alarm (stays in ALARM 24 h) | `aws cloudwatch put-metric-data --namespace AgentPlatform/dev --metric-name ModelCostUsd --value 2 --profile default` |
 | Transaction Search on? | `aws xray get-trace-segment-destination --profile default` (must say `CloudWatchLogs` / `ACTIVE`) |
@@ -107,8 +108,10 @@ Run from `infra/`. Every `apply` is shown as a plan to the user first.
   `(sensitive value)`.
 - Load-test mode is one switch (`load_test`, ADR 0024): change load values in
   `load_test_settings`, never by editing the normal variables for a test. A `load_test_settings`
-  block in tfvars replaces the whole default, so it lists all five values (throttle rate and
-  burst, worker tasks, `worker_concurrency`, stub latency; example in `terraform.tfvars.example`).
+  block in tfvars replaces the whole default, so it lists all seven values (throttle rate and
+  burst, worker tasks, `worker_concurrency`, stub latency, stub 429 rate, stub price; example in
+  `terraform.tfvars.example`). The stub price goes into the real `ModelCostUsd` metric: keep
+  price x calls in a day under `model_spend_alarm_usd`, or expect the alarm email.
   `terraform output worker_concurrency` shows the runs per worker in use. Turn it off right after
   a test and confirm `plan` shows no changes; `aws_demo.py` refuses while the gateway runs only
   `github` (dev live).

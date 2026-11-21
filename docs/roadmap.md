@@ -43,8 +43,8 @@ started a run through the App's webhook, was labeled, and after Approve in Slack
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
 **M8 (production limits) in progress:** planned 2026-11-21; contracts, control-plane
-(tenants, limits) and worker limits done (neither limits change deployed yet); next `[infra]`
-(load-mode settings, deploy both together).
+(tenants, limits), worker limits and infra done, limits deployed on AWS (2026-11-21); next
+`[loadtest]` (two tenants, 429 injection, spend cap).
 **M6 done (2026-11-21):** the cost check shows only the KMS key's fixed $1 a month, nothing
 billed by the hour. **M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
@@ -635,9 +635,12 @@ Work in this order:
   settings `MODEL_STUB_429_RATE` and `MODEL_STUB_PRICE_USD`. Check: tests; image pushed. Done
   2026-11-21: 409 tests (from 366); image tagged with the task's commit, pushed to ECR, not
   deployed (deploy with the control plane in the infra task).
-- [ ] `[infra]` load mode sets the stub's 429 rate and price (in `load_test_settings`); the queue
+- [x] `[infra]` load mode sets the stub's 429 rate and price (in `load_test_settings`); the queue
   works as a fair queue (no setting needed; check the docs); IAM if anything new is called.
-  Check: `plan` as expected in both modes.
+  Check: `plan` as expected in both modes. Done 2026-11-21: `stub_429_rate` 0.2 and
+  `stub_price_usd` $0.0001 a call in load mode; fair queue confirmed in the SQS guide (no
+  setting, no consumer change); no IAM, route or table change. Control plane (version 4) and
+  worker `5ef8358` deployed in one apply; a sweep answered `"stalled":0`, no run started.
 - [ ] `[loadtest]` two tenants: a burst for one, a trickle for the other (start times per tenant),
   the cap held (runs executing per tenant over time), 429 injection (0 failed, runs set aside
   counted), spend cap (refusals counted); a section in `loadtest/report.md`. Check: the M8 row's
@@ -700,17 +703,6 @@ Rough lists so the path is visible. Each milestone's planning session rewrites i
 Changes to `contracts/` that another service still has to adopt. Remove an entry once every listed
 service has followed.
 
-- **Tenant limits and setting runs aside** (2026-11-21, M8, `internal-api.openapi.yaml`,
-  `run-message.schema.json` description; no `schema_version` change). `control-plane` must:
-  answer PATCH to RUNNING with 429 + `Deferred` + `Retry-After` at a tenant's cap (after
-  re-queuing the run with that delay), fail a start over the daily spend cap with
-  `tenant_budget` and answer 409, serve `POST /internal/runs/{run_id}/defer`, send every run
-  message with `MessageGroupId` = tenant. `worker` must: on 429 at start drop the message; call
-  `defer` instead of failing when the model keeps answering 429; never send `rate_limited` or
-  `tenant_budget`; add `approval_expired` to its failure reasons. Remove this entry when both
-  have followed and are deployed. `control-plane` and `worker` followed 2026-11-21; neither is
-  deployed yet (infra task, both together).
-
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
   `contracts/mcp-tool-call.schema.json` and `internal-api.openapi.yaml` (`run_token`). `worker`
@@ -724,6 +716,19 @@ service has followed.
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
 
+- **2026-11-21 · infra** — M8 task 5 done. `load_test_settings` has seven values now:
+  `stub_429_rate` (0.2) and `stub_price_usd` ($0.0001 a call) become the worker's
+  `MODEL_STUB_429_RATE` / `MODEL_STUB_PRICE_USD` in load mode (`load_test.tf`). The run queue is
+  a fair queue with no setting (SQS developer guide; quiet-tenant metrics such as
+  `ApproximateNumberOfMessagesVisibleInQuietGroups`). No IAM change: `/defer` falls under
+  `ANY /internal/{proxy+}` and the worker's `execute-api` wildcard; the control plane already had
+  `TransactWriteItems`. Deployed: control-plane version 4, worker image `5ef8358` (task definition
+  revision 14); `plan` is clean, load mode off. The tenant-limits cross-service entry is closed.
+  Next: `[loadtest]` two tenants (burst and trickle, cap held, 429 injection, spend cap). Gotchas:
+  the stub price goes into the real `ModelCostUsd`, so keep price x calls a day under the $1 alarm
+  (the spend-cap test needs a tenant with a tiny daily cap, not a higher price); the sweep result
+  is returned, not logged (invoke it: `infra/AGENTS.md`); public routes take the key in
+  `X-Api-Key`, not `Authorization`.
 - **2026-11-21 · worker** — M8 task 4 done: limits. New core errors `RunDeferred` (PATCH to
   RUNNING answered 429 with the `Deferred` problem type; `HttpControlPlane` does not retry it,
   other 429s still are) and `ModelRateLimited(ModelError)` (OpenAI-compatible: last try 429 or

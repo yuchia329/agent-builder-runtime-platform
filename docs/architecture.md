@@ -765,8 +765,10 @@ AWS (one region)                                idle cost
 - **Load-test mode** (ADR 0024): `load_test = true` in `terraform.tfvars` switches, for one
   test, to `load_test_settings`: throttle 1,000 per second (burst 2,000), up to 20 workers
   running 50 runs each at once (`WORKER_CONCURRENCY`, 4 normally: up to 1,000 runs executing), the
-  gateway on the fake connector, the stub model at 2,000 ms a call (`MODEL_STUB_LATENCY_MS`);
-  `false` restores the normal values with one apply. `aws_demo.py` runs its own agent
+  gateway on the fake connector, the stub model at 2,000 ms a call (`MODEL_STUB_LATENCY_MS`),
+  20% of stub calls still rate limited (`MODEL_STUB_429_RATE`, so runs are set aside) and $0.0001
+  a stub call (`MODEL_STUB_PRICE_USD`, for daily spend caps; the fake cost goes into
+  `ModelCostUsd`, so a 1,000-run test stays near $0.30, under the spend alarm); `false` restores the normal values with one apply. `aws_demo.py` runs its own agent
   `demo-stub` (trigger `manual.demo.run`) and needs the fake connector.
 - **Logs:** every log group keeps 14 days (`log_retention_days`), including the two Transaction
   Search made (`aws/spans`, `/aws/application-signals/data`), imported with `skip_destroy`.
@@ -779,7 +781,12 @@ AWS (one region)                                idle cost
   services' JSON definitions (`control-plane/dynamodb/`, `worker/dynamodb/`), names
   `agent-platform-dev-<table>`. The control-plane table has deletion protection and
   point-in-time restore (specs and versions); the run-state table neither (15-day TTL). SQS
-  `agent-platform-dev-runs` (dead-letter queue after 5 receives, kept 14 days), SSE-SQS. ECR
+  `agent-platform-dev-runs` (dead-letter queue after 5 receives, kept 14 days), SSE-SQS. It is a
+  standard queue and works as a fair queue with no setting: SQS applies fairness by itself to
+  messages that carry a `MessageGroupId` (the control plane sets the tenant), consumers change
+  nothing, and throughput is not limited (checked 2026-11-21 in the SQS developer guide). Its
+  quiet-tenant view is in CloudWatch metrics such as
+  `ApproximateNumberOfMessagesVisibleInQuietGroups`. ECR
   `agent-platform-dev-worker` (immutable tags, last 10 images).
 - **Secrets and keys** ([ADR 0018](adr/0018-secrets-in-ssm-signing-in-kms.md)): SSM SecureString
   parameters with the `aws/ssm` key, readable per service path through IAM; Terraform makes them

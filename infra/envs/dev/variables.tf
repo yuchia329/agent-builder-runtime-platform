@@ -152,6 +152,8 @@ variable "load_test_settings" {
     worker_max_tasks   = number # 0.5 vCPU each; the account's Fargate limit is 64 vCPU
     worker_concurrency = number # runs per task at once: 20 tasks x 50 = 1,000 runs executing
     stub_latency_ms    = number # MODEL_STUB_LATENCY_MS: each stub model call waits this long
+    stub_429_rate      = number # MODEL_STUB_429_RATE: share of stub calls still rate limited (M8)
+    stub_price_usd     = number # MODEL_STUB_PRICE_USD: what each stub call costs (M8)
   })
   # Throttle: at 1,000 runs at once /mcp needs about 400 requests per second and /internal more;
   # API Gateway's account limit is 10,000 per second, Lambda's concurrency 1,000.
@@ -161,6 +163,11 @@ variable "load_test_settings" {
     worker_max_tasks   = 20
     worker_concurrency = 50
     stub_latency_ms    = 2000
+    # 20% of calls rate limited (the M8 goal: no run fails). $0.0001 a call keeps a 1,000-run
+    # test (about 3,000 calls, $0.30) under the $1 spend alarm: the fake cost goes into the real
+    # ModelCostUsd metric. Spend-cap tests use a tenant with a tiny daily cap instead.
+    stub_429_rate  = 0.2
+    stub_price_usd = 0.0001
   }
 
   validation {
@@ -171,6 +178,14 @@ variable "load_test_settings" {
   validation {
     condition     = var.load_test_settings.worker_concurrency >= 1 && var.load_test_settings.worker_concurrency <= 100
     error_message = "load_test_settings.worker_concurrency must be 1 to 100."
+  }
+
+  validation {
+    condition = (
+      var.load_test_settings.stub_429_rate >= 0 && var.load_test_settings.stub_429_rate <= 1 &&
+      var.load_test_settings.stub_price_usd >= 0 && var.load_test_settings.stub_price_usd <= 1
+    )
+    error_message = "stub_429_rate and stub_price_usd must be 0 to 1 (the worker's limits)."
   }
 }
 

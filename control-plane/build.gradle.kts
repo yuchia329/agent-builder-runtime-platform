@@ -75,6 +75,17 @@ tasks.bootRun {
     environment("SPRING_PROFILES_ACTIVE", System.getenv("SPRING_PROFILES_ACTIVE") ?: "local")
 }
 
+// Tenants on a control-plane table (tenant/TenantAdmin): create, add-key, set-limits, show.
+// ./gradlew tenantAdmin --args="create tenant-b --table agent-platform-dev-control-plane"
+tasks.register<JavaExec>("tenantAdmin") {
+    group = "application"
+    description = "Creates tenants and API keys on a control-plane table (prints a new key once)."
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "dev.agentplatform.controlplane.tenant.TenantAdmin"
+    environment("AWS_PROFILE", System.getenv("AWS_PROFILE") ?: "default")
+    environment("AWS_REGION", System.getenv("AWS_REGION") ?: "us-east-1")
+}
+
 // Lambda package (ADR 0017): classes and resources at the root, every runtime jar in lib/. Lambda
 // cannot read Spring Boot's nested-jar layout, and a plain zip starts faster than a shaded jar.
 // Handler: dev.agentplatform.controlplane.lambda.LambdaHandler::handleRequest

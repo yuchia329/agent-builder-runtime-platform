@@ -12,6 +12,9 @@ import dev.agentplatform.controlplane.store.InMemoryAgentStore;
 import dev.agentplatform.controlplane.store.InMemoryDeliveryStore;
 import dev.agentplatform.controlplane.store.InMemoryRunStore;
 import dev.agentplatform.controlplane.store.RunStore;
+import dev.agentplatform.controlplane.store.TenantStore;
+import dev.agentplatform.controlplane.store.DynamoDbTenantStore;
+import dev.agentplatform.controlplane.store.InMemoryTenantStore;
 import java.time.Clock;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
@@ -68,6 +71,14 @@ public class StoreConfig {
         return switch (props.storeBackend()) {
             case MEMORY -> new InMemoryDeliveryStore();
             case DYNAMODB -> new DynamoDbDeliveryStore(dynamo.getObject(), props.table());
+        };
+    }
+
+    @Bean
+    TenantStore tenantStore(PlatformProperties props, ObjectProvider<DynamoDbClient> dynamo) {
+        return switch (props.storeBackend()) {
+            case MEMORY -> new InMemoryTenantStore();
+            case DYNAMODB -> new DynamoDbTenantStore(dynamo.getObject(), props.table());
         };
     }
 

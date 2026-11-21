@@ -30,7 +30,7 @@ class GitHubWebhookControllerTest {
     private static final String BODY = "{\"action\":\"opened\",\"issue\":{\"number\":1}}";
     private static final PlatformProperties PROPS = new PlatformProperties(
             PlatformProperties.StoreBackend.MEMORY, "t", PlatformProperties.QueueBackend.MEMORY, null,
-            new PlatformProperties.TenantProperties("t1", "key"), new PlatformProperties.GitHubProperties(SECRET), null, null, null, null, null);
+            new PlatformProperties.TenantProperties("t1", "key", 50, java.math.BigDecimal.TEN), new PlatformProperties.GitHubProperties(SECRET), null, null, null, null, null);
 
     private final Clock clock = Clock.systemUTC();
     private final InMemoryRunStore runs = new InMemoryRunStore();

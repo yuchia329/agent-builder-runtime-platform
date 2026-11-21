@@ -1,6 +1,7 @@
 package dev.agentplatform.controlplane.config;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -30,10 +31,13 @@ public record PlatformProperties(
     public enum QueueBackend { MEMORY, SQS }
 
     /**
-     * The single hard-coded tenant used until tenants are stored (M0). {@code apiKey} is
-     * {@code TENANT_API_KEY}; read it through {@code SecretSource}, which requires it locally.
+     * The configured first tenant: GitHub webhooks start its runs, and its key
+     * ({@code TENANT_API_KEY}, read through {@code SecretSource}) is accepted next to the keys in
+     * {@code TenantStore}. {@code maxRunning} and {@code dailyUsd} are the limits of any tenant
+     * without a stored record (ADR 0026).
      */
-    public record TenantProperties(@NotBlank String id, String apiKey) {}
+    public record TenantProperties(@NotBlank String id, String apiKey, @NotNull @Min(1) Integer maxRunning,
+                                   @NotNull @DecimalMin(value = "0", inclusive = false) java.math.BigDecimal dailyUsd) {}
 
     /** {@code webhookSecret} signs GitHub webhooks; blank means the webhook route is off. */
     public record GitHubProperties(String webhookSecret) {}

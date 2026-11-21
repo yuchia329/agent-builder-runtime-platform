@@ -62,11 +62,14 @@ final class Priming {
                 "X-GitHub-Event", "ping",
                 "X-Hub-Signature-256", githubSignature), pingBody);
 
-        // Public API: an invalid body is rejected (400) before the store; no key gets 401.
+        // Public API: with the configured key held, an invalid body is rejected (400) before the
+        // store; without it the request carries no key and gets 401 before any secret or store
+        // lookup (a made-up key would make the filter load the secret and ask the tenant store).
         var apiKey = secrets.peek(Secret.TENANT_API_KEY);
-        var badRun = HttpEvents.request("POST", "/runs", Map.of(
-                "Content-Type", "application/json",
-                "X-Api-Key", apiKey == null ? "priming" : apiKey), "{\"agent\":\"priming\",\"input\":[]}");
+        var badRun = HttpEvents.request("POST", "/runs", apiKey == null
+                ? Map.of("Content-Type", "application/json")
+                : Map.of("Content-Type", "application/json", "X-Api-Key", apiKey),
+                "{\"agent\":\"priming\",\"input\":[]}");
         var noKey = HttpEvents.request("GET", "/runs/priming", Map.of(), null);
 
         return List.of(slack, github, badRun, noKey);

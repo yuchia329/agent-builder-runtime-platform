@@ -15,6 +15,7 @@ Run from `control-plane/`.
 | Lambda zip | `./gradlew lambdaZip` (`build/distributions/control-plane-lambda.zip`, ADR 0017) |
 | Live check against dev AWS (one KMS signature, one SSM read; ~$0) | `LIVE_AWS=1 ./gradlew test --tests '*LiveAwsCheckTest'` (profile `default`; prints no secret) |
 | Lambda trial (AWS, about 5 min per memory size, ~$0) | `uv run --with boto3 python scripts/lambda_trial.py --configs 1769:on` (makes and deletes its own function, table, role; profile `default`) |
+| Tenants on a table (AWS, profile `default`) | `./gradlew tenantAdmin --args="create <tenant> [--max-running N] [--daily-usd X] --table agent-platform-dev-control-plane"` (also `add-key`, `set-limits`, `show`; prints a new key once: send output straight to a 0600 file outside the repo, never to a log) |
 | Image (from repo root) | `docker build -f control-plane/Dockerfile .` (or `make up`) |
 
 Try it:
@@ -92,7 +93,14 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   verification and payload rules in plain classes (`GitHubWebhooks`) so they test without HTTP.
 - Webhook deliveries are claimed in `DeliveryStore` before any run starts; tests send a unique
   `X-GitHub-Delivery` per request, or the second request is a duplicate.
-- Ports: `DeliveryStore` joins `AgentStore` / `RunStore` (contract suite `DeliveryStoreContractTest`).
+- Ports: `DeliveryStore` joins `AgentStore` / `RunStore` (contract suite `DeliveryStoreContractTest`);
+  `TenantStore` (`TenantStoreContractTest`) holds tenant records and API keys by SHA-256.
+- API keys (ADR 0026): `ApiKeyAuthFilter` checks the configured `TENANT_API_KEY` first, then
+  stored keys by hash, only for keys shaped like `ApiKeys`' (`ap_` + 43 base64url). Never log a
+  key or its hash; errors log the exception type only. Limits come from
+  `TenantDirectory.limits(tenant)` (record, else `TENANT_MAX_RUNNING` / `TENANT_DAILY_USD`).
+- Priming sends no `X-Api-Key` unless `peek` holds the key: any other key would make the
+  filter read SSM before the snapshot.
 - Tests bind the server to `127.0.0.1` (`SERVER_ADDRESS` in `build.gradle.kts`) and call
   `127.0.0.1`, never `localhost`: `localhost` can resolve to `::1`, where another process (a Gradle
   daemon) may hold the same random port; symptom: every request 404 or "Invalid status line".

@@ -42,7 +42,8 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
-**M8 (production limits) in progress:** planned 2026-11-21; contracts done.
+**M8 (production limits) in progress:** planned 2026-11-21; contracts and control-plane tenants
+done; next `[control-plane]` limits.
 **M6 done (2026-11-21):** the cost check shows only the KMS key's fixed $1 a month, nothing
 billed by the hour. **M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
@@ -617,10 +618,11 @@ Work in this order:
   (control plane only); run message documents `MessageGroupId` = tenant. Check: tests. Done
   2026-11-21: 115 tests (from 96); ADR 0026 (limits at start, fair queue) and ADR 0027 (set
   runs aside on rate limits).
-- [ ] `[control-plane]` tenants: tenant records with limits, hashed per-tenant API keys (the
+- [x] `[control-plane]` tenants: tenant records with limits, hashed per-tenant API keys (the
   single `TENANT_API_KEY` becomes the first tenant's key), a create-tenant script (key shown once,
   never stored in clear). Check: tests; two tenants on AWS, each sees only its own agents and
-  runs.
+  runs. Done 2026-11-21: 355 tests; on AWS tenant B gets 404 on A's run and A's agent, makes its
+  own agent of the same name, unknown keys 401 (8 checks, no runs started).
 - [ ] `[control-plane]` limits: slots at start (429 and delayed re-queue), `defer` (15-minute
   total, then `rate_limited`), daily spend counter (refuse `POST /runs`, fail at start), message
   group = tenant, slot recount in the sweep; `POST /runs` 429 documented in the architecture.
@@ -715,6 +717,22 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-21 · control-plane** — M8 task 2 done: tenants. `TenantStore` port (DynamoDB,
+  in-memory, contract suite): `TENANT#<t>` record with `maxRunning` and `dailyUsd`;
+  `APIKEY#<sha256>` → tenant, added in a transaction that checks the tenant exists. `ApiKeys`
+  makes `ap_` + 32 random bytes (base64url). `ApiKeyAuthFilter`: configured `TENANT_API_KEY`
+  first (decision: it stays the first tenant's key, no record needed; limits from
+  `TENANT_MAX_RUNNING`/`TENANT_DAILY_USD`), then stored keys by hash; keys not shaped `ap_…` never
+  read the table. `TenantDirectory.limits(t)` for the next task. `TenantAdmin` CLI
+  (`./gradlew tenantAdmin --args="create <t> --table <table>"`, also `add-key`, `set-limits`,
+  `show`) prints a key once. Priming sends no API key when none is held (it used to send a fake
+  one, which made the filter read SSM before the snapshot). 355 tests. On AWS: `tenant-b`
+  created (key outside the repo), isolation checked with 8 requests. Next: `[control-plane]`
+  limits (slots, `defer`, spend counter, `MessageGroupId`), using `TenantDirectory`. Gotchas: the
+  dev gateway runs only `github`, so an isolation check must not start stub runs (they would
+  call real GitHub tools); reuse a load-test run id instead. The AWS SDK warns about profile
+  names in `~/.aws/config` without `profile `; harmless.
 
 - **2026-11-21 · contracts** — M8 planned (row, decisions, tasks above) and task 1 done. The
   internal API: PATCH to RUNNING may answer 429 (`Deferred` response: `DeferredProblem` with

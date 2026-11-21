@@ -144,7 +144,13 @@ Boundaries the design depends on:
 
 ## Control plane
 
-Public endpoints, all tenant-scoped, authenticated by per-tenant API key:
+Public endpoints, all tenant-scoped, authenticated by per-tenant API key (`X-Api-Key`). The
+filter first compares the configured first tenant's key (`TENANT_API_KEY`, constant time); a
+key shaped like a stored one (`ap_` and 43 base64url characters) is then looked up by its
+SHA-256 (`APIKEY#<hash>`). Any other key gets 401 with no table read; a lookup that fails gets
+503. Keys are made by `TenantAdmin` (`./gradlew tenantAdmin`), printed once and never stored in
+clear. The configured tenant needs no record: without one its limits are `TENANT_MAX_RUNNING`
+and `TENANT_DAILY_USD`. GitHub webhooks and Slack stay on the configured tenant.
 
 - `POST /agents`: create an agent. The agent id is its `name`, unique per tenant.
 - `POST /agents/{id}/versions`: publish a spec version, YAML or JSON. Validates against
@@ -243,7 +249,8 @@ the table from that file.
 | ------------------------------ | ---------------------------------------------------------------------------- | -------- |
 | Agent, its versions            | `PK=TENANT#<t>#AGENT#<a>`, `SK=META` or `VERSION#<10-digit n>`               | Built    |
 | Agents by trigger (webhooks)   | `GSI1PK=TRIGGER#<event>`, `GSI1SK=TENANT#<t>#AGENT#<a>` on the agent item    | Built    |
-| Tenant by API key              | `PK=APIKEY#<hash>`                                                           | Planned  |
+| Tenant and its limits          | `PK=TENANT#<t>`, `SK=META` (`maxRunning`, `dailyUsd`, `createdAt`)           | Built    |
+| Tenant by API key              | `PK=APIKEY#<sha256 hex>`, `SK=META` (`tenantId`, `keyPrefix`, `createdAt`; added in a transaction with a check that the tenant exists) | Built |
 | Run and its approval           | `PK=RUN#<id>`, `SK=META` (`pendingApproval`, latest `approval` as JSON attributes; `approvalChannel`, `approvalMessageId` once posted) | Built |
 | Runs waiting for approval      | `GSI1PK=RUNS#APPROVAL_UNSENT` or `RUNS#APPROVAL_SENT`, `GSI1SK=<waiting-since, 13-digit epoch millis>#<runId>` on the run item (only while `WAITING_APPROVAL`) | Built |
 | Runs of an agent, newest first | `GSI2PK=TENANT#<t>#AGENT#<a>`, `GSI2SK=<created time>#<run id>` on the run item | Keys written, no query yet |
@@ -504,6 +511,7 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 | `RunQueuePublisher` | control plane | Enqueue a run id                                                                                    | SQS, in-memory                             |
 | `AgentStore`        | control plane | Tenants, agents, immutable versions with gap-free numbering, lookup by trigger                     | DynamoDB, in-memory                        |
 | `RunStore`          | control plane | Runs, steps, approvals; status changes only from the expected current status                       | DynamoDB, in-memory                        |
+| `TenantStore`       | control plane | Tenant records with limits; API keys by hash (a key's tenant must exist, a hash is stored once)    | DynamoDB, in-memory                        |
 | `DeliveryStore`     | control plane | Claim a webhook delivery id once (first caller wins), record its runs, release; forgotten after 7 days | DynamoDB, in-memory                        |
 | `RunQueue`          | worker        | At-least-once delivery, redelivery after timeout, extendable timeout, delivery count, DLQ after N   | SQS, in-memory                             |
 | `RunStateStore`     | worker        | Atomic conditional writes for lease, checkpoint (step n only after n-1), idempotency claim         | DynamoDB, in-memory                        |
@@ -555,7 +563,7 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Re-enqueue sweep    | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300) |
 | Approval expiry     | control plane                          | `APPROVAL_TIMEOUT_HOURS` (default 72; 1 to 359, under the worker's 15-day run-state retention) |
 | Local AWS endpoints | all                                    | `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS` (unset in AWS; read by both AWS SDKs) |
-| Tenant (M0 only)    | control plane                          | `TENANT_ID`, `TENANT_API_KEY`                           |
+| First tenant        | control plane                          | `TENANT_ID`, `TENANT_API_KEY` (secret), `TENANT_MAX_RUNNING` (default 50), `TENANT_DAILY_USD` (default 5): its limits while it has no tenant record; other tenants are records with hashed keys |
 
 The "Used by" column is also each service's least-privilege IAM role (Lambda execution role or ECS
 task role). The model comes from

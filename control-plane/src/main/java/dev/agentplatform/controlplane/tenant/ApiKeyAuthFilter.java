@@ -4,6 +4,7 @@ import dev.agentplatform.controlplane.config.PlatformProperties;
 import dev.agentplatform.controlplane.secret.Secret;
 import dev.agentplatform.controlplane.secret.SecretSource;
 import dev.agentplatform.controlplane.secret.SecretUnavailableException;
+import dev.agentplatform.controlplane.store.TenantStore;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -11,15 +12,17 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Optional;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Resolves the tenant from the {@code X-Api-Key} header on public routes. M0 has one tenant whose
- * key is {@code TENANT_API_KEY} from the {@link SecretSource} (SSM on AWS, read on first use);
- * later the key is looked up in the store by its hash. 503 if the secret store cannot be read.
+ * Resolves the tenant from the {@code X-Api-Key} header on public routes (ADR 0026). First the
+ * configured tenant's key ({@code TENANT_API_KEY} from the {@link SecretSource}, constant-time
+ * compare), then, for a key shaped like {@link ApiKeys}' keys, the {@link TenantStore} by the key's
+ * SHA-256. Any other key gets 401 without a store lookup. 503 if a lookup that was needed failed.
  */
 @Component
 public class ApiKeyAuthFilter extends OncePerRequestFilter {
@@ -29,10 +32,12 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     private final String tenantId;
     private final SecretSource secrets;
+    private final TenantStore tenants;
 
-    public ApiKeyAuthFilter(PlatformProperties props, SecretSource secrets) {
+    public ApiKeyAuthFilter(PlatformProperties props, SecretSource secrets, TenantStore tenants) {
         this.tenantId = props.tenant().id();
         this.secrets = secrets;
+        this.tenants = tenants;
     }
 
     @Override
@@ -45,21 +50,52 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         var presented = request.getHeader(HEADER);
-        String apiKey;
+        if (presented == null || presented.isEmpty()) {
+            unauthorized(response);
+            return;
+        }
+        boolean lookupFailed = false;
         try {
-            apiKey = presented == null ? null : secrets.get(Secret.TENANT_API_KEY);
+            var configured = secrets.get(Secret.TENANT_API_KEY);
+            if (configured != null && MessageDigest.isEqual(configured.getBytes(StandardCharsets.UTF_8),
+                    presented.getBytes(StandardCharsets.UTF_8))) {
+                pass(request, response, chain, tenantId);
+                return;
+            }
         } catch (SecretUnavailableException e) {
-            logger.warn("API key check failed: " + e.getMessage());
+            logger.warn("API key check: secret unavailable: " + e.getMessage());
+            lookupFailed = true;
+        }
+        if (ApiKeys.isWellFormed(presented)) {
+            Optional<String> stored;
+            try {
+                stored = tenants.tenantForKey(ApiKeys.hash(presented));
+            } catch (RuntimeException e) {
+                // Never the key or its hash: only the error type.
+                logger.warn("API key check: tenant store unavailable (" + e.getClass().getSimpleName() + ")");
+                problem(response, HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", "Try again shortly");
+                return;
+            }
+            if (stored.isPresent()) {
+                pass(request, response, chain, stored.get());
+                return;
+            }
+        }
+        if (lookupFailed) {
             problem(response, HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", "Try again shortly");
             return;
         }
-        if (apiKey == null || !MessageDigest.isEqual(apiKey.getBytes(StandardCharsets.UTF_8),
-                presented.getBytes(StandardCharsets.UTF_8))) {
-            problem(response, HttpStatus.UNAUTHORIZED, "Unauthorized", "Missing or invalid X-Api-Key");
-            return;
-        }
-        request.setAttribute(TENANT_ATTRIBUTE, tenantId);
+        unauthorized(response);
+    }
+
+    private static void pass(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
+                             String tenant) throws ServletException, IOException {
+        request.setAttribute(TENANT_ATTRIBUTE, tenant);
         chain.doFilter(request, response);
+    }
+
+    private static void unauthorized(HttpServletResponse response) throws IOException {
+        problem(response, HttpStatus.UNAUTHORIZED, "Unauthorized", "Missing or invalid X-Api-Key");
     }
 
     private static void problem(HttpServletResponse response, HttpStatus status, String title, String detail)

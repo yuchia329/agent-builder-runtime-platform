@@ -77,7 +77,7 @@ public class LambdaHandler implements RequestStreamHandler, Resource {
         }
         var result = bean(Sweeps.class).runOnce();
         return ("{\"requeued\":" + result.requeued() + ",\"posted\":" + result.posted() + ",\"expired\":"
-                + result.expired() + "}").getBytes(StandardCharsets.UTF_8);
+                + result.expired() + ",\"stalled\":" + result.stalled() + "}").getBytes(StandardCharsets.UTF_8);
     }
 
     <T> T bean(Class<T> type) {

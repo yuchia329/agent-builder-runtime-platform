@@ -42,8 +42,8 @@ on a test value), every log group 14 days; the worker writes `ModelCostUsd` per 
 started a run through the App's webhook, was labeled, and after Approve in Slack was closed by
 `<app>[bot]` (16 steps, $0.0076, its trace and spend metric in CloudWatch); M6 is done once the
 project tag's cost shows no hourly charge (tag activated 2026-11-20, readable within 24 h).
-**M8 (production limits) in progress:** planned 2026-11-21; contracts and control-plane tenants
-done; next `[control-plane]` limits.
+**M8 (production limits) in progress:** planned 2026-11-21; contracts and control-plane
+(tenants, limits) done; next `[worker]` limits.
 **M6 done (2026-11-21):** the cost check shows only the KMS key's fixed $1 a month, nothing
 billed by the hour. **M7 (scale proof) done:** load-test mode (ADR 0024) and the load driver (`loadtest/`)
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
@@ -623,10 +623,12 @@ Work in this order:
   never stored in clear). Check: tests; two tenants on AWS, each sees only its own agents and
   runs. Done 2026-11-21: 355 tests; on AWS tenant B gets 404 on A's run and A's agent, makes its
   own agent of the same name, unknown keys 401 (8 checks, no runs started).
-- [ ] `[control-plane]` limits: slots at start (429 and delayed re-queue), `defer` (15-minute
+- [x] `[control-plane]` limits: slots at start (429 and delayed re-queue), `defer` (15-minute
   total, then `rate_limited`), daily spend counter (refuse `POST /runs`, fail at start), message
   group = tenant, slot recount in the sweep; `POST /runs` 429 documented in the architecture.
   Check: tests (Testcontainers DynamoDB); the contract examples pass the control plane's checks.
+  Done 2026-11-21: 403 tests (from 355); the recount became a stalled-run sweep (ADR 0028). Not
+  deployed yet: deploy with the worker task (today's worker does not handle the 429 at start).
 - [ ] `[worker]` limits: 429 at start (drop the message), `defer` on model rate limits after the
   retries (drop the message, release the lease), `approval_expired` in its failure reasons; stub
   settings `MODEL_STUB_429_RATE` and `MODEL_STUB_PRICE_USD`. Check: tests; image pushed.
@@ -703,7 +705,7 @@ service has followed.
   message with `MessageGroupId` = tenant. `worker` must: on 429 at start drop the message; call
   `defer` instead of failing when the model keeps answering 429; never send `rate_limited` or
   `tenant_budget`; add `approval_expired` to its failure reasons. Remove this entry when both
-  have followed.
+  have followed. `control-plane` followed 2026-11-21 (not deployed yet); `worker` still to do.
 
 - **The run token moves from `Authorization: Bearer` to the `X-Run-Token` header** (2026-11-19;
   on AWS `Authorization` carries the SigV4 signature API Gateway checks on `/mcp`). Declared in
@@ -717,6 +719,22 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-21 · control-plane** — M8 task 3 done: limits. `RunStore` reads a run, then writes
+  on the condition that status, cost and `holdsSlot` are unchanged (retried, backoff, 10 tries);
+  QUEUED → RUNNING and leaving RUNNING are one transaction with `TENANT#<t>/USAGE` (`running`,
+  taken only below `max_running`). Cost increases `ADD` to `TENANT#<t>/SPEND#<day>` (UTC, ttl 35
+  days). `RunService.update`: a start over the daily cap fails `tenant_budget` (409); at the cap
+  `TenantAtCapException` → touch queued-at to now + delay, re-send with the delay, 429 `Deferred` +
+  `Retry-After` (`RunLimits`: `TENANT_CAP_RETRY_SECONDS` 30 ± 20%). `POST /internal/runs/{id}/defer`
+  (`RunService.defer`, `RunStore.setAside`; 15 min total → `rate_limited`). `POST /runs` and
+  webhooks: 429 `tenant_budget`. Publisher: `MessageGroupId` = tenant, `publish(message, delay)`.
+  Decision (ADR 0028): no recount (the counter cannot drift); a stalled-run sweep fails runs
+  RUNNING with no update for 90 min (`SWEEP_RUNNING_STALLED_AFTER_SECONDS`), index
+  `RUNS#RUNNING#<0-7>`. 403 tests. Next: `[worker]` limits, then deploy both together. Gotchas:
+  the USAGE item is hot under a burst (transaction conflicts are retried; the M8 load test will
+  show if 10 tries are enough); ElasticMQ 1.7.1 accepts `MessageGroupId` on a standard queue;
+  Lambda sweep output now has `stalled`.
 
 - **2026-11-21 · control-plane** — M8 task 2 done: tenants. `TenantStore` port (DynamoDB,
   in-memory, contract suite): `TENANT#<t>` record with `maxRunning` and `dailyUsd`;

@@ -99,6 +99,14 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   stored keys by hash, only for keys shaped like `ApiKeys`' (`ap_` + 43 base64url). Never log a
   key or its hash; errors log the exception type only. Limits come from
   `TenantDirectory.limits(tenant)` (record, else `TENANT_MAX_RUNNING` / `TENANT_DAILY_USD`).
+- Tenant limits (ADR 0026-0028): slots change only inside `RunStore` writes that change status
+  (never a separate counter call); a new way into or out of RUNNING must take or free the slot in
+  the same write and get a test in `RunStoreContractTest`. Starts go through `RunService.update`
+  (cap, daily spend); `RunLimits` holds the rules and delays. Delayed re-queues set queued-at to
+  when the message is due (`touchQueued(runId, now + delay)` or `setAside`). The sweep pass is
+  re-enqueue, approval post, approval expiry, stalled runs (`Sweeps.Result`).
+- `RunQueuePublisher` is `publish(message, delaySeconds)` (0-900; `publish(message)` = 0); test
+  lambdas take both arguments. The SQS adapter always sends `MessageGroupId` = tenant.
 - Priming sends no `X-Api-Key` unless `peek` holds the key: any other key would make the
   filter read SSM before the snapshot.
 - Tests bind the server to `127.0.0.1` (`SERVER_ADDRESS` in `build.gradle.kts`) and call
@@ -127,8 +135,9 @@ remove `.gradle/*/fileHashes` (and `executionHistory`).
   that runs before the SnapStart snapshot (priming) uses `peek` only. AWS fakes for tests:
   `FakeSsm`, `FakeKms` (implement the SDK client interfaces; no Docker).
 - Config comes from env vars via `application.yml` (`STORE_BACKEND`, `CONTROL_PLANE_TABLE`,
-  `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`,
-  `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
+  `QUEUE_BACKEND`, `RUN_QUEUE_URL`, `TENANT_ID`, `TENANT_API_KEY`, `TENANT_MAX_RUNNING`,
+  `TENANT_DAILY_USD`, `TENANT_CAP_RETRY_SECONDS`, `GITHUB_WEBHOOK_SECRET`,
+  `SWEEP_INTERVAL_SECONDS`, `SWEEP_QUEUED_AFTER_SECONDS`, `SWEEP_RUNNING_STALLED_AFTER_SECONDS`, `SLACK_BOT_TOKEN`,
   `SLACK_APPROVAL_CHANNEL`, `SLACK_API_URL`, `SLACK_SIGNING_SECRET`, `APPROVAL_TIMEOUT_HOURS`, `RUN_TOKEN_PRIVATE_KEY`, `RUN_TOKEN_PUBLIC_KEY`,
   `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS`, `SECRETS_SOURCE`, `SECRETS_SSM_PATH`,
   `RUN_TOKEN_KMS_KEY_ID`, `TRACING_EXPORTER`). No network calls at startup (Lambda SnapStart).

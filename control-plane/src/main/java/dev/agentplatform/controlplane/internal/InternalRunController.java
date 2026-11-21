@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -52,6 +53,16 @@ public class InternalRunController {
             throw new InvalidRequestException(errors);
         }
         return RunViews.summary(service.update(runId, toUpdate(body)));
+    }
+
+    /** Sets a RUNNING run aside and re-queues it after a delay (ADR 0027). */
+    @PostMapping(path = "/{runId}/defer", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public RunViews.Summary defer(@PathVariable String runId, @RequestBody JsonNode body) {
+        var errors = contracts.validate(ContractValidator.RUN_DEFER, body);
+        if (!errors.isEmpty()) {
+            throw new InvalidRequestException(errors);
+        }
+        return RunViews.summary(service.defer(runId, body.get("retry_after_seconds").asInt()));
     }
 
     /** Body has already passed the RunUpdate contract. */

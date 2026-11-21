@@ -23,6 +23,8 @@ public class ContractValidator {
     public static final String INTERNAL_RUN = "internal-api.openapi.yaml#/components/schemas/InternalRun";
     public static final String RUN_SUMMARY = "internal-api.openapi.yaml#/components/schemas/RunSummary";
     public static final String RUN_UPDATE = "internal-api.openapi.yaml#/components/schemas/RunUpdate";
+    public static final String RUN_DEFER = "internal-api.openapi.yaml#/components/schemas/RunDefer";
+    public static final String DEFERRED_PROBLEM = "internal-api.openapi.yaml#/components/schemas/DeferredProblem";
 
     private final SchemaRegistry registry = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12);
     private final Map<String, Schema> schemas = new ConcurrentHashMap<>();

@@ -30,7 +30,7 @@ class GitHubWebhookControllerTest {
     private static final String BODY = "{\"action\":\"opened\",\"issue\":{\"number\":1}}";
     private static final PlatformProperties PROPS = new PlatformProperties(
             PlatformProperties.StoreBackend.MEMORY, "t", PlatformProperties.QueueBackend.MEMORY, null,
-            new PlatformProperties.TenantProperties("t1", "key", 50, java.math.BigDecimal.TEN), new PlatformProperties.GitHubProperties(SECRET), null, null, null, null, null);
+            new PlatformProperties.TenantProperties("t1", "key", 50, java.math.BigDecimal.TEN), new PlatformProperties.GitHubProperties(SECRET), null, null, null, null, null, null);
 
     private final Clock clock = Clock.systemUTC();
     private final InMemoryRunStore runs = new InMemoryRunStore();
@@ -61,7 +61,7 @@ class GitHubWebhookControllerTest {
                 return super.findAgentsByTrigger(trigger);
             }
         };
-        var c = controller(agents, message -> {});
+        var c = controller(agents, (message, delaySeconds) -> {});
 
         assertThatThrownBy(() -> deliver(c, "d-1")).hasMessageContaining("store unavailable");
         var retry = deliver(c, "d-1");
@@ -72,7 +72,7 @@ class GitHubWebhookControllerTest {
 
     @Test
     void enqueueFailureKeepsTheClaimBecauseTheRunIsSavedForTheSweep() {
-        var c = controller(new InMemoryAgentStore(clock), message -> {
+        var c = controller(new InMemoryAgentStore(clock), (message, delaySeconds) -> {
             throw new RunQueueException("queue down", null);
         });
 

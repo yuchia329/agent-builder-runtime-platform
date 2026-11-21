@@ -12,6 +12,7 @@ import java.time.Instant;
  * (ApprovalDecision in contracts/internal-api.openapi.yaml). {@code approvalMessage} is where the
  * pending call was posted for a person (absent until posted; each new pause starts without one).
  * {@code startedBy} is what started the run ({@code <kind>:<id>}, see {@link Principals}).
+ * {@code setAsideSeconds} is the total delay of its set-asides so far (ADR 0027).
  */
 public record Run(
         String runId,
@@ -30,6 +31,7 @@ public record Run(
         String output,
         String inputJson,
         String startedBy,
+        int setAsideSeconds,
         Instant createdAt,
         Instant updatedAt) {
 
@@ -47,7 +49,7 @@ public record Run(
     public static Run queued(String runId, String tenantId, String agentName, int agentVersion,
                              String inputJson, String startedBy, String traceParent, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, RunStatus.QUEUED, 0, BigDecimal.ZERO,
-                traceIdOf(traceParent), traceParent, null, null, null, null, null, inputJson, startedBy, now, now);
+                traceIdOf(traceParent), traceParent, null, null, null, null, null, inputJson, startedBy, 0, now, now);
     }
 
     /** The trace id (32 hex) inside a W3C {@code traceparent} ({@code 00-<trace>-<span>-<flags>}). */
@@ -77,7 +79,7 @@ public record Run(
                 update.status() == RunStatus.WAITING_APPROVAL ? null : approvalMessage,
                 update.failure() != null ? update.failure() : failure,
                 update.output() != null ? update.output() : output,
-                inputJson, startedBy, createdAt, now);
+                inputJson, startedBy, setAsideSeconds, createdAt, now);
     }
 
     /**
@@ -87,19 +89,26 @@ public record Run(
     public Run decided(ApprovalDecision decision, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, decision.nextStatus(), steps, costUsd, traceId,
                 traceParent, null, decision.toJson(), approvalMessage, decision.approved() ? failure : decision.failure(), output,
-                inputJson, startedBy, createdAt, now);
+                inputJson, startedBy, setAsideSeconds, createdAt, now);
     }
 
     /** Fails the run with {@code failure} ({@code approval_expired}) and clears the pending call. */
     public Run expired(Failure failure, Instant now) {
         return new Run(runId, tenantId, agentName, agentVersion, RunStatus.FAILED, steps, costUsd, traceId, traceParent,
-                null, approvalJson, approvalMessage, failure, output, inputJson, startedBy, createdAt, now);
+                null, approvalJson, approvalMessage, failure, output, inputJson, startedBy, setAsideSeconds, createdAt, now);
     }
 
     /** The run with its pending call posted at {@code message}. */
     public Run withApprovalMessage(ApprovalMessage message) {
         return new Run(runId, tenantId, agentName, agentVersion, status, steps, costUsd, traceId, traceParent,
                 pendingApprovalJson,
-                approvalJson, message, failure, output, inputJson, startedBy, createdAt, updatedAt);
+                approvalJson, message, failure, output, inputJson, startedBy, setAsideSeconds, createdAt, updatedAt);
+    }
+
+    /** Set aside (ADR 0027): back to QUEUED, {@code delaySeconds} added to the total set aside. */
+    public Run setAside(int delaySeconds, Instant now) {
+        return new Run(runId, tenantId, agentName, agentVersion, RunStatus.QUEUED, steps, costUsd, traceId, traceParent,
+                pendingApprovalJson, approvalJson, approvalMessage, failure, output, inputJson, startedBy,
+                setAsideSeconds + delaySeconds, createdAt, now);
     }
 }

@@ -23,8 +23,8 @@ abstract class RunQueuePublisherContractTest {
     /** A publisher writing to a fresh, empty queue. */
     protected abstract RunQueuePublisher newPublisher();
 
-    /** A message on the queue: its body and its {@code traceparent} attribute (null if absent). */
-    protected record Received(String body, String traceParent) {}
+    /** A message on the queue: its body, {@code traceparent} attribute and message group (null if absent). */
+    protected record Received(String body, String traceParent, String groupId) {}
 
     /** Messages currently on that queue (read once: a real queue hands each out once). */
     protected abstract List<Received> received();
@@ -64,6 +64,23 @@ abstract class RunQueuePublisherContractTest {
         var body = JSON.readTree(byRun.get("run_traced").body());
         assertThat(contracts.validate(ContractValidator.RUN_MESSAGE, body)).isEmpty();
         assertThat(body.has("traceparent")).isFalse();
+    }
+
+    @Test
+    void messageGroupIsTheTenant() {
+        publisher.publish(new RunMessage("run_a", "tenant-a"));
+        publisher.publish(new RunMessage("run_b", "tenant-b"));
+
+        assertThat(received()).extracting(Received::groupId).containsExactlyInAnyOrder("tenant-a", "tenant-b");
+    }
+
+    @Test
+    void delayOutsideSqsLimitsIsRefused() {
+        var message = new RunMessage("run_x", "tenant-demo");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> publisher.publish(message, 901))
+                .isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> publisher.publish(message, -1))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

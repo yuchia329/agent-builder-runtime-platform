@@ -25,7 +25,7 @@ class ApprovalTimeoutTest {
 
     @Test
     void defaultIs72Hours() {
-        var props = new PlatformProperties(null, "t", null, null, null, null, null, null, null, null, null);
+        var props = new PlatformProperties(null, "t", null, null, null, null, null, null, null, null, null, null);
         assertThat(props.approvalTimeout()).isEqualTo(Duration.ofHours(72));
     }
 

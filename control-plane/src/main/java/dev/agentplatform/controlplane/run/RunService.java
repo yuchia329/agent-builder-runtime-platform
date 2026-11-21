@@ -10,6 +10,7 @@ import dev.agentplatform.controlplane.store.ApprovalConflictException;
 import dev.agentplatform.controlplane.store.IllegalTransitionException;
 import dev.agentplatform.controlplane.store.RunNotFoundException;
 import dev.agentplatform.controlplane.store.RunStore;
+import dev.agentplatform.controlplane.store.TenantAtCapException;
 import dev.agentplatform.controlplane.tenant.Principals;
 import dev.agentplatform.controlplane.trace.RunTracing;
 import dev.agentplatform.controlplane.agent.Agent;
@@ -37,22 +38,30 @@ public class RunService {
     private final ApprovalNotifier approvals;
     private final Clock clock;
     private final RunTracing tracing;
+    private final RunLimits limits;
 
     @Autowired
     public RunService(AgentStore agents, RunStore runs, RunQueuePublisher queue, ApprovalNotifier approvals,
-                      Clock clock, RunTracing tracing) {
+                      Clock clock, RunTracing tracing, RunLimits limits) {
         this.agents = agents;
         this.runs = runs;
         this.queue = queue;
         this.approvals = approvals;
         this.clock = clock;
         this.tracing = tracing;
+        this.limits = limits;
     }
 
-    /** Without tracing (tests that do not look at spans). */
+    /** With these limits and no tracing. */
+    public RunService(AgentStore agents, RunStore runs, RunQueuePublisher queue, ApprovalNotifier approvals,
+                      Clock clock, RunLimits limits) {
+        this(agents, runs, queue, approvals, clock, RunTracing.noop(), limits);
+    }
+
+    /** Without tracing or limits (tests that look at neither). */
     public RunService(AgentStore agents, RunStore runs, RunQueuePublisher queue, ApprovalNotifier approvals,
                       Clock clock) {
-        this(agents, runs, queue, approvals, clock, RunTracing.noop());
+        this(agents, runs, queue, approvals, clock, RunTracing.noop(), RunLimits.unlimited(runs, clock));
     }
 
     /** A run plus the spec and publisher ({@code owner}) of the version it is pinned to, for workers. */
@@ -63,6 +72,8 @@ public class RunService {
      * (its "run.start" span, ADR 0022) that the queue message carries to the worker. If enqueueing
      * fails the run stays QUEUED and the {@link dev.agentplatform.controlplane.queue.RunQueueException}
      * propagates (a later sweep re-enqueues such runs).
+     *
+     * @throws TenantBudgetExceededException if the tenant has reached its daily spend cap
      */
     public Run start(String tenantId, String agentName, String inputJson) {
         return start(tenantId, agentName, inputJson, Principals.api(tenantId));
@@ -75,6 +86,7 @@ public class RunService {
         if (agent.activeVersion() == null) {
             throw new AgentNotPublishedException(agentName);
         }
+        limits.requireUnderDailyCap(tenantId);
         var runId = newRunId();
         var span = tracing.startRun(runId, tenantId, agentName, agent.activeVersion());
         return RunTracing.inSpan(span, () -> {
@@ -118,14 +130,86 @@ public class RunService {
     /**
      * Applies a worker's report. A move to WAITING_APPROVAL also posts the pending call for a
      * person (ADR 0002); a failed post does not fail the report (the approval sweep retries).
+     *
+     * <p>A start (QUEUED → RUNNING) is where tenant limits apply (ADR 0026): over the daily spend
+     * cap the run fails {@code tenant_budget} and this throws {@link IllegalTransitionException}
+     * (409); at the cap on runs at once the run stays QUEUED, is re-queued with a delay and this
+     * throws {@link RunDeferredException} (429).
      */
     public Run update(String runId, RunUpdate update) {
+        if (update.status() == RunStatus.RUNNING) {
+            var current = runs.find(runId).orElseThrow(() -> new RunNotFoundException(runId));
+            if (current.status() == RunStatus.QUEUED) {
+                return start(current, update);
+            }
+        }
         var updated = runs.update(runId, update, clock.instant());
         if (updated.status() == RunStatus.WAITING_APPROVAL
                 && approvals.post(updated) == ApprovalNotifier.Outcome.POSTED) {
             return runs.find(runId).orElse(updated);
         }
         return updated;
+    }
+
+    private Run start(Run queued, RunUpdate update) {
+        var runId = queued.runId();
+        var tenantLimits = limits.of(queued.tenantId());
+        var now = clock.instant();
+        if (limits.overDailyCap(queued.tenantId(), tenantLimits)) {
+            var failed = runs.failQueued(runId, new Run.Failure(TenantBudgetExceededException.REASON,
+                    "Tenant reached its daily spend cap of $" + tenantLimits.dailyUsd().toPlainString()), now);
+            if (failed.isPresent()) {
+                throw new IllegalTransitionException(runId, RunStatus.FAILED, RunStatus.RUNNING);
+            }
+            // no longer QUEUED: another delivery started it; carry on as a resume
+        }
+        try {
+            return runs.update(runId, update, now, tenantLimits.maxRunning());
+        } catch (TenantAtCapException e) {
+            var delay = limits.capRetryDelaySeconds();
+            if (runs.touchQueued(runId, now.plusSeconds(delay))) {
+                requeue(queued, delay, "run.deferred");
+            }
+            throw new RunDeferredException(runId, delay);
+        }
+    }
+
+    /**
+     * Sets a RUNNING run aside (ADR 0027): back to QUEUED, its slot freed, re-queued to arrive
+     * after {@code delaySeconds}. A run already set aside {@value RunLimits#MAX_SET_ASIDE_SECONDS} s
+     * in total fails {@code rate_limited} instead.
+     *
+     * @throws RunNotFoundException if no run has this id
+     * @throws IllegalTransitionException if the run is not RUNNING
+     */
+    public Run defer(String runId, int delaySeconds) {
+        var run = runs.find(runId).orElseThrow(() -> new RunNotFoundException(runId));
+        if (run.status() != RunStatus.RUNNING) {
+            throw new IllegalTransitionException(runId, run.status(), RunStatus.QUEUED);
+        }
+        var now = clock.instant();
+        if (run.setAsideSeconds() >= RunLimits.MAX_SET_ASIDE_SECONDS) {
+            return runs.update(runId, new RunUpdate(RunStatus.FAILED, null, null, null, null,
+                    new Run.Failure("rate_limited", "Set aside for %d s in total: the model provider kept answering 429"
+                            .formatted(run.setAsideSeconds())), null), now);
+        }
+        var queued = runs.setAside(runId, delaySeconds, now.plusSeconds(delaySeconds), now);
+        requeue(queued, delaySeconds, "run.set_aside");
+        return queued;
+    }
+
+    /** Sends a QUEUED run's message with a delay; on failure the re-enqueue sweep sends it later. */
+    private void requeue(Run run, int delaySeconds, String spanName) {
+        var span = tracing.startInRun(run, spanName);
+        span.setAttribute("queue.delay_seconds", (long) delaySeconds);
+        try {
+            RunTracing.inSpan(span, () -> {
+                queue.publish(new RunMessage(run.runId(), run.tenantId(), RunTracing.traceParent(span)), delaySeconds);
+                return null;
+            });
+        } catch (RunQueueException e) {
+            log.warn("Run {} re-queue failed; the sweep will send it: {}", run.runId(), e.getMessage());
+        }
     }
 
     /**

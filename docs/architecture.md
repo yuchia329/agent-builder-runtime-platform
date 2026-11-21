@@ -80,13 +80,15 @@ sequenceDiagram
   Note over Q,W: queue empty: workers scale back to 0
 ```
 
-Tenant limits (M8, being built; shapes in `contracts/internal-api.openapi.yaml`): a run takes
-one of its tenant's slots when it starts. At the tenant's cap on runs at once, the control plane
-re-queues it with a delay and the start answers 429; over the tenant's daily spend cap the run
-fails `tenant_budget`. A worker whose model keeps answering 429 sets the run aside (`POST
+Tenant limits (M8; ADR 0026, 0027, 0028; shapes in `contracts/internal-api.openapi.yaml`): a run
+takes one of its tenant's slots when it starts. At the tenant's cap on runs at once, the control
+plane re-queues it with a delay (`TENANT_CAP_RETRY_SECONDS`, default 30, spread by up to 20%) and
+the start answers 429; over the tenant's daily spend cap the run fails `tenant_budget`. A worker whose model keeps answering 429 sets the run aside (`POST
 /internal/runs/{id}/defer`): it goes back to QUEUED and is re-queued after a delay, and fails
 `rate_limited` after 15 minutes set aside in total. Run messages carry the tenant as their SQS
-`MessageGroupId`, so a fair queue serves a quiet tenant ahead of another's backlog.
+`MessageGroupId`, so a fair queue serves a quiet tenant ahead of another's backlog. A run stuck
+RUNNING (its message went to the dead-letter queue) is failed by the stalled-run sweep after 90
+minutes without an update, which frees its slot.
 
 Nothing is billed per hour while idle: the control plane and gateway are Lambda functions, workers
 scale to 0, both data stores are DynamoDB on-demand, and model providers bill per token
@@ -160,7 +162,11 @@ and `TENANT_DAILY_USD`. GitHub webhooks and Slack stay on the configured tenant.
 - `PUT /agents/{id}/active-version`: set or roll back the active version.
 - `POST /runs`: start a run manually (development and testing). Body `{agent, input}`; the run is
   pinned to the agent's active version, saved `QUEUED`, then enqueued. If enqueueing fails the
-  response is 503 and the run stays `QUEUED` for the re-enqueue sweep.
+  response is 503 and the run stays `QUEUED` for the re-enqueue sweep. Once the tenant's spend
+  today (UTC) has reached its daily cap, the answer is 429 (`application/problem+json`, `type`
+  `urn:agent-platform:problem:tenant-budget`, `reason` `tenant_budget`, `retry_after_seconds` and
+  `Retry-After` until 00:00 UTC) and no run is saved; GitHub webhooks get the same 429 and their
+  delivery claim is released.
 - `GET /runs/{id}`: status, steps, cost, trace id, pending approval, approval, failure, output.
 - `POST /runs/{id}/approval`: decide the pending call (web approval for development and tests;
   Slack uses the same path). Body `{decision: approved|rejected, step}`; `step` must be the
@@ -250,15 +256,27 @@ the table from that file.
 | Agent, its versions            | `PK=TENANT#<t>#AGENT#<a>`, `SK=META` or `VERSION#<10-digit n>`               | Built    |
 | Agents by trigger (webhooks)   | `GSI1PK=TRIGGER#<event>`, `GSI1SK=TENANT#<t>#AGENT#<a>` on the agent item    | Built    |
 | Tenant and its limits          | `PK=TENANT#<t>`, `SK=META` (`maxRunning`, `dailyUsd`, `createdAt`)           | Built    |
+| Tenant's slots in use          | `PK=TENANT#<t>`, `SK=USAGE` (`running`)                                      | Built    |
+| Tenant's spend on a day        | `PK=TENANT#<t>`, `SK=SPEND#<yyyy-mm-dd>` (`usd`, `ttl` 35 days)              | Built    |
 | Tenant by API key              | `PK=APIKEY#<sha256 hex>`, `SK=META` (`tenantId`, `keyPrefix`, `createdAt`; added in a transaction with a check that the tenant exists) | Built |
 | Run and its approval           | `PK=RUN#<id>`, `SK=META` (`pendingApproval`, latest `approval` as JSON attributes; `approvalChannel`, `approvalMessageId` once posted) | Built |
+| Running runs by last update    | `GSI1PK=RUNS#RUNNING#<0-7 from the run id>`, `GSI1SK=<last update, 13-digit epoch millis>#<runId>` on the run item (only while `RUNNING`) | Built |
 | Runs waiting for approval      | `GSI1PK=RUNS#APPROVAL_UNSENT` or `RUNS#APPROVAL_SENT`, `GSI1SK=<waiting-since, 13-digit epoch millis>#<runId>` on the run item (only while `WAITING_APPROVAL`) | Built |
 | Runs of an agent, newest first | `GSI2PK=TENANT#<t>#AGENT#<a>`, `GSI2SK=<created time>#<run id>` on the run item | Keys written, no query yet |
 
 - Publishing reads the agent's `latestVersion` n, then in one transaction sets it to n+1 (only if
   it is still n), sets the active version and trigger index, and writes version n+1 (only if it
   does not exist). A lost race retries, so numbers have no gaps or repeats.
-- Every run status change is a conditional update on the expected current status. A decision is
+- Every run status change is a conditional update on the expected current status. A worker's
+  change first reads the run, then writes on the condition that its status, cost and slot mark
+  (`holdsSlot`) are unchanged, retrying with a short random backoff (up to 10 tries). A change
+  that takes a slot (QUEUED → RUNNING, only while the USAGE counter is under `max_running`) or
+  frees one (leaving RUNNING) is one transaction with the tenant's USAGE item, so the counter
+  always equals the runs holding a slot (ADR 0028). A cost increase is then added to the day's
+  SPEND item (`ADD`; a failed add is logged, so spend can be undercounted, never doubled). Set
+  aside or refused at the cap, a run's queued-at time is when its delayed message is due, so the
+  re-enqueue sweep does not send it early.
+- A decision is
   one conditional update on `WAITING_APPROVAL` and the exact pending call text: it sets
   `approval`, removes `pendingApproval` and sets the new status, so two clicks cannot both win.
 - A scheduled sweep re-enqueues runs left `QUEUED` too long (status written, enqueue failed):
@@ -274,6 +292,9 @@ the table from that file.
   other status, including a rejection or an expiry, removes it. The post sweep reads only the
   unsent partition; the expiry sweep reads both (oldest 20 of each, merged by sort key), then
   expires up to 20.
+- Then the stalled-run sweep: up to 100 runs `RUNNING` with no update for
+  `SWEEP_RUNNING_STALLED_AFTER_SECONDS` (default 5,400) fail with `error`, each only if its last
+  update is still the listed one (ADR 0028).
 
 The same Spring Boot app runs as a normal server locally and behind a Lambda handler in AWS
 ([ADR 0017](adr/0017-control-plane-on-lambda-snapstart.md)). `lambda/LambdaHandler` passes API
@@ -508,9 +529,9 @@ API ([ADR 0004](adr/0004-ports-and-adapters.md)). Config picks the adapter.
 
 | Port                | Lives in      | Behavior every adapter must provide                                                                 | Adapters                                   |
 | ------------------- | ------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `RunQueuePublisher` | control plane | Enqueue a run id                                                                                    | SQS, in-memory                             |
+| `RunQueuePublisher` | control plane | Enqueue a run id, message group = tenant, optional delay (0-900 s)                                  | SQS, in-memory                             |
 | `AgentStore`        | control plane | Tenants, agents, immutable versions with gap-free numbering, lookup by trigger                     | DynamoDB, in-memory                        |
-| `RunStore`          | control plane | Runs, steps, approvals; status changes only from the expected current status                       | DynamoDB, in-memory                        |
+| `RunStore`          | control plane | Runs, steps, approvals; status changes only from the expected current status; tenant slots taken and freed in the same write, daily spend, set-aside, stalled runs | DynamoDB, in-memory                        |
 | `TenantStore`       | control plane | Tenant records with limits; API keys by hash (a key's tenant must exist, a hash is stored once)    | DynamoDB, in-memory                        |
 | `DeliveryStore`     | control plane | Claim a webhook delivery id once (first caller wins), record its runs, release; forgotten after 7 days | DynamoDB, in-memory                        |
 | `RunQueue`          | worker        | At-least-once delivery, redelivery after timeout, extendable timeout, delivery count, DLQ after N   | SQS, in-memory                             |
@@ -560,7 +581,8 @@ definition environment, with secrets from SSM Parameter Store (SecureString,
 | Control-plane secrets | control plane                        | `SECRETS_SOURCE=env\|ssm` (default env: `TENANT_API_KEY`, `GITHUB_WEBHOOK_SECRET`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`); ssm: `SECRETS_SSM_PATH` (`/agent-platform/dev/control-plane`), read on first use and kept per environment; with ssm, `SLACK_APPROVAL_CHANNEL` is required |
 | Slack bot           | control plane                          | `SLACK_BOT_TOKEN` (secret; unset = approvals only logged), `SLACK_APPROVAL_CHANNEL` (channel id), `SLACK_SIGNING_SECRET` (secret), optional `SLACK_API_URL` (tests) |
 | GitHub webhooks     | control plane                          | `GITHUB_WEBHOOK_SECRET` (secret; unset turns `/triggers/github` off) |
-| Re-enqueue sweep    | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300) |
+| Sweeps              | control plane                          | `SWEEP_INTERVAL_SECONDS` (default 60, 0 = off; 0 on Lambda), `SWEEP_QUEUED_AFTER_SECONDS` (default 300), `SWEEP_RUNNING_STALLED_AFTER_SECONDS` (default 5400) |
+| Tenant limits       | control plane                          | `TENANT_CAP_RETRY_SECONDS` (default 30, 1 to 900): delay before a run refused at its tenant's cap arrives again |
 | Approval expiry     | control plane                          | `APPROVAL_TIMEOUT_HOURS` (default 72; 1 to 359, under the worker's 15-day run-state retention) |
 | Local AWS endpoints | all                                    | `AWS_ENDPOINT_URL_DYNAMODB`, `AWS_ENDPOINT_URL_SQS` (unset in AWS; read by both AWS SDKs) |
 | First tenant        | control plane                          | `TENANT_ID`, `TENANT_API_KEY` (secret), `TENANT_MAX_RUNNING` (default 50), `TENANT_DAILY_USD` (default 5): its limits while it has no tenant record; other tenants are records with hashed keys |

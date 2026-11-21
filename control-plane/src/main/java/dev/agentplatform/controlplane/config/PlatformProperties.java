@@ -24,7 +24,8 @@ public record PlatformProperties(
         SlackProperties slack,
         @Valid ApprovalProperties approval,
         RunTokenProperties runToken,
-        SecretsProperties secrets) {
+        SecretsProperties secrets,
+        @Valid LimitsProperties limits) {
 
     public enum StoreBackend { MEMORY, DYNAMODB }
 
@@ -43,10 +44,27 @@ public record PlatformProperties(
     public record GitHubProperties(String webhookSecret) {}
 
     /**
-     * Re-enqueue sweep: every {@code intervalSeconds} (0 = off), re-send runs QUEUED for longer
-     * than {@code queuedAfterSeconds}.
+     * Sweeps: every {@code intervalSeconds} (0 = off), re-send runs QUEUED for longer than
+     * {@code queuedAfterSeconds}, and fail runs RUNNING with no update for
+     * {@code runningStalledAfterSeconds} (their worker is gone; frees their slot).
      */
-    public record SweepProperties(Integer intervalSeconds, Integer queuedAfterSeconds) {}
+    public record SweepProperties(Integer intervalSeconds, Integer queuedAfterSeconds,
+                                  Integer runningStalledAfterSeconds) {}
+
+    /**
+     * Tenant limits (ADR 0026): a run refused at its tenant's cap on runs at once is delivered
+     * again after about {@code capRetrySeconds} (spread by up to 20%).
+     */
+    public record LimitsProperties(@Min(1) @Max(900) Integer capRetrySeconds) {}
+
+    public int tenantCapRetrySeconds() {
+        return limits == null || limits.capRetrySeconds() == null ? 30 : limits.capRetrySeconds();
+    }
+
+    /** 90 minutes by default: longer than any run's working time (spec max_seconds is at most 3600). */
+    public int sweepRunningStalledAfterSeconds() {
+        return sweep == null || sweep.runningStalledAfterSeconds() == null ? 5400 : sweep.runningStalledAfterSeconds();
+    }
 
     /**
      * Slack bot for approval requests: {@code botToken} (scope chat:write; blank means approvals

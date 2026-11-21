@@ -23,7 +23,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class ApiKeyAuthFilterTest {
 
     private static final PlatformProperties PROPS = new PlatformProperties(null, "t", null, null,
-            new PlatformProperties.TenantProperties("t1", null, 50, BigDecimal.TEN), null, null, null, null, null, null);
+            new PlatformProperties.TenantProperties("t1", null, 50, BigDecimal.TEN), null, null, null, null, null, null, null);
     private static final Instant NOW = Instant.parse("2026-11-21T10:00:00Z");
 
     private InMemoryTenantStore store;

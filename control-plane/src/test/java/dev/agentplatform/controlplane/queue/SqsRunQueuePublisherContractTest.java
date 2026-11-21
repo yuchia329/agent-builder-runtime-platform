@@ -1,11 +1,14 @@
 package dev.agentplatform.controlplane.queue;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -50,14 +53,24 @@ class SqsRunQueuePublisherContractTest extends RunQueuePublisherContractTest {
         var received = new ArrayList<Received>();
         while (true) {
             var messages = sqs.receiveMessage(r -> r.queueUrl(queueUrl).maxNumberOfMessages(10).waitTimeSeconds(1)
-                    .messageAttributeNames("All")).messages();
+                    .messageAttributeNames("All").messageSystemAttributeNamesWithStrings("MessageGroupId")).messages();
             if (messages.isEmpty()) {
                 return received;
             }
             messages.forEach(m -> {
                 var trace = m.messageAttributes().get(RunMessage.TRACE_ATTRIBUTE);
-                received.add(new Received(m.body(), trace == null ? null : trace.stringValue()));
+                received.add(new Received(m.body(), trace == null ? null : trace.stringValue(),
+                        m.attributesAsStrings().get("MessageGroupId")));
             });
         }
+    }
+
+    @Test
+    void delayedMessageArrivesLater() throws InterruptedException {
+        publisher.publish(new RunMessage("run_later", "tenant-demo"), 2);
+
+        assertThat(received()).isEmpty();
+        Thread.sleep(2_000);
+        assertThat(received()).extracting(Received::body).hasSize(1);
     }
 }

@@ -26,7 +26,7 @@ class RunSweeperTest {
     private final List<String> sent = new ArrayList<>();
     private final List<RunMessage> messages = new ArrayList<>();
     private final Set<String> failing = new HashSet<>();
-    private final RunQueuePublisher queue = message -> {
+    private final RunQueuePublisher queue = (message, delaySeconds) -> {
         if (failing.contains(message.runId())) {
             throw new RunQueueException("queue down", null);
         }

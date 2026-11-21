@@ -3,6 +3,7 @@ package dev.agentplatform.controlplane.tenant;
 import dev.agentplatform.controlplane.config.PlatformProperties;
 import dev.agentplatform.controlplane.store.TenantStore;
 import dev.agentplatform.controlplane.tenant.Tenant.TenantLimits;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -16,9 +17,14 @@ public class TenantDirectory {
     private final TenantStore store;
     private final TenantLimits defaults;
 
+    @Autowired
     public TenantDirectory(TenantStore store, PlatformProperties props) {
+        this(store, new TenantLimits(props.tenant().maxRunning(), props.tenant().dailyUsd()));
+    }
+
+    public TenantDirectory(TenantStore store, TenantLimits defaults) {
         this.store = store;
-        this.defaults = new TenantLimits(props.tenant().maxRunning(), props.tenant().dailyUsd());
+        this.defaults = defaults;
     }
 
     public TenantLimits limits(String tenantId) {

@@ -40,6 +40,7 @@ Rules:
 | [0025](0025-keep-the-run-queue-active.md) | Keep the run queue active with an hourly scheduled call | Proposed |
 | [0026](0026-tenant-limits-checked-at-start.md) | Tenant limits checked at start, fairness from an SQS fair queue | Proposed |
 | [0027](0027-set-runs-aside-on-model-rate-limits.md) | Set a run aside when the model keeps answering 429 | Proposed |
+| [0028](0028-stalled-run-sweep-instead-of-slot-recount.md) | A stalled-run sweep frees leaked slots, not a counter recount | Proposed |
 
 ## Template
 

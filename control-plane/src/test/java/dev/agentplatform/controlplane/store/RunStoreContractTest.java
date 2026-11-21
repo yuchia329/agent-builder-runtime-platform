@@ -11,6 +11,7 @@ import dev.agentplatform.controlplane.run.RunStatus;
 import dev.agentplatform.controlplane.run.RunUpdate;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
@@ -607,5 +608,209 @@ abstract class RunStoreContractTest {
 
         assertThat(waitingBefore(later)).isEmpty();
         assertThat(waitingBefore(later.plusMillis(1))).containsExactly(run.runId());
+    }
+
+    // --- Tenant limits (ADR 0026, ADR 0027) ---
+
+    private Run queuedRunOf(String tenant) {
+        var run = Run.queued("run_" + UUID.randomUUID().toString().replace("-", ""), tenant, "triage", 3, INPUT, T0);
+        store.create(run);
+        return run;
+    }
+
+    private static RunUpdate cost(RunStatus status, String usd) {
+        return new RunUpdate(status, null, new BigDecimal(usd), null, null, null, null);
+    }
+
+
+    @Test
+    void startTakesSlotAndEndFreesIt() {
+        var tenant = "slots-" + UUID.randomUUID();
+        var first = queuedRunOf(tenant);
+        var second = queuedRunOf(tenant);
+
+        store.update(first.runId(), to(RunStatus.RUNNING), T1, 1);
+        assertThat(store.running(tenant)).isEqualTo(1);
+        assertThatThrownBy(() -> store.update(second.runId(), to(RunStatus.RUNNING), T1, 1))
+                .isInstanceOf(TenantAtCapException.class);
+        assertThat(store.find(second.runId()).orElseThrow().status()).isEqualTo(RunStatus.QUEUED);
+
+        store.update(first.runId(), to(RunStatus.SUCCEEDED), T1, 1);
+        assertThat(store.running(tenant)).isZero();
+        assertThat(store.update(second.runId(), to(RunStatus.RUNNING), T1, 1).status()).isEqualTo(RunStatus.RUNNING);
+        store.update(second.runId(), to(RunStatus.FAILED), T1, 1);
+        assertThat(store.running(tenant)).isZero();
+    }
+
+    @Test
+    void resumeTakesNoNewSlot() {
+        var tenant = "resume-" + UUID.randomUUID();
+        var run = queuedRunOf(tenant);
+        store.update(run.runId(), to(RunStatus.RUNNING), T1, 1);
+
+        store.update(run.runId(), to(RunStatus.RUNNING), T1.plusSeconds(1), 1);
+
+        assertThat(store.running(tenant)).isEqualTo(1);
+    }
+
+    @Test
+    void waitingForApprovalFreesSlotAndApprovedRunTakesOneAgain() {
+        var tenant = "approval-" + UUID.randomUUID();
+        var run = queuedRunOf(tenant);
+        store.update(run.runId(), to(RunStatus.RUNNING), T1, 1);
+
+        store.update(run.runId(), new RunUpdate(RunStatus.WAITING_APPROVAL, null, null, null, PENDING, null, null), T1, 1);
+        assertThat(store.running(tenant)).isZero();
+
+        store.decideApproval(run.runId(), PENDING, ApprovalDecision.of(PENDING, Decision.approved, "api:t", T1), T1);
+        store.update(run.runId(), to(RunStatus.RUNNING), T1, 1);
+        assertThat(store.running(tenant)).isEqualTo(1);
+    }
+
+    @Test
+    void slotsArePerTenant() {
+        var busy = "busy-" + UUID.randomUUID();
+        var quiet = "quiet-" + UUID.randomUUID();
+        store.update(queuedRunOf(busy).runId(), to(RunStatus.RUNNING), T1, 1);
+
+        store.update(queuedRunOf(quiet).runId(), to(RunStatus.RUNNING), T1, 1);
+
+        assertThat(store.running(busy)).isEqualTo(1);
+        assertThat(store.running(quiet)).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentStartsNeverExceedTheCap() throws Exception {
+        var tenant = "race-" + UUID.randomUUID();
+        var ids = new ArrayList<String>();
+        for (int i = 0; i < 8; i++) {
+            ids.add(queuedRunOf(tenant).runId());
+        }
+        var ready = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(8);
+        try {
+            var tasks = new ArrayList<Callable<Boolean>>();
+            for (var id : ids) {
+                tasks.add(() -> {
+                    ready.await();
+                    try {
+                        store.update(id, to(RunStatus.RUNNING), T1, 3);
+                        return true;
+                    } catch (TenantAtCapException e) {
+                        return false;
+                    }
+                });
+            }
+            var futures = tasks.stream().map(pool::submit).toList();
+            ready.countDown();
+            int started = 0;
+            for (var future : futures) {
+                started += future.get() ? 1 : 0;
+            }
+            assertThat(started).isEqualTo(3);
+            assertThat(store.running(tenant)).isEqualTo(3);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void setAsideFreesSlotAndQueuesUntilItIsDue() {
+        var tenant = "aside-" + UUID.randomUUID();
+        var run = queuedRunOf(tenant);
+        store.update(run.runId(), to(RunStatus.RUNNING), T1, 1);
+
+        var queued = store.setAside(run.runId(), 30, T1.plusSeconds(30), T1);
+
+        assertThat(queued.status()).isEqualTo(RunStatus.QUEUED);
+        assertThat(queued.setAsideSeconds()).isEqualTo(30);
+        assertThat(store.find(run.runId()).orElseThrow()).isEqualTo(queued);
+        assertThat(store.running(tenant)).isZero();
+        assertThat(queuedBefore(T1.plusSeconds(29))).doesNotContain(run.runId());
+        assertThat(queuedBefore(T1.plusSeconds(31))).contains(run.runId());
+
+        store.update(run.runId(), to(RunStatus.RUNNING), T1.plusSeconds(31), 1);
+        assertThat(store.setAside(run.runId(), 60, T1.plusSeconds(91), T1.plusSeconds(31)).setAsideSeconds())
+                .isEqualTo(90);
+    }
+
+    @Test
+    void onlyRunningRunIsSetAside() {
+        var run = queuedRun();
+
+        assertThatThrownBy(() -> store.setAside(run.runId(), 30, T1, T1)).isInstanceOf(IllegalTransitionException.class);
+        assertThatThrownBy(() -> store.setAside("run_missing", 30, T1, T1)).isInstanceOf(RunNotFoundException.class);
+    }
+
+    @Test
+    void costIncreasesAddUpToTheTenantsDailySpend() {
+        var tenant = "spend-" + UUID.randomUUID();
+        var a = queuedRunOf(tenant);
+        var b = queuedRunOf(tenant);
+        var day = LocalDate.of(2026, 11, 16);
+        store.update(a.runId(), cost(RunStatus.RUNNING, "0.10"), T1);
+        store.update(a.runId(), cost(RunStatus.RUNNING, "0.25"), T1);
+        store.update(b.runId(), cost(RunStatus.RUNNING, "0.05"), T1);
+        store.update(b.runId(), cost(RunStatus.SUCCEEDED, "0.04"), T1); // a lower total is not counted back
+
+        assertThat(store.spend(tenant, day)).isEqualByComparingTo("0.30");
+        assertThat(store.spend(tenant, day.plusDays(1))).isEqualByComparingTo("0");
+        assertThat(store.spend("other-" + UUID.randomUUID(), day)).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void spendCountsOnTheUtcDayOfTheUpdate() {
+        var tenant = "midnight-" + UUID.randomUUID();
+        var run = queuedRunOf(tenant);
+        store.update(run.runId(), cost(RunStatus.RUNNING, "0.10"), Instant.parse("2026-11-16T23:59:59Z"));
+        store.update(run.runId(), cost(RunStatus.RUNNING, "0.30"), Instant.parse("2026-11-17T00:00:01Z"));
+
+        assertThat(store.spend(tenant, LocalDate.of(2026, 11, 16))).isEqualByComparingTo("0.10");
+        assertThat(store.spend(tenant, LocalDate.of(2026, 11, 17))).isEqualByComparingTo("0.20");
+    }
+
+    @Test
+    void queuedRunFailsOnlyWhileQueued() {
+        var run = queuedRun();
+        var failure = new Run.Failure("tenant_budget", "over the cap");
+
+        var failed = store.failQueued(run.runId(), failure, T1).orElseThrow();
+
+        assertThat(failed.status()).isEqualTo(RunStatus.FAILED);
+        assertThat(failed.failure()).isEqualTo(failure);
+        assertThat(store.find(run.runId()).orElseThrow()).isEqualTo(failed);
+        assertThat(queuedBefore(T1.plusSeconds(1))).doesNotContain(run.runId());
+        assertThat(store.failQueued(run.runId(), failure, T1)).isEmpty();
+        assertThat(store.failQueued("run_missing", failure, T1)).isEmpty();
+    }
+
+    @Test
+    void runningRunsAreListedByLastUpdate() {
+        var run = queuedRun();
+        store.update(run.runId(), to(RunStatus.RUNNING), T1);
+        store.update(run.runId(), to(RunStatus.RUNNING), T1.plusSeconds(60));
+
+        assertThat(store.findRunningBefore(T1.plusSeconds(60), 100)).extracting(Run::runId).doesNotContain(run.runId());
+        assertThat(store.findRunningBefore(T1.plusSeconds(61), 100)).extracting(Run::runId).contains(run.runId());
+
+        store.update(run.runId(), to(RunStatus.SUCCEEDED), T1.plusSeconds(90));
+        assertThat(store.findRunningBefore(T1.plusSeconds(3600), 100)).extracting(Run::runId).doesNotContain(run.runId());
+    }
+
+    @Test
+    void stalledRunFailsAndFreesItsSlotOnlyIfNotUpdatedSince() {
+        var tenant = "stalled-" + UUID.randomUUID();
+        var run = queuedRunOf(tenant);
+        var running = store.update(run.runId(), to(RunStatus.RUNNING), T1, 1);
+        var failure = new Run.Failure("error", "no progress");
+
+        assertThat(store.failStalled(run.runId(), T0, failure, T1.plusSeconds(10))).isEmpty();
+        var failed = store.failStalled(run.runId(), running.updatedAt(), failure, T1.plusSeconds(10)).orElseThrow();
+
+        assertThat(failed.status()).isEqualTo(RunStatus.FAILED);
+        assertThat(failed.failure()).isEqualTo(failure);
+        assertThat(store.running(tenant)).isZero();
+        assertThat(store.failStalled(run.runId(), failed.updatedAt(), failure, T1.plusSeconds(20))).isEmpty();
+        assertThat(store.failStalled("run_missing", T1, failure, T1)).isEmpty();
     }
 }

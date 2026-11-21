@@ -21,7 +21,7 @@ class RunServiceTest {
         agents.publishVersion("t1", "triage", "github.issue.opened", "{}");
         var runs = new InMemoryRunStore();
         var attempted = new AtomicReference<String>();
-        var service = new RunService(agents, runs, message -> {
+        var service = new RunService(agents, runs, (message, delaySeconds) -> {
             attempted.set(message.runId());
             throw new RunQueueException("queue down", null);
         }, new ApprovalNotifier(new InMemoryApprovalChannel(), runs), Clock.systemUTC());
@@ -47,7 +47,7 @@ class RunServiceTest {
         agents.publishVersion("t1", "triage", "github.issue.opened", "{}");
         var runs = new InMemoryRunStore();
         var down = new java.util.concurrent.atomic.AtomicBoolean(false);
-        var service = new RunService(agents, runs, message -> {
+        var service = new RunService(agents, runs, (message, delaySeconds) -> {
             if (down.get()) {
                 throw new RunQueueException("queue down", null);
             }

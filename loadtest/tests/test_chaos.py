@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from loadtest.chaos import (
     STOP_REASON,
     chaos_loop,
+    duplicate_side_effects,
     parse_access_line,
     repeated_calls,
     running_tasks,
@@ -162,3 +163,9 @@ def test_stopped_exit_codes():
             }
 
     assert stopped_exit_codes(Ecs(), "c", ["a", "b", "c"]) == {"a": 137, "b": 0, "c": None}
+
+
+def test_duplicate_side_effects_leave_out_idempotent_tools():
+    repeated = {"github.add_label": 1, "slack.post_message": 2, "github.search_issues": 3}
+    assert duplicate_side_effects(repeated) == {"slack.post_message": 2}
+    assert duplicate_side_effects({}) == {}

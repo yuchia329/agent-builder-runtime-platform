@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 STOP_REASON = "loadtest chaos"
+# Tools the gateway's fake connector marks idempotent (tool-gateway/src/gateway/connectors/fake.py).
+# A worker killed between a call and storing its result leaves the outcome unknown; the next
+# attempt repeats the call only for such tools (ADR 0013), which changes nothing (the same label
+# twice is one label). A repeat of any other tool is a duplicate side effect.
+SAFE_TO_REPEAT = frozenset({"github.search_issues", "github.add_label", "github.close_issue"})
 
 
 @dataclass(frozen=True)
@@ -118,3 +123,8 @@ def repeated_calls(entries: list[dict], run_ids: set[str]) -> dict[str, int]:
         if count > 1:
             extra[tools[key]] += count - 1
     return dict(sorted(extra.items()))
+
+
+def duplicate_side_effects(repeated: dict[str, int]) -> dict[str, int]:
+    """The repeats that are not allowed: tools not safe to repeat."""
+    return {tool: n for tool, n in repeated.items() if tool not in SAFE_TO_REPEAT}

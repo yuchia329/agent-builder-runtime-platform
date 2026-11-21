@@ -46,7 +46,9 @@ project tag's cost shows no hourly charge (tag activated 2026-11-20, readable wi
 done; 100 stub runs all `SUCCEEDED` on AWS, from idle (about 6 minutes to start, an idle SQS
 queue's metrics; an hourly keep-alive applied, ADR 0025) and warm (start p50 0.1 s, 347 runs per
 minute); chaos at 100 runs (8 workers stopped, 5 killed mid-run, 13 runs taken over): 0 lost,
-0 repeated tool calls.
+0 repeated tool calls. 1,000-run tests at 50 runs per worker: all `SUCCEEDED`, up to 918
+executing at once; chaos at 1,000 (12 stopped, 88 taken over): 0 lost, 0 duplicate side effects
+(`loadtest/report.md`). M7 is done once the 2026-11-21 checks fill the report's last two lines.
 
 ## Approach
 
@@ -557,9 +559,15 @@ Work in this order:
   instead of 80), load throttle 1,000 per second, burst 2,000. Check: normal `plan` changes no
   resource; `plan -var load_test=true` shows `WORKER_CONCURRENCY` 50. Done 2026-11-20 (ADR 0024
   amendment): both plans as expected, nothing applied (the loadtest session turns load mode on).
-- [ ] `[loadtest]` full test and report: 1,000 runs without and with chaos; `loadtest/report.md`
+- [x] `[loadtest]` full test and report: 1,000 runs without and with chaos; `loadtest/report.md`
   (setup, numbers, limits hit, cost); settings back to normal (`plan` shows the dev values).
-  **M7 done.**
+  **M7 done.** Done 2026-11-21 except two report lines (cold start after a quiet night, actual
+  cost) left for the 2026-11-21 checks: four 1,000-run tests at 50 runs per worker, all 1,000/1,000
+  `SUCCEEDED`; up to 918 executing at once (20 workers up, 15 s model calls); chaos at 1,000 (12
+  workers stopped, 6 killed mid-run): 88 runs taken over, 0 lost, one idempotent `add_label`
+  repeated by design (ADR 0013), 0 duplicate side effects; 0 Lambda throttles or errors. Limits:
+  scale-out from 0 about 3-4 minutes (first step can be +5, then 2-minute cooldown), 0.5 vCPU at
+  100% with 50 runs of 2 s calls. Load mode off, `plan` clean.
 
 ## Later milestones (draft)
 
@@ -611,6 +619,21 @@ service has followed.
 
 Newest first. One entry per work session: date, component, done, next, gotchas. Trim entries older
 than the current milestone.
+
+- **2026-11-21 · loadtest** — M7 full test and report. `loadtest/report.md` (setup, seven tests,
+  chaos, limits, what it does not show, cost, reproduce); two lines pending: cold start after a
+  quiet night (ADR 0025 check) and Cost Explorer's actual cost. Driver fixes from the 1,000-run
+  tests: chaos starts with the runs (`driver.open_runs`; sending 1,000 at 20/s takes 50 s, so the
+  first chaos run stopped only 2 workers, late); a repeat of a tool the fake connector marks
+  idempotent is reported as allowed (`chaos.SAFE_TO_REPEAT`, `duplicate_side_effects`), any other
+  repeat fails the test. 58 tests. Settings back to normal (`plan` clean, gateway `github`,
+  `worker_concurrency` 4). Next (2026-11-21): M6 cost check (also fills the report's cost line),
+  queue keep-alive check with one planted issue (fills the cold-start line, ticks that task);
+  then M7 is done and M8 needs planning. Gotchas: 1,000 runs executing at once needs the 20
+  workers up before the runs arrive (run a test first) or long runs, because the first
+  scale-out step may add only 5 workers and those can finish a short backlog before the next
+  step; results files of the first tests show "redelivered 0" (written before the receive-count
+  fix): use the report's numbers.
 
 - **2026-11-20 · infra** — M7 runs per worker in load mode (ADR 0024 amendment). New variable
   `worker_concurrency` (default 4, 1-100) and `load_test_settings.worker_concurrency` (default

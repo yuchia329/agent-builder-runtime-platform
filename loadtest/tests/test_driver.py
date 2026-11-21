@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from loadtest.api import ApiError
-from loadtest.driver import Outcome, poll_until_final, schedule, start_runs
+from loadtest.driver import Outcome, open_runs, poll_until_final, schedule, start_runs
 
 
 class FakeClock:
@@ -110,3 +110,16 @@ def test_poll_times_out():
     assert outcome.timed_out
     assert outcome.runs["run_0"]["status"] == "RUNNING"
     assert len(api.gets) == 3
+
+
+def test_open_runs_counts_all_while_starting_then_those_not_final():
+    assert open_runs(None, 1000) == 1000
+    outcome = Outcome(
+        runs={
+            "a": {"status": "RUNNING"},
+            "b": {"status": "SUCCEEDED"},
+            "c": {"status": "QUEUED"},
+            "d": {"status": "WAITING_APPROVAL"},
+        }
+    )
+    assert open_runs(outcome, 1000) == 2

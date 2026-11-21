@@ -15,6 +15,14 @@ from loadtest.stats import FINAL
 STOP_POLLING = FINAL | {"WAITING_APPROVAL"}
 
 
+def open_runs(outcome: "Outcome | None", expected: int) -> int:
+    """Runs still to finish: all `expected` while they are being started (`outcome` None), then
+    those not final. Chaos uses it, so it starts with the runs, not after the last is sent."""
+    if outcome is None:
+        return expected
+    return sum(1 for r in outcome.runs.values() if r.get("status") not in STOP_POLLING)
+
+
 def schedule(count: int, rate_per_s: float) -> list[float]:
     """Seconds after the start at which each run is started: evenly spaced at `rate_per_s`."""
     if count < 0:

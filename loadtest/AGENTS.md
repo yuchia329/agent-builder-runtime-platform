@@ -15,7 +15,8 @@ Run from `loadtest/`.
 | Test | `uv run pytest` (no AWS, no network) |
 | Lint / format | `uv run ruff check . && uv run ruff format --check .` / `uv run ruff format .` |
 | Load test | `uv run loadtest --runs 100 --rate 10` (needs load-test mode; costs money, see below) |
-| Chaos test | `uv run loadtest --runs 100 --rate 10 --chaos-every 20 --chaos-max 8` (load mode with `stub_latency_ms = 15000`, see Gotchas) |
+| Chaos test | `uv run loadtest --runs 100 --rate 10 --chaos-every 20 --chaos-max 8`; at 1,000: `--runs 1000 --rate 20 --poll 15 --chaos-every 10 --chaos-max 12` (load mode with `stub_latency_ms = 15000`, see Gotchas) |
+| Results | `report.md` (committed); raw runs in `results/` (git-ignored) |
 
 ## A test, step by step
 
@@ -41,10 +42,13 @@ Run from `loadtest/`.
 - Redelivered: runs whose message was received more than once (`queue.receive_count` on their
   "run.attempt" spans), or with more than one such span. Span counts alone miss takeovers: a
   killed worker never uploads the spans it still holds (0 expected without chaos).
-- Chaos: each stopped task's exit code from `describe_tasks` (137 = killed mid-run after the
-  stop timeout, 0 = finished its runs and exited); lost runs = not `SUCCEEDED`; repeated tool
-  calls = an idempotency key with outcome `ok` more than once in the gateway access log
-  (`filter_log_events`, lines `<time> INFO gateway.access {json}`) for this test's runs.
+- Chaos: starts with the runs (not after the last is sent); each stopped task's exit code from
+  `describe_tasks` (137 = killed mid-run after the stop timeout, 0 = finished its runs and
+  exited); lost runs = not `SUCCEEDED`; repeated tool calls = an idempotency key with outcome
+  `ok` more than once in the gateway access log (`filter_log_events`, lines `<time> INFO
+  gateway.access {json}`) for this test's runs. Repeats of tools in `chaos.SAFE_TO_REPEAT` (the
+  fake connector's idempotent tools) are allowed by design (ADR 0013); any other repeat is a
+  duplicate side effect and fails the test (exit 1).
 - Workers: `describe_services` every 15 s (most running at once); CPU and memory: `AWS/ECS`
   `CPUUtilization` / `MemoryUtilization`, percent of the 0.5 vCPU / 1 GB task, one-minute
   points; CloudWatch publishes them a minute or two late, so the driver asks again every 30 s
@@ -71,9 +75,21 @@ Run from `loadtest/`.
   without queue activity: SQS then stops sending metrics, and the scale-out alarm waits for them
   (about 6 minutes measured, up to 15 documented).
 - The driver needs about 5 more minutes after the last run ends (spans, then metrics).
+- 1,000 runs executing at once needs the workers up before they arrive (run a test right before,
+  workers stay about 5-10 minutes) or long runs (15 s calls): from 0, the first scale-out step may
+  add only 5 workers, and those finish a short backlog before the next step 2 minutes later.
+- At 50 runs per worker and 2 s calls a worker's CPU reaches 100% and runs take twice as long; at
+  15 s calls it stays under 50%.
+- Results files written before 2026-11-20 23:40 UTC show "redelivered 0" (span counts, before the
+  receive-count fix); `report.md` has the corrected numbers.
 - Chaos needs runs longer than ECS's 30 s stop timeout, or every stopped worker just drains: add
-  a temporary `load_test_settings` block to tfvars with `stub_latency_ms = 15000` (all four
-  values; it replaces the default), apply, test, then remove it and set `load_test = false`.
+  a temporary `load_test_settings` block to tfvars with `stub_latency_ms = 15000` (all five
+  values, it replaces the default: `api_throttle_rate` 1000, `api_throttle_burst` 2000,
+  `worker_max_tasks` 20, `worker_concurrency` 50; example in
+  `infra/envs/dev/terraform.tfvars.example`), apply, test, then remove it and set
+  `load_test = false`.
+- Load mode runs 50 runs per worker (`terraform output worker_concurrency`), so 20 workers execute
+  up to 1,000 runs at once; normal mode runs 4.
 - A killed worker's spans are lost, so some runs may have no "run.attempt" span after a chaos
   test; queue-to-start then leaves them out ("without a span").
 - A 100-run test costs about $0.10-0.25 (Fargate while it scales in); nothing calls a real model.

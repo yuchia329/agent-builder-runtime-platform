@@ -31,11 +31,12 @@ from loadtest.api import Api
 from loadtest.chaos import (
     Stop,
     chaos_loop,
+    duplicate_side_effects,
     parse_access_line,
     repeated_calls,
     stopped_exit_codes,
 )
-from loadtest.driver import STOP_POLLING, Outcome, poll_until_final, start_runs
+from loadtest.driver import Outcome, open_runs, poll_until_final, start_runs
 from loadtest.spec import AGENT, EXAMPLE_SPEC, RUN_INPUT, load_spec
 from loadtest.stats import RunRecord, Summary, parse_time, summarize
 
@@ -167,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             ],
             "tool_calls_ok": calls_ok,
             "repeated_calls_by_tool": repeated,
+            "duplicate_side_effects_by_tool": duplicate_side_effects(repeated),
             "runs": [record_json(r) for r in records],
         },
     )
@@ -175,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         summary.succeeded == summary.runs
         and not outcome.start_errors
         and not outcome.timed_out
-        and not repeated
+        and not duplicate_side_effects(repeated)
     )
     return 0 if ok else 1
 
@@ -203,7 +205,24 @@ async def drive(args, target: aws.Target, key: str, ecs):
         print(f"Agent {AGENT} {'created' if made else 'exists'}, version {version}")
         sampler = asyncio.create_task(sample_loop())
         started = time.monotonic()
+        # Chaos starts with the runs: at 20 a second, 1,000 runs take 50 s to send.
+        sent: dict[str, Outcome] = {}
+        chaos = None
+        stops: list[Stop] = []
+        if args.chaos_every is not None:
+            chaos = asyncio.create_task(
+                chaos_loop(
+                    ecs,
+                    target.cluster,
+                    target.service,
+                    lambda: open_runs(sent.get("outcome"), args.runs),
+                    every_s=args.chaos_every,
+                    max_stops=args.chaos_max,
+                    stops=stops,
+                )
+            )
         outcome = await start_runs(api, AGENT, RUN_INPUT, args.runs, args.rate)
+        sent["outcome"] = outcome
         print(
             f"Started {len(outcome.runs)} runs in {time.monotonic() - started:.0f} s"
             f" ({len(outcome.start_errors)} failed to start)"
@@ -218,22 +237,6 @@ async def drive(args, target: aws.Target, key: str, ecs):
                 print(f"   t+{time.monotonic() - started:4.0f} s {line.strip()}")
                 last["line"] = line
 
-        chaos = None
-        stops: list[Stop] = []
-        if args.chaos_every is not None:
-            chaos = asyncio.create_task(
-                chaos_loop(
-                    ecs,
-                    target.cluster,
-                    target.service,
-                    lambda: sum(
-                        1 for r in outcome.runs.values() if r.get("status") not in STOP_POLLING
-                    ),
-                    every_s=args.chaos_every,
-                    max_stops=args.chaos_max,
-                    stops=stops,
-                )
-            )
         await poll_until_final(
             api, outcome, poll_s=args.poll, timeout_s=args.timeout, on_round=progress
         )
@@ -377,6 +380,12 @@ def format_chaos(
         f"Lost runs         {lost} (not SUCCEEDED)",
         f"Tool calls        {calls_ok} ok in the gateway log, repeated: "
         + (", ".join(f"{tool} x{n}" for tool, n in repeated.items()) or "none"),
+        "Duplicate effects "
+        + (
+            ", ".join(f"{tool} x{n}" for tool, n in duplicate_side_effects(repeated).items())
+            or "none"
+        )
+        + (" (repeats of idempotent tools are allowed, ADR 0013)" if repeated else ""),
     ]
     return "\n".join(lines)
 

@@ -620,8 +620,10 @@ logged and never fails the run.
   worker tasks mid-run (`--chaos-every`; ECS sends SIGTERM, the worker drains, and kills it after
   30 s, so chaos runs use a longer stub latency) counts lost runs and duplicate side effects (a
   tool call run `ok` more than once per idempotency key in the gateway access log); target 0 for
-  both. Takeovers are counted from the run message's `queue.receive_count`, not from span counts:
-  a killed worker never uploads the spans it still holds.
+  both; a repeat of a tool marked idempotent is allowed (ADR 0013: outcome unknown, safe to
+  repeat) and not a duplicate. Takeovers are counted from the run message's
+  `queue.receive_count`, not from span counts: a killed worker never uploads the spans it still
+  holds. Results: `loadtest/report.md`.
 
 ## Deployment
 

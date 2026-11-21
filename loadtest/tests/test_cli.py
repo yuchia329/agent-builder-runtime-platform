@@ -122,6 +122,9 @@ def test_format_chaos():
     assert ", 1 other" in text
     assert "Lost runs         1" in text
     assert "7 ok" in text and "github.add_label x1" in text
+    assert "Duplicate effects none (repeats of idempotent tools are allowed" in text
+    slack = cli.format_chaos(summary, [], 3, {"slack.post_message": 1}, chaos=True)
+    assert "Duplicate effects slack.post_message x1" in slack
     off = cli.format_chaos(summary, [], 0, {}, chaos=False)
     assert "Chaos             off" in off and "repeated: none" in off
 
